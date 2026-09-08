@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.1.1
+version=1.2.0
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.1.1
+changelog=1.2.0
+    - Una sola icona sulla toolbar di QGIS: apre e chiude il pannello.
+      Le action CAD non spariscono, si spostano su una toolbar interna
+      alla scheda CAD del pannello.
+    - Pannello riorganizzato in sei schede: CAD, Griglie, Foresta, UAV,
+      Layer/Export, Impostazioni. Le schede Griglie, Foresta e Layer/Export
+      sono segnaposto dichiarati: aprono gli algoritmi Processing esistenti
+      e verranno riempite nelle milestone 1.2.4 e 1.2.6.
+    - Impostazioni persistenti su QgsSettings (unita', decimali, aggancio,
+      camera e drone predefiniti, sovrapposizioni, quota, formato di
+      esportazione, ultima scheda aperta). Letture sempre tipizzate: su PyQt6
+      una value() senza type restituisce una stringa.
+    - Aggancio collegato agli strumenti CAD tramite
+      QgsMapMouseEvent.snapPoint(), cioe' lo stesso motore dell'editing nativo
+      di QGIS, configurato dal QgsSnappingConfig DEL PROGETTO. Prima i click
+      usavano il punto grezzo del mouse e non agganciavano nulla.
+    - unload() simmetrico verificato: una seconda initGui() non duplica ne'
+      pannello ne' toolbar.
+    1.1.1
     - PolylineTool: catena di vertici illimitata su canvas.
     - Token polare @25<37 RELATIVO al segmento precedente (dopo una tratta a
       90 gradi diventa 127 assoluti); con un solo vertice resta da Nord, quindi

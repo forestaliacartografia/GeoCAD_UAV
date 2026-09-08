@@ -1,12 +1,17 @@
 """
-Plugin entry point: toolbar, menu, dock, map tools and Processing provider.
+Plugin entry point: one toolbar icon, one dock, map tools, Processing provider.
 
-``initGui`` and ``unload`` are strict mirrors of one another (spec section 18).
-Everything created in one is destroyed in the other -- actions, the toolbar,
-the dock, the map tools, the provider and every signal connection -- so
-unloading or reloading the plugin leaves QGIS exactly as it was found. A plugin
-that leaks a toolbar, a map tool or a dangling signal breaks the host, which
-fails the acceptance criterion "QGIS nativo non e' rotto".
+The QGIS main toolbar carries **exactly one** action: the dock toggle. The CAD
+map-tool actions still exist and behave as they did in 1.1.x, but they are
+mounted on a toolbar *inside* the dock's CAD tab, so the host toolbar is not
+colonised by eight icons. The three Processing launchers live in the plugin
+menu and as buttons in the dock's tabs.
+
+``initGui`` and ``unload`` are strict mirrors of one another. Everything
+created in one is destroyed in the other -- actions, toolbars, the dock, the
+map tools, the provider and every signal connection -- so unloading or
+reloading leaves QGIS exactly as it was found, and a second ``initGui`` after
+an ``unload`` does not duplicate anything.
 """
 
 from __future__ import annotations
@@ -26,6 +31,14 @@ MENU_TITLE = "GeoCad UAV Toolkit"
 TOOL_GEOMETRY = {"line": "LineString", "polyline": "LineString",
                  "rectangle": "Polygon", "circle": "Polygon"}
 
+#: CAD tools mounted on the dock's toolbar, in display order.
+CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "circle")
+
+# Where an action is mounted.
+HOST_TOOLBAR = "toolbar"      # the QGIS main toolbar -- one action only
+HOST_DOCK = "dock"            # the CAD toolbar inside the dock
+HOST_NONE = "none"
+
 
 class GeoCadUavPlugin:
     """QGIS plugin shell."""
@@ -33,14 +46,17 @@ class GeoCadUavPlugin:
     def __init__(self, iface):
         self.iface = iface
         self.actions = []
+        self._menu_actions = []
         self.toolbar = None
         self.dock = None
+        self.dock_action = None
         self.provider = None
         self.tool_actions = {}
         self.map_tools = {}
         self.tool_group = None
         self._scratch_layers = {}
         self._shortcut_notes = []
+        self._connections = []
 
     # -- helpers ----------------------------------------------------------
 
@@ -52,22 +68,45 @@ class GeoCadUavPlugin:
         path = os.path.join(PLUGIN_DIR, name)
         return QIcon(path) if os.path.exists(path) else QIcon()
 
-    def _add_action(self, text, callback, checkable=False, tip=""):
-        action = QAction(self._icon(), text, self.iface.mainWindow())
+    def _make_action(self, text, callback, checkable=False, tip="",
+                     host=HOST_NONE, to_menu=True):
+        """Create one action and mount it where it belongs.
+
+        ``host=HOST_TOOLBAR`` is the QGIS *main* toolbar and is granted to
+        exactly one action: the dock toggle. CAD tools take ``HOST_DOCK``.
+        """
+        action = QAction(self._icon(), text, self._main_window())
         action.triggered.connect(callback)
         action.setCheckable(checkable)
         if tip:
             action.setStatusTip(tip)
             action.setToolTip(tip)
-        self.toolbar.addAction(action)
-        self.iface.addPluginToMenu(MENU_TITLE, action)
+
+        if host == HOST_TOOLBAR and self.toolbar is not None:
+            self.toolbar.addAction(action)
+        elif host == HOST_DOCK:
+            cad_toolbar = getattr(self.dock, "cad_toolbar", None)
+            if cad_toolbar is not None:
+                cad_toolbar.addAction(action)
+
+        if to_menu:
+            self.iface.addPluginToMenu(MENU_TITLE, action)
+            self._menu_actions.append(action)
+
         self.actions.append(action)
+        self._connections.append((action.triggered, callback))
         return action
+
+    def _main_window(self):
+        try:
+            return self.iface.mainWindow()
+        except (AttributeError, RuntimeError):
+            return None
 
     def _assign_shortcut(self, action, sequence_text):
         """Assign a shortcut only if nothing else already owns it.
 
-        Spec: do not force a binding that collides with a native QGIS one.
+        Do not force a binding that collides with a native QGIS one.
         ``QgsGui.shortcutsManager().objectForSequence()`` is the authoritative
         check and exists on 3.34, 3.40 and 4.0 (verified).
         """
@@ -95,39 +134,72 @@ class GeoCadUavPlugin:
         self.provider = self._register_provider()
 
         self.toolbar = self.iface.addToolBar(MENU_TITLE)
-        self.toolbar.setObjectName("GeoCadUavToolbar")
+        try:
+            self.toolbar.setObjectName("GeoCadUavToolbar")
+        except AttributeError:
+            pass
 
-        self._add_action(self.tr("Pannello GeoCad UAV"), self.toggle_dock,
-                         checkable=True,
-                         tip=self.tr("Apre il pannello di pianificazione"))
+        # THE single icon on the QGIS toolbar.
+        self.dock_action = self._make_action(
+            self.tr("GeoCad UAV Toolkit"), self.toggle_dock, checkable=True,
+            tip=self.tr("Apre il pannello CAD / Griglie / Foresta / UAV"),
+            host=HOST_TOOLBAR)
 
-        self.toolbar.addSeparator()
+        # The dock is built now, hidden, because it hosts the CAD toolbar.
+        self._ensure_dock()
         self._build_cad_actions()
 
-        self.toolbar.addSeparator()
-        self._add_action(self.tr("Piano di volo UAV..."), self.open_flight_alg,
-                         tip=self.tr("Apre l'algoritmo di pianificazione volo"))
-        self._add_action(self.tr("Griglia parametrica..."), self.open_grid_alg,
-                         tip=self.tr("Apre l'algoritmo griglia"))
-        self._add_action(self.tr("Sesto d'impianto..."), self.open_forest_alg,
-                         tip=self.tr("Apre l'algoritmo di impianto forestale"))
+        # Menu only: the same algorithms are reachable from the dock tabs.
+        self._make_action(self.tr("Piano di volo UAV..."), self.open_flight_alg,
+                          tip=self.tr("Algoritmo di pianificazione volo"))
+        self._make_action(self.tr("Griglia parametrica..."), self.open_grid_alg,
+                          tip=self.tr("Algoritmo griglia"))
+        self._make_action(self.tr("Sesto d'impianto..."), self.open_forest_alg,
+                          tip=self.tr("Algoritmo di impianto forestale"))
 
         for note in self._shortcut_notes:
-            QgsApplication.messageLog().logMessage(
-                note, MENU_TITLE, Qgis.Info)
+            QgsApplication.messageLog().logMessage(note, MENU_TITLE, Qgis.Info)
+
+    def _ensure_dock(self):
+        """Create the dock once, hidden, and keep the toggle in step with it."""
+        if self.dock is not None:
+            return self.dock
+        from .gui.dock import GeoCadDock
+
+        self.dock = GeoCadDock(self.iface)
+        self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
+                                 self.dock)
+        self.dock.setVisible(False)
+        # Closing the dock from its own title bar must un-check the toolbar
+        # icon, otherwise the toggle and the panel disagree.
+        try:
+            self.dock.visibilityChanged.connect(self._on_dock_visibility)
+            self._connections.append((self.dock.visibilityChanged,
+                                      self._on_dock_visibility))
+        except (AttributeError, TypeError):
+            pass
+        return self.dock
+
+    def _on_dock_visibility(self, visible):
+        if self.dock_action is not None and \
+                self.dock_action.isChecked() != bool(visible):
+            self.dock_action.setChecked(bool(visible))
 
     def _build_cad_actions(self):
-        """Toolbar group CAD: Line, Rectangle, Circle. Mutually exclusive."""
+        """CAD map tools: mounted on the dock's toolbar, not on the QGIS one."""
         from .cad import tools as cad_tools                     # noqa: PLC0415
 
-        self.tool_group = QActionGroup(self.iface.mainWindow())
+        self.tool_group = QActionGroup(self._main_window())
         self.tool_group.setExclusive(True)
-        for key in ("line", "polyline", "rectangle", "circle"):
+        for key in CAD_TOOL_ORDER:
+            if key not in cad_tools.TOOL_REGISTRY:
+                continue                    # tool not shipped in this build
             label = cad_tools.tool_label(key)
-            action = self._add_action(
+            action = self._make_action(
                 label, lambda checked, k=key: self._toggle_tool(k, checked),
                 checkable=True,
-                tip=self.tr("Strumento CAD: {0}").format(label))
+                tip=self.tr("Strumento CAD: {0}").format(label),
+                host=HOST_DOCK, to_menu=False)
             self._assign_shortcut(action, cad_tools.tool_shortcut(key))
             self.tool_group.addAction(action)
             self.tool_actions[key] = action
@@ -140,8 +212,19 @@ class GeoCadUavPlugin:
                 pass
             self.provider = None
 
+        for signal, slot in self._connections:
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        self._connections = []
+
         # Map tools first: a tool still set on the canvas outlives the plugin.
-        canvas = self.iface.mapCanvas() if self.iface else None
+        canvas = None
+        try:
+            canvas = self.iface.mapCanvas()
+        except (AttributeError, RuntimeError):
+            canvas = None
         for tool in self.map_tools.values():
             try:
                 tool.deactivate()
@@ -150,6 +233,14 @@ class GeoCadUavPlugin:
             except Exception:                                   # noqa: BLE001
                 pass
         self.map_tools = {}
+
+        cad_toolbar = getattr(self.dock, "cad_toolbar", None) if self.dock else None
+        for action in self.tool_actions.values():
+            if cad_toolbar is not None:
+                try:
+                    cad_toolbar.removeAction(action)
+                except (RuntimeError, TypeError):
+                    pass
         self.tool_actions = {}
         if self.tool_group is not None:
             self.tool_group.deleteLater()
@@ -169,16 +260,23 @@ class GeoCadUavPlugin:
                 action.triggered.disconnect()
             except (TypeError, RuntimeError):
                 pass
-            self.iface.removePluginMenu(MENU_TITLE, action)
+            if action in self._menu_actions:
+                self.iface.removePluginMenu(MENU_TITLE, action)
             if self.toolbar is not None:
-                self.toolbar.removeAction(action)
+                try:
+                    self.toolbar.removeAction(action)
+                except (RuntimeError, TypeError):
+                    pass
             action.deleteLater()
         self.actions = []
+        self._menu_actions = []
+        self.dock_action = None
 
         if self.toolbar is not None:
             self.toolbar.deleteLater()
             self.toolbar = None
         self._scratch_layers = {}
+        self._shortcut_notes = []
 
     # -- CAD map tools ----------------------------------------------------
 
@@ -246,12 +344,14 @@ class GeoCadUavPlugin:
         return provider
 
     def toggle_dock(self, checked):
-        if self.dock is None:
-            from .gui.dock import GeoCadDock
-            self.dock = GeoCadDock(self.iface)
-            self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
-                                     self.dock)
-        self.dock.setVisible(bool(checked))
+        """Show or hide the single dock. Never creates a second one."""
+        dock = self._ensure_dock()
+        dock.setVisible(bool(checked))
+        if checked:
+            try:
+                dock.raise_()
+            except (AttributeError, RuntimeError):
+                pass
 
     def _open_alg(self, alg_id):
         try:
