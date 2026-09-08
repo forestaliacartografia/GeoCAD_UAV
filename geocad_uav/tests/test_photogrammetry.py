@@ -1,0 +1,197 @@
+"""
+Standalone numeric tests for the pure-python core.
+
+Run with the plain system Python (no QGIS needed):
+
+    python tests/test_photogrammetry.py
+"""
+
+import math
+import os
+import sys
+
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+
+from geocad_uav.uav import cameras as cam_lib                   # noqa: E402
+from geocad_uav.core import planar as geo                       # noqa: E402
+from geocad_uav.uav import photogrammetry as pg                 # noqa: E402
+
+FAILURES = []
+
+
+def check(label, got, expected, tol=1e-6):
+    ok = abs(got - expected) <= tol
+    status = "ok  " if ok else "FAIL"
+    print("  [{0}] {1:<52} got={2:<18.8g} expected={3:.8g}".format(
+        status, label, got, expected))
+    if not ok:
+        FAILURES.append(label)
+
+
+def check_true(label, condition):
+    status = "ok  " if condition else "FAIL"
+    print("  [{0}] {1}".format(status, label))
+    if not condition:
+        FAILURES.append(label)
+
+
+# ---------------------------------------------------------------- cameras --
+print("\n== camera library ==")
+LIB = cam_lib.load_library()
+print("  presets loaded: {0}".format(len(LIB)))
+for key, c in LIB.items():
+    warns = cam_lib.check_camera(c)
+    if warns:
+        for w in warns:
+            print("  [WARN] {0}".format(w))
+    check_true("{0}: pixel pitch self-consistent (<1%)".format(key),
+               c.pitch_mismatch_pct <= 1.0)
+
+M3E = LIB["dji_mavic3e"]
+
+# ------------------------------------------------------------ photogrammetry --
+print("\n== core relations, DJI Mavic 3E @ 100 m AGL ==")
+H = 100.0
+pitch = M3E.sensor_w_mm / M3E.image_w_px
+check("pitch = Sw/Px [mm]", pitch, 17.3 / 5280.0)
+
+gsd = pg.gsd_from_height(M3E, H)
+check("GSD = H*pitch/f [m/px]", gsd, H * (17.3 / 5280.0) / 12.29)
+check("GSD [cm/px]", gsd * 100.0, 2.66603, 1e-4)
+
+# round trip
+check("height_from_gsd inverts gsd_from_height",
+      pg.height_from_gsd(M3E, gsd), H, 1e-9)
+
+across, along = pg.footprint(M3E, H)
+check("footprint across W = Sw/f*H [m]", across, 17.3 / 12.29 * H)
+check("footprint along  L = Sh/f*H [m]", along, 13.0 / 12.29 * H)
+check("W [m]", across, 140.7648, 1e-3)
+check("L [m]", along, 105.7770, 1e-3)
+
+ov = pg.OVERLAP_PRESETS["dsm_3d"]
+check("D_side = W*(1-sidelap) [m]", pg.strip_spacing(across, ov.sidelap),
+      across * 0.30, 1e-9)
+check("D_front = L*(1-frontlap) [m]", pg.shot_spacing(along, ov.frontlap),
+      along * 0.20, 1e-9)
+
+geom = pg.solve_survey_geometry(M3E, ov, h_agl_m=H)
+check("solved D_side [m]", geom.d_side_m, 42.2294, 1e-3)
+check("solved D_front [m]", geom.d_front_m, 21.1554, 1e-3)
+
+# GSD/height duality: solving from GSD must reproduce the same geometry
+geom2 = pg.solve_survey_geometry(M3E, ov, gsd_m_px=gsd)
+check("solve from GSD reproduces H", geom2.h_agl_m, H, 1e-9)
+check("solve from GSD reproduces D_side", geom2.d_side_m, geom.d_side_m, 1e-9)
+
+try:
+    pg.solve_survey_geometry(M3E, ov, h_agl_m=H, gsd_m_px=gsd)
+    check_true("supplying both H and GSD is rejected", False)
+except pg.PhotogrammetryError:
+    check_true("supplying both H and GSD is rejected", True)
+
+# portrait mount swaps the footprint axes
+across_p, along_p = pg.footprint(M3E, H, pg.ORIENT_ALONG)
+check_true("portrait mount swaps footprint axes",
+           abs(across_p - along) < 1e-9 and abs(along_p - across) < 1e-9)
+
+# ------------------------------------------------------------------ speeds --
+print("\n== speed budget ==")
+check("V_blur = GSD*blur_px/t_shutter [m/s]",
+      pg.blur_speed_limit(gsd, M3E.shutter_s, 1.5), gsd * 1.5 / 0.001)
+check("V_trigger = D_front/t_interval [m/s]",
+      pg.trigger_speed_limit(geom.d_front_m, M3E.min_interval_s),
+      geom.d_front_m / 0.7)
+
+budget = pg.build_speed_budget(geom, v_mission_ms=8.0, v_drone_max_ms=15.0)
+check("effective speed = requested (nothing binds at 8 m/s)",
+      budget.effective, 8.0)
+check_true("binding constraint is the mission request",
+           budget.binding == "v_mission")
+
+tight = pg.build_speed_budget(geom, v_mission_ms=45.0, v_drone_max_ms=50.0)
+check_true("unrealistic request is capped by a real constraint",
+           tight.is_capped_below_request and tight.binding != "v_mission")
+
+# climb-rate ceiling: 30 m up over 100 m horizontal at 4 m/s climb
+check("V_climb = rate*d/|dz| [m/s]",
+      pg.climb_speed_limit(30.0, 100.0, 4.0, 3.0), 4.0 * 100.0 / 30.0)
+check("V_climb uses descent rate when going down",
+      pg.climb_speed_limit(-30.0, 100.0, 4.0, 3.0), 3.0 * 100.0 / 30.0)
+check_true("level segment is unconstrained",
+           math.isinf(pg.climb_speed_limit(0.0, 100.0, 4.0, 3.0)))
+
+# ------------------------------------------------------------ exterior orient --
+print("\n== exterior orientation ==")
+om, ph, ka = pg.opk_from_yaw_pitch(0.0, -90.0)
+check_true("nadir shot heading N -> omega,phi ~ 0",
+           abs(om) < 1e-6 and abs(ph) < 1e-6)
+om2, ph2, _ = pg.opk_from_yaw_pitch(90.0, -90.0)
+check_true("nadir shot heading E -> still level (omega,phi ~ 0)",
+           abs(om2) < 1e-6 and abs(ph2) < 1e-6)
+om3, ph3, _ = pg.opk_from_yaw_pitch(0.0, -45.0)
+check_true("45 deg oblique tilts the frame by 45 deg",
+           abs(abs(om3) + abs(ph3) - 45.0) < 1e-6)
+
+# ---------------------------------------------------------------- geometry --
+print("\n== strip frame ==")
+for az in (0.0, 30.0, 90.0, 143.7, 270.0):
+    f = geo.StripFrame(az, 500000.0, 5000000.0)
+    # round trip
+    x0, y0 = 500123.4, 5000987.6
+    s, t = f.to_frame(x0, y0)
+    x1, y1 = f.to_world(s, t)
+    check("az={0:g}: world->frame->world round trip".format(az),
+          math.hypot(float(x1) - x0, float(y1) - y0), 0.0, 1e-6)
+    # a step of +1 along s must move exactly 1 m at bearing az
+    xa, ya = f.to_world(0.0, 0.0)
+    xb, yb = f.to_world(1.0, 0.0)
+    check("az={0:g}: +1 along-track is 1 m at bearing az".format(az),
+          geo.azimuth_of(float(xb - xa), float(yb - ya)), az % 360.0, 1e-6)
+    # across-track is 90 deg clockwise from along-track
+    xc, yc = f.to_world(0.0, 1.0)
+    check("az={0:g}: +1 across-track is 1 m at bearing az+90".format(az),
+          geo.azimuth_of(float(xc - xa), float(yc - ya)), (az + 90.0) % 360.0, 1e-6)
+
+# axes are orthonormal
+f = geo.StripFrame(37.0)
+ux, uy = geo.along_track_unit(37.0)
+vx, vy = geo.across_track_unit(37.0)
+check("along/across axes orthogonal", ux * vx + uy * vy, 0.0, 1e-12)
+check("along axis is unit length", math.hypot(ux, uy), 1.0, 1e-12)
+
+print("\n== polyline utilities ==")
+line = np.array([[0.0, 0.0], [100.0, 0.0], [100.0, 50.0]])
+check("polyline_length", geo.polyline_length(line), 150.0)
+pts, chain = geo.points_along(line, 25.0)
+check("points_along count at 25 m over 150 m", len(pts), 7)
+check("last station chainage", float(chain[-1]), 150.0)
+check("station 5 lands past the corner (x=100, y=25)",
+      float(pts[5][1]), 25.0, 1e-9)
+res = geo.resample_polyline(line, 10.0)
+check_true("resample keeps the corner vertex",
+           bool(np.any(np.all(np.isclose(res, [100.0, 0.0]), axis=1))))
+head = geo.headings_along(line)
+check("heading of first segment (due E)", float(head[0]), 90.0)
+check("heading of second segment (due N)", float(head[1]), 0.0)
+
+rect = geo.rectangle_corners(0.0, 0.0, half_across=70.0, half_along=50.0,
+                             azimuth_deg=0.0)
+check_true("footprint rect is closed",
+           bool(np.allclose(rect[0], rect[-1])))
+check("footprint across extent = 2*half_across",
+      float(rect[:, 0].max() - rect[:, 0].min()), 140.0, 1e-9)
+check("footprint along extent = 2*half_along",
+      float(rect[:, 1].max() - rect[:, 1].min()), 100.0, 1e-9)
+
+# ------------------------------------------------------------------ verdict --
+print("\n" + "=" * 72)
+if FAILURES:
+    print("FAILED ({0}):".format(len(FAILURES)))
+    for f_ in FAILURES:
+        print("   - {0}".format(f_))
+    sys.exit(1)
+print("ALL CHECKS PASSED")

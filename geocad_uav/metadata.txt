@@ -1,0 +1,75 @@
+[general]
+name=GeoCad UAV Toolkit
+qgisMinimumVersion=3.34
+qgisMaximumVersion=3.99
+description=Geometria CAD dimensionale, griglie parametriche, progettazione di impianti forestali e pianificazione di voli UAV fotogrammetrici con inseguimento del terreno da DEM/DTM.
+about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
+    CAD: primitive dimensionali calcolate (non disegnate a occhio), input dinamico
+    (@25<37, #x,y), vincoli di lunghezza, angolo, raggio e area, editor parametrico.
+    GRID: griglie rettangolari, quadrate, esagonali e a quinconce, orientabili e
+    ritagliate sull'area di progetto.
+    FOREST: sesti d'impianto dentro un poligono esistente, con filtri topografici
+    reali su pendenza, quota ed esposizione ricavati dal DEM.
+    UAV: pianificazione fotogrammetrica completa con terrain following obbligatorio
+    (Z = DEM + H_AGL + margine), calcolo di GSD, impronta a terra, D_side, D_front,
+    limiti di velocita' per mosso, intervallo di scatto e rateo di salita,
+    ottimizzazione delle strip, divisione automatica per batteria, validatore e
+    report con profilo altimetrico.
+    Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
+    I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
+version=1.1.1
+author=Niccolo Marco Mancini
+email=niccolomarco.mancini@gmail.com
+
+tracker=https://example.invalid/geocad-uav/issues
+repository=https://example.invalid/geocad-uav
+homepage=https://example.invalid/geocad-uav
+
+tags=cad,uav,drone,photogrammetry,dem,terrain following,grid,forestry,survey,flight planning,gsd
+
+category=Plugins
+icon=icon.svg
+experimental=False
+deprecated=False
+hasProcessingProvider=yes
+
+changelog=1.1.1
+    - PolylineTool: catena di vertici illimitata su canvas.
+    - Token polare @25<37 RELATIVO al segmento precedente (dopo una tratta a
+      90 gradi diventa 127 assoluti); con un solo vertice resta da Nord, quindi
+      LineTool non cambia comportamento.
+    - Backspace toglie l'ultimo vertice e lascia viva la costruzione; solo
+      l'ultimo vertice riporta a IDLE. Esc annulla tutto senza scrivere.
+    - Doppio click o Invio chiudono la polilinea (>= 2 vertici).
+    - Parametri salvati nella forma "segments" [[lunghezza, azimut], ...] che
+      primitives.build(TOOL_POLYLINE) gia' accetta: il record resta parametrico
+      e una traversa chiusa richiude a float64.
+    - Chiusura opzionale: produce una LineString chiusa, NON un poligono.
+      Il poligono richiederebbe una primitiva che non esiste ancora e non
+      viene simulato.
+    1.1.0
+    - Strumenti CAD interattivi su canvas: Linea, Rettangolo, Cerchio.
+    - Macchina a stati unica (IDLE, PICK_ORIGIN, PICK_SECOND, TYPE_CONSTRAINT,
+      PREVIEW, COMMIT) con Escape che annulla senza scrivere nulla.
+    - Input dinamico sul canvas: 25, 25ft, 37d, @25<37, #x,y, @dx,dy.
+    - Anteprima a rubber band senza costruire geometrie e senza refresh del
+      canvas; la geometria nasce solo al commit.
+    - Ogni forma e' un singolo comando di undo (beginEditCommand).
+    - Pannello CAD contestuale generato dai vincoli dichiarati dallo strumento.
+    1.0.0
+    - Primo rilascio.
+    - CAD: punto, linea, polilinea, rettangolo, quadrato, cerchio, poligono
+      regolare, ellisse; tutti calcolati algebricamente con record parametrico.
+    - Modificatori: offset, raccordo, smusso, taglia, estendi, esplodi, unisci,
+      dividi, allinea, serie rettangolare e polare.
+    - Grid Designer con ancoraggio stabile e rinumerazione dopo il ritaglio.
+    - Forest Planting Designer con filtri di pendenza, quota ed esposizione.
+    - UAV: terrain following continuo, quota AMSL per strip, quota AMSL unica
+      (ammessa solo sotto il 10 % di dislivello), doppia griglia, corridoi,
+      interlacciamento per ala fissa.
+    - Impronte a terra proiettate sul DEM per ray casting: copertura e GSD
+      effettivo verificati sul terreno, non sul piano.
+    - Export GeoPackage, GeoJSON, KML, KMZ, GPX, CSV, Litchi Mission Hub CSV,
+      QGC WPL 110. Il WPML DJI nativo non e' implementato perche' lo schema non
+      e' stato verificato: viene dichiarato esplicitamente invece di essere
+      simulato.

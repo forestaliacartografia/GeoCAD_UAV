@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>GeoCad UAV Toolkit</title>
+  <rect x="1" y="1" width="62" height="62" rx="10" fill="#1d3557"/>
+  <!-- terrain -->
+  <path d="M4 50 L18 38 L28 45 L40 28 L52 37 L60 31 L60 58 L4 58 Z"
+        fill="#3d5a80" stroke="none"/>
+  <path d="M4 50 L18 38 L28 45 L40 28 L52 37 L60 31"
+        fill="none" stroke="#8ecae6" stroke-width="2" stroke-linejoin="round"/>
+  <!-- terrain-following flight line, parallel to the ground -->
+  <path d="M4 34 L18 22 L28 29 L40 12 L52 21 L60 15"
+        fill="none" stroke="#ffd166" stroke-width="2.4"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- waypoints -->
+  <g fill="#ffd166">
+    <circle cx="4" cy="34" r="2.6"/>
+    <circle cx="18" cy="22" r="2.6"/>
+    <circle cx="28" cy="29" r="2.6"/>
+    <circle cx="40" cy="12" r="2.6"/>
+    <circle cx="52" cy="21" r="2.6"/>
+    <circle cx="60" cy="15" r="2.6"/>
+  </g>
+  <!-- constant AGL ties -->
+  <g stroke="#ffffff" stroke-width="1" opacity="0.45">
+    <line x1="18" y1="22" x2="18" y2="38"/>
+    <line x1="40" y1="12" x2="40" y2="28"/>
+    <line x1="52" y1="21" x2="52" y2="37"/>
+  </g>
+</svg>

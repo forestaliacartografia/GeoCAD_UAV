@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output of zip_plugin.py — reproducible, not source
+dist/
+
+# QGIS / OS noise
+*.qgs~
+*.gpkg-shm
+*.gpkg-wal
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
