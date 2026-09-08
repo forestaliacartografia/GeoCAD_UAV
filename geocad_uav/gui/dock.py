@@ -1,42 +1,30 @@
 """
-Dock panel: live photogrammetric preview and mission launcher.
+Dock panel: the CAD numeric fields, the tabs, and the settings.
 
-The panel recomputes the derived survey numbers on every parameter change.
-That recomputation is pure arithmetic on the camera model -- no DEM read, no
-GEOS, no layer access -- so it lands in microseconds and comfortably meets the
-"under 500 ms for an AOI below 5 km2" budget without a worker thread.
-
-The heavy work (terrain sampling, ray casting, validation, export) stays in the
-Processing algorithm, which already runs with progress and cancellation. The
-dock launches it rather than duplicating it: GUI calls services, services never
-import widgets (spec section 2).
+Each tab owns its own work. The dock builds the CAD side (toolbar, constraint
+fields, snapping) and then mounts one panel per domain -- Grid, Forest, UAV --
+each of which talks to the frozen engine directly. The dock holds no mission
+state of its own: what used to be a hand-built UAV form here now lives in
+``gui.uav_panel``, which plans on the DEM instead of pre-filling a Processing
+dialog. GUI calls services; services never import widgets (spec section 2).
 """
 
 from __future__ import annotations
-
-import math
 
 from qgis.core import Qgis, QgsMapLayerProxyModel, QgsProject
 from qgis.gui import QgsMapLayerComboBox
 from qgis.PyQt.QtCore import QCoreApplication, QSize, Qt
 from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
                                  QDoubleSpinBox, QFormLayout, QGroupBox,
-                                 QHBoxLayout, QLabel, QPushButton, QScrollArea,
-                                 QSpinBox, QTabWidget, QTextBrowser, QToolBar,
-                                 QVBoxLayout, QWidget)
+                                 QLabel, QPushButton, QScrollArea, QSpinBox,
+                                 QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
-from ..core import crs as crs_svc
-from ..core.models import AltitudeMode
-from ..core.units import format_duration
 from ..settings import settings as app_settings
 from .forest_panel import ForestPanel
 from .grid_panel import GridPanel
-from ..uav import cameras as cam_lib
-from ..uav import drones as drone_lib
-from ..uav import photogrammetry as pg
-from ..uav import survey as sv
+from .uav_panel import UavPanel
 
 
 def tr(text):
@@ -53,21 +41,16 @@ class GeoCadDock(QDockWidget):
         self._connections = []
         self._cad_tool = None
         for panel in (getattr(self, "grid_panel", None),
-                      getattr(self, "forest_panel", None)):
+                      getattr(self, "forest_panel", None),
+                      getattr(self, "uav_panel", None)):
             if panel is not None:
                 try:
                     panel.teardown()
                 except Exception:                               # noqa: BLE001
                     pass
-        self._cameras = cam_lib.load_library()
-        self._drones = drone_lib.load_library()
-        self._camera_keys = sorted(self._cameras)
-        self._drone_keys = sorted(self._drones)
-
         self.setWidget(self._build())
         self._load_settings()
         self._wire()
-        self.recompute()
 
     # -- construction -----------------------------------------------------
 
@@ -174,86 +157,8 @@ class GeoCadDock(QDockWidget):
         self.tabs.addTab(self._scroll_page([self.forest_panel]), tr("Foresta"))
 
         # ---------------------------------------------------------------- UAV
-        area_box = QGroupBox(tr("1. Area"))
-        area_form = QFormLayout(area_box)
-        self.aoi_combo = QgsMapLayerComboBox()
-        self.aoi_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-        self.aoi_combo.setAllowEmptyLayer(True)
-        area_form.addRow(tr("Poligono"), self.aoi_combo)
-        self.selected_only = QCheckBox(tr("Solo le feature selezionate"))
-        area_form.addRow(self.selected_only)
-        self.crs_label = QLabel("-")
-        self.crs_label.setWordWrap(True)
-        area_form.addRow(tr("CRS"), self.crs_label)
-
-        terrain_box = QGroupBox(tr("2. Terreno"))
-        terrain_form = QFormLayout(terrain_box)
-        self.dem_combo = QgsMapLayerComboBox()
-        self.dem_combo.setFilters(QgsMapLayerProxyModel.RasterLayer)
-        self.dem_combo.setAllowEmptyLayer(True)
-        terrain_form.addRow(tr("DEM / DTM"), self.dem_combo)
-        self.is_dsm = QCheckBox(tr("E' un DSM (chiome ed edifici inclusi)"))
-        terrain_form.addRow(self.is_dsm)
-        self.alt_mode = QComboBox()
-        for key in AltitudeMode.ALL:
-            self.alt_mode.addItem(AltitudeMode.LABELS[key], key)
-        terrain_form.addRow(tr("Modalita' quota"), self.alt_mode)
-        self.safety_margin = self._spin(0.0, 0.0, 200.0, 1.0, " m")
-        terrain_form.addRow(tr("Margine sicurezza"), self.safety_margin)
-        self.veg_clearance = self._spin(0.0, 0.0, 100.0, 1.0, " m")
-        terrain_form.addRow(tr("Clearance vegetazione"), self.veg_clearance)
-        self.dz_tolerance = self._spin(2.0, 0.1, 50.0, 0.5, " m")
-        terrain_form.addRow(tr("Tolleranza verticale"), self.dz_tolerance)
-
-        gear_box = QGroupBox(tr("3. Camera e drone"))
-        gear_form = QFormLayout(gear_box)
-        self.camera_combo = QComboBox()
-        for key in self._camera_keys:
-            self.camera_combo.addItem(self._cameras[key].name, key)
-        gear_form.addRow(tr("Camera"), self.camera_combo)
-        self.drone_combo = QComboBox()
-        for key in self._drone_keys:
-            self.drone_combo.addItem(self._drones[key].name, key)
-        gear_form.addRow(tr("Drone"), self.drone_combo)
-
-        mission_box = QGroupBox(tr("4. Missione"))
-        mission_form = QFormLayout(mission_box)
-        self.target_mode = QComboBox()
-        self.target_mode.addItem(tr("Quota H_AGL [m]"), "h")
-        self.target_mode.addItem(tr("GSD target [cm/px]"), "gsd")
-        mission_form.addRow(tr("Definisci con"), self.target_mode)
-        self.target_value = self._spin(80.0, 0.1, 2000.0, 5.0, "")
-        mission_form.addRow(tr("Valore"), self.target_value)
-        self.frontlap = self._spin(80.0, 1.0, 95.0, 5.0, " %")
-        mission_form.addRow(tr("Sovrapp. longitudinale"), self.frontlap)
-        self.sidelap = self._spin(70.0, 1.0, 95.0, 5.0, " %")
-        mission_form.addRow(tr("Sovrapp. laterale"), self.sidelap)
-        self.azimuth_mode = QComboBox()
-        self.azimuth_mode.addItem(tr("Automatico (lato maggiore)"),
-                                  sv.AZIMUTH_LONGEST_SIDE)
-        self.azimuth_mode.addItem(tr("Lungo le curve di livello"),
-                                  sv.AZIMUTH_ACROSS_SLOPE)
-        self.azimuth_mode.addItem(tr("Manuale"), sv.AZIMUTH_MANUAL)
-        mission_form.addRow(tr("Orientamento strip"), self.azimuth_mode)
-        self.azimuth = self._spin(0.0, 0.0, 360.0, 5.0, " deg")
-        mission_form.addRow(tr("Azimut manuale"), self.azimuth)
-        self.double_grid = QCheckBox(tr("Doppia griglia 90 gradi (3D)"))
-        mission_form.addRow(self.double_grid)
-        self.speed = self._spin(0.0, 0.0, 30.0, 1.0, " m/s")
-        self.speed.setSpecialValueText(tr("crociera del drone"))
-        mission_form.addRow(tr("Velocita' richiesta"), self.speed)
-
-        preview_box = QGroupBox(tr("5. Valori derivati (in tempo reale)"))
-        preview_layout = QVBoxLayout(preview_box)
-        self.preview = QTextBrowser()
-        self.preview.setOpenExternalLinks(False)
-        self.preview.setMinimumHeight(210)
-        preview_layout.addWidget(self.preview)
-
-        self.run_button = QPushButton(tr("Genera missione..."))
-        self.tabs.addTab(self._scroll_page(
-            [area_box, terrain_box, gear_box, mission_box, preview_box,
-             self.run_button]), tr("UAV"))
+        self.uav_panel = UavPanel(self.iface)
+        self.tabs.addTab(self._scroll_page([self.uav_panel]), tr("UAV"))
 
         # ------------------------------------------------------- LAYER/EXPORT
         self.tabs.addTab(self._scroll_page([
@@ -337,31 +242,8 @@ class GeoCadDock(QDockWidget):
         return spin
 
     def _wire(self):
-        """Connect every input to the live recompute, recording each link."""
-        widgets = [
-            (self.aoi_combo, "layerChanged"),
-            (self.dem_combo, "layerChanged"),
-            (self.camera_combo, "currentIndexChanged"),
-            (self.drone_combo, "currentIndexChanged"),
-            (self.target_mode, "currentIndexChanged"),
-            (self.alt_mode, "currentIndexChanged"),
-            (self.azimuth_mode, "currentIndexChanged"),
-            (self.target_value, "valueChanged"),
-            (self.frontlap, "valueChanged"),
-            (self.sidelap, "valueChanged"),
-            (self.speed, "valueChanged"),
-            (self.safety_margin, "valueChanged"),
-            (self.veg_clearance, "valueChanged"),
-            (self.double_grid, "toggled"),
-            (self.selected_only, "toggled"),
-        ]
-        for widget, signal_name in widgets:
-            signal = getattr(widget, signal_name)
-            signal.connect(self.recompute)
-            self._connections.append((signal, self.recompute))
-
-        for button, slot in ((self.run_button, self._run_flight),
-                             (self.cad_apply, self._apply_cad_values)):
+        """Connect the dock's own controls, recording each link."""
+        for button, slot in ((self.cad_apply, self._apply_cad_values),):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
 
@@ -409,11 +291,7 @@ class GeoCadDock(QDockWidget):
             self.set_snap_segment.setChecked("segment" in types)
             self._select_data(self.set_export_format,
                               app_settings.get("export/format"))
-            self._select_data(self.camera_combo, app_settings.get("uav/camera"))
-            self._select_data(self.drone_combo, app_settings.get("uav/drone"))
-            self.frontlap.setValue(app_settings.get("uav/frontlap") * 100.0)
-            self.sidelap.setValue(app_settings.get("uav/sidelap") * 100.0)
-            self.target_value.setValue(app_settings.get("uav/h_agl_m"))
+            self.uav_panel.load_settings()
             index = app_settings.get("ui/last_tab")
             if 0 <= index < self.tabs.count():
                 self.tabs.setCurrentIndex(index)
@@ -437,11 +315,7 @@ class GeoCadDock(QDockWidget):
             types.append("segment")
         app_settings.set("snap/types", ",".join(types))
         app_settings.set("export/format", self.set_export_format.currentData())
-        app_settings.set("uav/camera", self.camera_combo.currentData() or "")
-        app_settings.set("uav/drone", self.drone_combo.currentData() or "")
-        app_settings.set("uav/frontlap", self.frontlap.value() / 100.0)
-        app_settings.set("uav/sidelap", self.sidelap.value() / 100.0)
-        app_settings.set("uav/h_agl_m", self.target_value.value())
+        self.uav_panel.save_settings()
         app_settings.set("ui/last_tab", self.tabs.currentIndex())
         self._apply_snapping_to_project()
         self._push_snap_to_tool()
@@ -502,7 +376,8 @@ class GeoCadDock(QDockWidget):
         self._connections = []
         self._cad_tool = None
         for panel in (getattr(self, "grid_panel", None),
-                      getattr(self, "forest_panel", None)):
+                      getattr(self, "forest_panel", None),
+                      getattr(self, "uav_panel", None)):
             if panel is not None:
                 try:
                     panel.teardown()
@@ -646,187 +521,3 @@ class GeoCadDock(QDockWidget):
 
     def closeEvent(self, event):                                # noqa: N802
         super().closeEvent(event)
-
-    # -- live preview -----------------------------------------------------
-
-    def current_camera(self):
-        return self._cameras[self.camera_combo.currentData()]
-
-    def current_drone(self):
-        return self._drones[self.drone_combo.currentData()]
-
-    def recompute(self, *_args):
-        """Recompute every derived value. Pure arithmetic, no I/O."""
-        try:
-            self.preview.setHtml(self._preview_html())
-        except Exception as exc:                                # noqa: BLE001
-            self.preview.setHtml(
-                "<p style='color:#a4262c'>{0}</p>".format(
-                    tr("Parametri non validi: {0}").format(exc)))
-
-    def _preview_html(self):
-        camera = self.current_camera()
-        drone = self.current_drone()
-        overlap = pg.Overlap(frontlap=self.frontlap.value() / 100.0,
-                             sidelap=self.sidelap.value() / 100.0)
-
-        if self.target_mode.currentData() == "h":
-            geometry = pg.solve_survey_geometry(
-                camera, overlap, h_agl_m=self.target_value.value())
-        else:
-            geometry = pg.solve_survey_geometry(
-                camera, overlap, gsd_m_px=self.target_value.value() / 100.0)
-
-        speed = self.speed.value() or drone.v_cruise_ms
-        budget = pg.build_speed_budget(geometry, speed, drone.v_max_ms)
-
-        rows = [
-            (tr("GSD"), "{0:.2f} cm/px".format(geometry.gsd_cm_px)),
-            (tr("Quota H_AGL"), "{0:.1f} m".format(geometry.h_agl_m)),
-            (tr("Impronta a terra"), "{0:.1f} x {1:.1f} m".format(
-                geometry.footprint_across_m, geometry.footprint_along_m)),
-            (tr("Interasse strip D_side"), "{0:.2f} m".format(geometry.d_side_m)),
-            (tr("Base di presa D_front"), "{0:.2f} m".format(geometry.d_front_m)),
-            (tr("Velocita' effettiva"), "{0:.1f} m/s".format(budget.effective)),
-            (tr("Vincolo determinante"), budget.binding),
-            (tr("Intervallo di scatto"), "{0:.2f} s".format(
-                geometry.interval_at_speed(budget.effective))),
-        ]
-
-        notes = []
-        if budget.is_capped_below_request:
-            notes.append(tr(
-                "Velocita' ridotta da {0:.1f} a {1:.1f} m/s dal vincolo "
-                "'{2}'.").format(speed, budget.effective, budget.binding))
-        if geometry.h_agl_m > drone.max_agl_m:
-            notes.append(tr(
-                "La quota {0:.0f} m supera il limite di {1:.0f} m AGL del "
-                "profilo drone.").format(geometry.h_agl_m, drone.max_agl_m))
-
-        # AOI-dependent estimates, when a polygon is available.
-        layer = self.aoi_combo.currentLayer()
-        if layer is not None and layer.isValid():
-            crs = layer.crs()
-            self.crs_label.setText(crs_svc.describe(crs))
-            if crs_svc.is_geographic(crs):
-                notes.append(tr(
-                    "Il CRS del layer e' geografico: le distanze verrebbero "
-                    "calcolate in gradi. Riproietta in UTM prima di generare."))
-            else:
-                area = self._aoi_area(layer)
-                if area > 0:
-                    rows.extend(self._estimates(area, geometry, budget, drone))
-        else:
-            self.crs_label.setText("-")
-
-        table = "".join(
-            "<tr><td style='color:#555'>{0}</td>"
-            "<td align='right'><b>{1}</b></td></tr>".format(k, v)
-            for k, v in rows)
-        html = ("<table width='100%' cellspacing='0' cellpadding='3'>"
-                + table + "</table>")
-        if notes:
-            html += "<ul style='margin-left:-18px;color:#8a6100'>" + "".join(
-                "<li>{0}</li>".format(n) for n in notes) + "</ul>"
-        html += ("<p style='color:#777;font-size:11px'>"
-                 + tr("Stime planimetriche. I valori definitivi (copertura, "
-                      "GSD effettivo, batterie) si ottengono generando la "
-                      "missione sul DEM.") + "</p>")
-        return html
-
-    def _aoi_area(self, layer):
-        features = (layer.getSelectedFeatures() if self.selected_only.isChecked()
-                    else layer.getFeatures())
-        return sum(f.geometry().area() for f in features if f.hasGeometry())
-
-    def _estimates(self, area_m2, geometry, budget, drone):
-        """First-order mission size from the AOI area alone.
-
-        Deliberately labelled as an estimate: it assumes a compact area and
-        ignores relief, so the real strip count on a long thin parcel will
-        differ. It exists to answer "is this roughly one battery or six?"
-        while the operator is still turning knobs.
-        """
-        side = math.sqrt(max(area_m2, 1.0))
-        n_strips = max(int(math.ceil(side / geometry.d_side_m)), 1)
-        survey_length = n_strips * side
-        n_photos = int(math.ceil(survey_length / geometry.d_front_m))
-        time_s = survey_length / max(budget.effective, 0.1)
-        batteries = max(int(math.ceil(time_s / drone.usable_endurance_s)), 1)
-        double = 2 if self.double_grid.isChecked() else 1
-        return [
-            (tr("Superficie AOI"), "{0:,.2f} ha".format(area_m2 / 10_000.0)),
-            (tr("Strip stimate"), "{0:,}".format(n_strips * double)),
-            (tr("Foto stimate"), "{0:,}".format(n_photos * double)),
-            (tr("Percorso stimato"), "{0:,.0f} m".format(survey_length * double)),
-            (tr("Tempo stimato"), format_duration(time_s * double)),
-            (tr("Batterie stimate"), "{0}".format(batteries * double)),
-        ]
-
-    # -- launchers --------------------------------------------------------
-
-    def _prefill(self):
-        """Seed the Processing dialog with what the panel already knows."""
-        params = {}
-        layer = self.aoi_combo.currentLayer()
-        if layer is not None:
-            params["AOI"] = layer
-        dem = self.dem_combo.currentLayer()
-        if dem is not None:
-            params["DEM"] = dem
-        params["DEM_IS_DSM"] = self.is_dsm.isChecked()
-        params["CAMERA"] = self.camera_combo.currentIndex()
-        params["DRONE"] = self.drone_combo.currentIndex()
-        params["TARGET_MODE"] = self.target_mode.currentIndex()
-        params["TARGET_VALUE"] = self.target_value.value()
-        params["FRONTLAP"] = self.frontlap.value()
-        params["SIDELAP"] = self.sidelap.value()
-        params["ALT_MODE"] = self.alt_mode.currentIndex()
-        params["AZIMUTH_MODE"] = self.azimuth_mode.currentIndex()
-        params["AZIMUTH"] = self.azimuth.value()
-        params["DOUBLE_GRID"] = self.double_grid.isChecked()
-        params["SPEED"] = self.speed.value()
-        params["SAFETY_MARGIN"] = self.safety_margin.value()
-        params["VEG_CLEARANCE"] = self.veg_clearance.value()
-        params["DZ_TOLERANCE"] = self.dz_tolerance.value()
-        return params
-
-    def _open(self, alg_id, params):
-        try:
-            from processing import execAlgorithmDialog
-            execAlgorithmDialog("geocaduav:" + alg_id, params)
-        except Exception as exc:                                # noqa: BLE001
-            self.iface.messageBar().pushMessage(
-                tr("GeoCad UAV"),
-                tr("Impossibile aprire l'algoritmo: {0}").format(exc),
-                level=Qgis.Critical)
-
-    def _run_flight(self):
-        layer = self.aoi_combo.currentLayer()
-        if layer is None:
-            self.iface.messageBar().pushMessage(
-                tr("GeoCad UAV"),
-                tr("Seleziona un layer poligonale come area di progetto."),
-                level=Qgis.Warning)
-            return
-        if crs_svc.is_geographic(layer.crs()):
-            self.iface.messageBar().pushMessage(
-                tr("GeoCad UAV"),
-                tr("Il CRS {0} e' geografico: riproietta l'area in un CRS "
-                   "metrico (UTM) prima di pianificare.").format(
-                       layer.crs().authid()),
-                level=Qgis.Critical)
-            return
-        self._open("planflight", self._prefill())
-
-    def _run_grid(self):
-        layer = self.aoi_combo.currentLayer()
-        self._open("creategrid", {"AOI": layer} if layer else {})
-
-    def _run_forest(self):
-        layer = self.aoi_combo.currentLayer()
-        params = {"AOI": layer} if layer else {}
-        dem = self.dem_combo.currentLayer()
-        if dem is not None:
-            params["DEM"] = dem
-        self._open("forestplanting", params)

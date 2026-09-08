@@ -29,7 +29,7 @@ PURE = ["test_photogrammetry.py", "test_terrain_follow.py", "test_geometry.py",
         "test_grid.py", "test_forest.py"]
 QGIS = ["test_survey.py", "test_cad.py", "test_mission.py",
         "test_processing.py", "test_map_tools.py", "test_ui_shell.py",
-        "test_panels.py"]
+        "test_panels.py", "test_uav_panel.py"]
 
 
 def has_qgis() -> bool:

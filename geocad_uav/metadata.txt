@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.3.1
+version=1.3.2
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,28 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.1
+changelog=1.3.2
+    - Scheda UAV: la missione si genera dentro il pannello, non piu' solo
+      passando dal dialogo dell'algoritmo. Area dallo stesso selettore delle
+      schede Griglie e Foresta (poligono del progetto oppure disegnato con
+      Rettangolo/Polilinea).
+    - Terrain following obbligatorio. Il DEM si sceglie fra i raster gia'
+      caricati nel progetto: niente download, niente chiavi API, nessun
+      servizio remoto. Senza DEM il pulsante Genera resta disabilitato e
+      spiega il motivo, invece di ripiegare su una quota AMSL unica.
+    - Parametri con un solo riferimento ciascuno: quota H_AGL, velocita' in
+      km/h (convertita in m/s una volta sola, il motore vede solo m/s),
+      sovrapposizioni in percento (frazioni al motore), margine di sicurezza,
+      camera e drone dai profili. L'intervallo di scatto e' in sola lettura
+      perche' e' derivato: D_front diviso la velocita'.
+    - Azimut delle strip da campo numerico, da due click sulla mappa o
+      parallelo al lato piu' lungo dell'area; il valore del lato maggiore e'
+      sempre mostrato fra i valori derivati.
+    - Anteprima della rotta a rubber-band: nessuna feature scritta. I layer
+      (linee di volo, waypoint, centri di presa) nascono solo alla conferma,
+      da io.layer_factory.build_mission_layers.
+    - Nessun export in questa scheda. Il WPML DJI resta non supportato.
+    1.3.1
     - Scheda Griglie: si definisce l'estensione scegliendo un poligono gia'
       presente nel progetto oppure disegnandolo sul momento con gli strumenti
       Rettangolo e Polilinea gia' esistenti. Nessun nuovo digitalizzatore.
