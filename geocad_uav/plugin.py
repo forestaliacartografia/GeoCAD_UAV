@@ -31,8 +31,12 @@ MENU_TITLE = "GeoCad UAV Toolkit"
 TOOL_GEOMETRY = {"line": "LineString", "polyline": "LineString",
                  "rectangle": "Polygon", "circle": "Polygon"}
 
+#: Tools that edit an existing feature instead of creating one. They must
+#: never be handed a scratch layer: they rotate what the operator selected.
+EDIT_IN_PLACE_TOOLS = ("rotate",)
+
 #: CAD tools mounted on the dock's toolbar, in display order.
-CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "circle")
+CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "circle", "rotate")
 
 # Where an action is mounted.
 HOST_TOOLBAR = "toolbar"      # the QGIS main toolbar -- one action only
@@ -309,6 +313,13 @@ class GeoCadUavPlugin:
         through the existing ``io.layer_factory`` with the same schema the
         Processing algorithms write, so both paths stay interchangeable.
         """
+        if key in EDIT_IN_PLACE_TOOLS:
+            # Rotate works on the layer the operator is editing, so the active
+            # layer wins and no scratch layer is ever created for it.
+            try:
+                return self.iface.activeLayer()
+            except AttributeError:
+                return None
         geometry_type = TOOL_GEOMETRY.get(key, "Polygon")
         if self.dock is not None:
             chosen = self.dock.current_cad_layer(geometry_type)

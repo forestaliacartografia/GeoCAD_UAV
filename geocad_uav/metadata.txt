@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.2.0
+version=1.3.0
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.2.0
+changelog=1.3.0
+    - Strumento Ruota: rotazione di una feature esistente con maniglia,
+      come si ruota un'immagine in un word processor. Trascinamento con
+      angolo live nell'HUD, Shift aggancia ogni 15 gradi, angolo digitabile
+      nel pannello, perno a scelta fra centro del rettangolo di selezione,
+      ancora dei parametri CAD o punto indicato sulla mappa.
+    - La rotazione non costruisce geometria propria: i numeri vengono da
+      core.transform2d.rotate e il commit da QgsGeometry.rotate, che conserva
+      buchi, parti multiple e quota Z. Le due funzioni usano la stessa
+      convenzione oraria, verificata su 3.40 e 4.0.
+    - I parametri CAD seguono la rotazione invece di essere invalidati:
+      l'ancora ruota attorno al perno e l'azimut memorizzato incassa il delta.
+      Il risultato viene ricostruito e confrontato con la rotazione geometrica:
+      se non coincide, il record viene marcato non valido e la geometria
+      ruotata viene comunque scritta. Un record non resta mai a descrivere una
+      forma che non descrive.
+    - Ruota modifica la feature selezionata sul layer attivo e non crea mai un
+      layer di lavoro.
+    1.2.0
     - Una sola icona sulla toolbar di QGIS: apre e chiude il pannello.
       Le action CAD non spariscono, si spostano su una toolbar interna
       alla scheda CAD del pannello.

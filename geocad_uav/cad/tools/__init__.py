@@ -17,6 +17,7 @@ TOOL_REGISTRY = {
     "polyline": ("polyline", "Polilinea", "Alt+Shift+P"),
     "rectangle": ("rectangle", "Rettangolo", "Alt+Shift+R"),
     "circle": ("circle", "Cerchio", "Alt+Shift+C"),
+    "rotate": ("rotate", "Ruota", "Alt+Shift+T"),
 }
 
 

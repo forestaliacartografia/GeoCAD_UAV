@@ -139,6 +139,14 @@ class GeoCadDock(QDockWidget):
         self.cad_close_ring.setVisible(False)
         cad_form.addRow(self.cad_close_ring)
 
+        self.cad_pivot = QComboBox()
+        self.cad_pivot.setToolTip(tr(
+            "Punto attorno al quale ruota la geometria."))
+        self.cad_pivot_label = QLabel(tr("Perno"))
+        cad_form.addRow(self.cad_pivot_label, self.cad_pivot)
+        self.cad_pivot_label.setVisible(False)
+        self.cad_pivot.setVisible(False)
+
         self.cad_apply = QPushButton(tr("Applica alla forma"))
         self.cad_hint = QLabel(tr("Nessuno strumento CAD attivo."))
         self.cad_hint.setWordWrap(True)
@@ -383,6 +391,10 @@ class GeoCadDock(QDockWidget):
 
         # The close checkbox drives the live polyline session, not just the
         # next one to be created.
+        self.cad_pivot.currentIndexChanged.connect(self._on_pivot_changed)
+        self._connections.append((self.cad_pivot.currentIndexChanged,
+                                  self._on_pivot_changed))
+
         self.cad_close_ring.toggled.connect(self._on_close_ring_toggled)
         self._connections.append((self.cad_close_ring.toggled,
                                   self._on_close_ring_toggled))
@@ -523,6 +535,18 @@ class GeoCadDock(QDockWidget):
             else:
                 label.setVisible(False)
                 spin.setVisible(False)
+        is_rotate = hasattr(tool.session, "pivot_mode")
+        self.cad_pivot_label.setVisible(is_rotate)
+        self.cad_pivot.setVisible(is_rotate)
+        if is_rotate and self.cad_pivot.count() == 0:
+            from ..cad.tools.rotate import PIVOT_LABELS
+            for pivot_key, pivot_label in PIVOT_LABELS.items():
+                self.cad_pivot.addItem(tr(pivot_label), pivot_key)
+        if is_rotate:
+            index = self.cad_pivot.findData(tool.session.pivot_mode)
+            if index >= 0:
+                self.cad_pivot.setCurrentIndex(index)
+
         is_polyline = bool(getattr(tool.session, "multi_vertex", False))
         self.cad_close_ring.setVisible(is_polyline)
         if is_polyline:
@@ -549,9 +573,22 @@ class GeoCadDock(QDockWidget):
         if getattr(session, "multi_vertex", False):
             session.close = bool(checked)
 
+    def current_pivot_mode(self):
+        """Pivot chosen for the rotate tool, or None when not applicable."""
+        return self.cad_pivot.currentData() if self.cad_pivot.isVisible() else None
+
+    def _on_pivot_changed(self, _index):
+        if self._cad_tool is None:
+            return
+        session = self._cad_tool.session
+        if hasattr(session, "pivot_mode"):
+            session.pivot_mode = self.cad_pivot.currentData()
+
     def unbind_cad_tool(self):
         self._cad_tool = None
         self.cad_close_ring.setVisible(False)
+        self.cad_pivot.setVisible(False)
+        self.cad_pivot_label.setVisible(False)
         for label, spin in self.cad_rows:
             label.setVisible(False)
             spin.setVisible(False)

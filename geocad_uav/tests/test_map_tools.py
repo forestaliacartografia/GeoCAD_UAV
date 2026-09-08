@@ -21,7 +21,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem,  # noqa: E402
-                       QgsGeometry, QgsPointXY, QgsProject, QgsRectangle)
+                       QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
+                       QgsRectangle)
 
 QGS = QgsApplication([], False)
 QGS.initQgis()
@@ -599,14 +600,18 @@ check_raises("an unknown tool key fails loudly", KeyError,
 print("\n== UI registration ==")
 from geocad_uav import plugin as plugin_mod                     # noqa: E402
 
-check_true("plugin maps every registered tool to a geometry type",
-           set(plugin_mod.TOOL_GEOMETRY) == set(tools_pkg.TOOL_REGISTRY))
+check_true("every tool that CREATES geometry has a layer mapping "
+           "(edit-in-place tools such as rotate deliberately have none)",
+           set(plugin_mod.TOOL_GEOMETRY)
+           == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
 check_true("line writes LineString, rectangle and circle write Polygon",
            plugin_mod.TOOL_GEOMETRY["line"] == "LineString"
            and plugin_mod.TOOL_GEOMETRY["rectangle"] == "Polygon"
            and plugin_mod.TOOL_GEOMETRY["circle"] == "Polygon")
-check_true("every registered tool has a geometry mapping",
-           set(plugin_mod.TOOL_GEOMETRY) == set(tools_pkg.TOOL_REGISTRY))
+check_true("every tool that CREATES geometry has a layer mapping "
+           "(edit-in-place tools such as rotate deliberately have none)",
+           set(plugin_mod.TOOL_GEOMETRY)
+           == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
 
 try:
     from geocad_uav.gui.dock import GeoCadDock
@@ -1047,7 +1052,9 @@ check("T7 rectangle: no canvas refresh while hovering",
 h8.deactivate()
 
 print("\n== registry now carries four tools ==")
-check("four tools registered", len(tools_pkg.TOOL_REGISTRY), 4)
+check_true("line, polyline, rectangle and circle are all registered",
+           {"line", "polyline", "rectangle", "circle"}
+           <= set(tools_pkg.TOOL_REGISTRY))
 check_true("polyline is registered with a label and a shortcut",
            tools_pkg.tool_label("polyline") == "Polilinea"
            and tools_pkg.tool_shortcut("polyline") == "Alt+Shift+P")
@@ -1060,8 +1067,222 @@ check_true("...and is a multi-vertex session",
 built_poly.deactivate()
 check_true("plugin maps polyline to a LineString layer",
            plugin_mod.TOOL_GEOMETRY["polyline"] == "LineString")
-check_true("every registered tool still has a geometry mapping",
-           set(plugin_mod.TOOL_GEOMETRY) == set(tools_pkg.TOOL_REGISTRY))
+check_true("every tool that CREATES geometry has a layer mapping "
+           "(edit-in-place tools such as rotate deliberately have none)",
+           set(plugin_mod.TOOL_GEOMETRY)
+           == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
+
+
+# ==========================================================================
+# v1.3.0 APPENDIX - RotateHandleTool, Word-style rotation of a feature.
+# Everything above is 1.1.0-a/b/c and unchanged.
+# ==========================================================================
+
+from geocad_uav.cad.tools import rotate as rot_tool              # noqa: E402
+from geocad_uav.core import transform2d as t2d                   # noqa: E402
+
+
+def make_rectangle_feature(layer, x, y, width, height, azimuth):
+    """Commit a parametric rectangle and hand back the stored feature."""
+    session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CORNER)
+    tool = tb.BaseCadTool(session)
+    session.set_origin(x, y)
+    session.set_value("width_m", width)
+    session.set_value("height_m", height)
+    session.set_value("azimuth_deg", azimuth)
+    tool.commit(layer, WORK_CRS, layer.crs())
+    return next(layer.getFeatures())
+
+
+# --------------------------------------------------------------------------
+# R0 - 50 x 30 at 0 deg, rotated +20 deg
+# --------------------------------------------------------------------------
+print("\n== R0: rotate a parametric rectangle by +20 deg ==")
+rot_layer = scratch_layer("Polygon", "cad_rotate")
+feature = make_rectangle_feature(rot_layer, OX, OY, 50.0, 30.0, 0.0)
+before_geom = QgsGeometry(feature.geometry())
+before_area = before_geom.area()
+check("the source rectangle is 50 x 30", before_area, 1500.0, 1e-6)
+
+rotate = rot_tool.create(canvas, layer_provider=lambda: rot_layer)
+pivot = rotate.adopt_feature(rot_layer, feature, rot_tool.PIVOT_BBOX)
+box = before_geom.boundingBox()
+check("pivot is the bounding-box centre (x)", pivot[0], box.center().x(), 1e-9)
+check("pivot is the bounding-box centre (y)", pivot[1], box.center().y(), 1e-9)
+check_true("the session captured an outline",
+           rotate.session.outline is not None)
+
+rotate.session.submit("20d")
+check("typed angle stored", rotate.session.value("angle_deg"), 20.0, 1e-9)
+check_true("state is PREVIEW", rotate.session.state == tb.ToolState.PREVIEW)
+
+rotated_geom, params_kept = rotate.rotate_committed()
+check("still exactly one feature", rot_layer.featureCount(), 1)
+check("area is unchanged by rotation", rotated_geom.area(), 1500.0, 1e-6)
+check("perimeter is unchanged", rotated_geom.length(), before_geom.length(),
+      1e-6)
+check_true("the geometry actually moved",
+           max_vertex_gap(rotated_geom, before_geom) > 1.0)
+
+# Golden: the pure engine rotation of the same vertices about the same pivot.
+golden = t2d.rotate(vertices(before_geom), 20.0, pivot)
+check("WKT matches core.transform2d.rotate",
+      float(np.max(np.hypot(*(vertices(rotated_geom) - golden).T))), 0.0, 1e-6)
+
+stored = rot_layer.getFeature(feature.id())
+record = pa.read_record(stored)
+check_true("cad_params survived the rotation", record is not None)
+check("cad_params azimuth is now 20", record.params["azimuth_deg"], 20.0, 1e-9)
+check("width is untouched", record.params["width_m"], 50.0, 1e-9)
+check("height is untouched", record.params["height_m"], 30.0, 1e-9)
+check_true("the params were reported as kept", params_kept)
+rebuilt, _ = pr.rebuild(record)
+check("the record rebuilds the rotated geometry",
+      max_vertex_gap(rebuilt, rotated_geom), 0.0, 1e-6)
+check("denormalised rotation column updated", stored["rotation"], 20.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# R1 - Shift snaps to 15 degrees
+# --------------------------------------------------------------------------
+print("\n== R1: Shift snaps the drag to 15 deg ==")
+snap_session = rot_tool.RotateSession()
+snap_session.capture(vertices(before_geom), pivot)
+snap_session.begin_drag(pivot[0], pivot[1] + 100.0)      # grab due north
+snap_session.snap_to_step = False
+snap_session.hover(pivot[0] + 100.0 * math.sin(math.radians(14.0)),
+                   pivot[1] + 100.0 * math.cos(math.radians(14.0)))
+check("free drag keeps 14 deg", snap_session.value("angle_deg"), 14.0, 1e-6)
+
+snap_session.snap_to_step = True
+snap_session.hover(pivot[0] + 100.0 * math.sin(math.radians(14.0)),
+                   pivot[1] + 100.0 * math.cos(math.radians(14.0)))
+check("Shift rounds 14 deg up to 15", snap_session.value("angle_deg"), 15.0,
+      1e-9)
+snap_session.hover(pivot[0] + 100.0 * math.sin(math.radians(7.0)),
+                   pivot[1] + 100.0 * math.cos(math.radians(7.0)))
+check("Shift rounds 7 deg down to 0", snap_session.value("angle_deg"), 0.0,
+      1e-9)
+snap_session.hover(pivot[0] + 100.0 * math.sin(math.radians(38.0)),
+                   pivot[1] + 100.0 * math.cos(math.radians(38.0)))
+check("Shift rounds 38 deg to 45", snap_session.value("angle_deg"), 45.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# R2 - a feature with no usable cad_params
+# --------------------------------------------------------------------------
+print("\n== R2: a geometry without cad_params still rotates ==")
+plain_layer = lf.memory_layer("Polygon", "plain", WORK_CRS.authid(),
+                              [("name", "string")])
+plain_feature = QgsFeature(plain_layer.fields())
+plain_feature.setGeometry(QgsGeometry.fromWkt(
+    "POLYGON(({0} {1},{2} {1},{2} {3},{0} {3},{0} {1}))".format(
+        OX, OY, OX + 40.0, OY + 20.0)))
+plain_layer.dataProvider().addFeatures([plain_feature])
+plain_feature = next(plain_layer.getFeatures())
+plain_before = QgsGeometry(plain_feature.geometry())
+
+plain_rotate = rot_tool.create(canvas, layer_provider=lambda: plain_layer)
+plain_pivot = plain_rotate.adopt_feature(plain_layer, plain_feature)
+plain_rotate.session.submit("33d")
+plain_geom, plain_kept = plain_rotate.rotate_committed()
+check("area preserved without cad_params", plain_geom.area(),
+      plain_before.area(), 1e-6)
+check_true("the geometry rotated", max_vertex_gap(plain_geom, plain_before) > 1.0)
+check_true("no parametric record was invented", not plain_kept)
+check("still one feature", plain_layer.featureCount(), 1)
+plain_golden = t2d.rotate(vertices(plain_before), 33.0, plain_pivot)
+check("matches the engine rotation",
+      float(np.max(np.hypot(*(vertices(plain_geom) - plain_golden).T))), 0.0,
+      1e-6)
+
+print("\n-- holes and multipart survive the commit --")
+holed_layer = lf.memory_layer("Polygon", "holed", WORK_CRS.authid(),
+                              [("name", "string")])
+holed = QgsFeature(holed_layer.fields())
+holed.setGeometry(QgsGeometry.fromWkt(
+    "POLYGON((0 0,100 0,100 100,0 100,0 0),(40 40,60 40,60 60,40 60,40 40))"))
+holed_layer.dataProvider().addFeatures([holed])
+holed = next(holed_layer.getFeatures())
+holed_area = holed.geometry().area()
+holed_rotate = rot_tool.create(canvas, layer_provider=lambda: holed_layer)
+holed_rotate.adopt_feature(holed_layer, holed)
+holed_rotate.session.submit("41d")
+holed_geom, _ = holed_rotate.rotate_committed()
+check("area with the hole preserved", holed_geom.area(), holed_area, 1e-6)
+check("the hole is still there", len(holed_geom.asPolygon()), 2)
+
+# --------------------------------------------------------------------------
+# R3 - Escape restores nothing and changes nothing
+# --------------------------------------------------------------------------
+print("\n== R3: Escape mid-rotation leaves the feature untouched ==")
+esc_layer = scratch_layer("Polygon", "cad_rot_escape")
+esc_feature = make_rectangle_feature(esc_layer, OX, OY, 50.0, 30.0, 0.0)
+esc_wkt = esc_feature.geometry().asWkt(9)
+esc_rotate = rot_tool.create(canvas, layer_provider=lambda: esc_layer)
+esc_rotate.adopt_feature(esc_layer, esc_feature)
+esc_rotate.session.submit("77d")
+check_true("a rotation is staged", esc_rotate.session.is_ready)
+esc_rotate._escape()
+check_true("session back to IDLE",
+           esc_rotate.session.state == tb.ToolState.IDLE)
+check_true("no feature captured any more", esc_rotate.source_geometry is None)
+check("feature count unchanged", esc_layer.featureCount(), 1)
+check_true("the geometry on disk is byte-identical",
+           next(esc_layer.getFeatures()).geometry().asWkt(9) == esc_wkt)
+check("no geometry was built by the escaped tool",
+      esc_rotate.geometry_builds, 0)
+check_raises("committing after Escape is refused", GeoCadError,
+             esc_rotate.rotate_committed)
+
+# --------------------------------------------------------------------------
+# R4 - hovering is free
+# --------------------------------------------------------------------------
+print("\n== R4: 100 move events build nothing and refresh nothing ==")
+hover_layer = scratch_layer("Polygon", "cad_rot_hover")
+hover_feature = make_rectangle_feature(hover_layer, OX, OY, 50.0, 30.0, 0.0)
+hover_rotate = rot_tool.create(canvas, iface=None,
+                               layer_provider=lambda: hover_layer)
+hover_rotate.activate()
+hover_pivot = hover_rotate.adopt_feature(hover_layer, hover_feature)
+hover_rotate.session.begin_drag(hover_pivot[0], hover_pivot[1] + 50.0)
+
+baseline_refresh = canvas.refresh_calls
+for step in range(100):
+    angle = math.radians(step * 3.0)
+    hover_rotate.session.hover(hover_pivot[0] + 50.0 * math.sin(angle),
+                               hover_pivot[1] + 50.0 * math.cos(angle))
+    hover_rotate.update_band(canvas, None)
+check("no feature added during 100 hovers", hover_layer.featureCount(), 1)
+check("no QgsGeometry built during 100 hovers", hover_rotate.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline_refresh, 0)
+check_true("the preview tracked the cursor",
+           hover_rotate.session.value("angle_deg") is not None)
+preview = hover_rotate.session.preview_points()
+check_true("the preview is a plain numpy array",
+           isinstance(preview, np.ndarray))
+check("the preview keeps the outline vertex count", preview.shape[0],
+      vertices(hover_feature.geometry()).shape[0])
+
+hover_rotate.session.end_drag()
+hover_rotate.session.submit("10d")
+hover_rotate._do_commit()
+check("commit after hovering still writes exactly one geometry",
+      hover_rotate.geometry_builds, 1)
+check("and does not add a feature", hover_layer.featureCount(), 1)
+hover_rotate.deactivate()
+
+print("\n== rotate tool registration ==")
+check_true("rotate is in the registry", "rotate" in tools_pkg.TOOL_REGISTRY)
+check_true("it has a label and a shortcut",
+           tools_pkg.tool_label("rotate") == "Ruota"
+           and bool(tools_pkg.tool_shortcut("rotate")))
+built_rot = tools_pkg.create_tool("rotate", canvas, layer_provider=lambda: None)
+check_true("it instantiates through the registry",
+           isinstance(built_rot, rot_tool.RotateHandleTool))
+check_true("pivot modes are declared", len(rot_tool.PIVOT_LABELS) == 3)
+built_rot.deactivate()
+check_true("plugin treats rotate as edit-in-place, never a scratch layer",
+           "rotate" in plugin_mod.EDIT_IN_PLACE_TOOLS)
 
 
 print("\n" + "=" * 80)
