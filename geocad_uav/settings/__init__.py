@@ -6,8 +6,8 @@ and survives a QGIS restart; nothing else in the plugin may open a ``QSettings``
 of its own.
 """
 
-from .store import (KEYS, NAMESPACE, SettingsStore, Setting, default_for,
-                    settings)
+from .store import (KEYS, NAMESPACE, SECRET, SettingsStore, Setting,
+                    default_for, mask, settings)
 
-__all__ = ["KEYS", "NAMESPACE", "SettingsStore", "Setting", "default_for",
-           "settings"]
+__all__ = ["KEYS", "NAMESPACE", "SECRET", "SettingsStore", "Setting",
+           "default_for", "mask", "settings"]

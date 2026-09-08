@@ -158,7 +158,13 @@ class GeoCadDock(QDockWidget):
 
         # ---------------------------------------------------------------- UAV
         self.uav_panel = UavPanel(self.iface)
-        self.tabs.addTab(self._scroll_page([self.uav_panel]), tr("UAV"))
+        self.dem_download_button = QPushButton(tr("Scarica un DEM..."))
+        self.dem_download_button.setToolTip(tr(
+            "Scarica un modello di elevazione e aggiungilo al progetto; "
+            "comparira' nell'elenco DEM qui sopra."))
+        self.tabs.addTab(
+            self._scroll_page([self.uav_panel, self.dem_download_button]),
+            tr("UAV"))
 
         # ------------------------------------------------------- LAYER/EXPORT
         self.tabs.addTab(self._scroll_page([
@@ -243,7 +249,8 @@ class GeoCadDock(QDockWidget):
 
     def _wire(self):
         """Connect the dock's own controls, recording each link."""
-        for button, slot in ((self.cad_apply, self._apply_cad_values),):
+        for button, slot in ((self.cad_apply, self._apply_cad_values),
+                             (self.dem_download_button, self._open_dem_dialog)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
 
@@ -518,6 +525,14 @@ class GeoCadDock(QDockWidget):
         except Exception as exc:                                # noqa: BLE001
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), str(exc), level=Qgis.Warning)
+
+    def _open_dem_dialog(self, *_args):
+        """Modeless: the download runs on the task manager, not here."""
+        from .dem_dialog import DemDownloadDialog                # noqa: PLC0415
+
+        dialog = DemDownloadDialog(self.iface, self)
+        dialog.show()
+        self._dem_dialog = dialog
 
     def closeEvent(self, event):                                # noqa: N802
         super().closeEvent(event)

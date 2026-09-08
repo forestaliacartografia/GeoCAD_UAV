@@ -27,7 +27,11 @@ from ..core import constants as K
 NAMESPACE = "GeoCadUav"
 
 BOOL, INT, FLOAT, STR = "bool", "int", "float", "str"
-_PY_TYPES = {BOOL: bool, INT: int, FLOAT: float, STR: str}
+#: A string that must never be printed: API keys. Stored like STR,
+#: excluded from all() and masked by mask().
+SECRET = "secret"
+_PY_TYPES = {BOOL: bool, INT: int, FLOAT: float, STR: str,
+             SECRET: str}
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,14 @@ KEYS = {s.key: s for s in (
     _s("cad/circle_segments", INT, K.CIRCLE_SEGMENTS,
        "Segmenti per cerchi ed ellissi (core.constants.CIRCLE_SEGMENTS)"),
 
+    # -- DEM sources --------------------------------------------------------
+    # Both are the same OpenTopography key in practice; they are declared
+    # separately so revoking one adapter's access does not disable the other.
+    _s("dem/copernicus_key", SECRET, "",
+       "Chiave API OpenTopography per Copernicus GLO-30 (mai nei log)"),
+    _s("dem/nasadem_key", SECRET, "",
+       "Chiave API OpenTopography per NASADEM (mai nei log)"),
+
     # -- export -------------------------------------------------------------
     _s("export/format", STR, "gpkg", "Formato di esportazione predefinito"),
     _s("export/altitude_mode", STR, "amsl", "'amsl' oppure 'relative_home'"),
@@ -92,6 +104,19 @@ KEYS = {s.key: s for s in (
     # -- interface ----------------------------------------------------------
     _s("ui/last_tab", INT, 0, "Indice dell'ultima scheda aperta nel pannello"),
 )}
+
+
+def mask(value: Any) -> str:
+    """A credential rendered for human eyes: never the value itself.
+
+    Everything that can print -- logs, exception text, the message bar, the
+    settings dump -- goes through this. Four leading characters are kept so an
+    operator can tell two keys apart without the key being recoverable.
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    return text[:4] + "*" * max(len(text) - 4, 4) if len(text) > 8 else "****"
 
 
 def default_for(key: str) -> Any:
@@ -172,8 +197,25 @@ class SettingsStore:
             settings_obj.remove(self._full(name))
 
     def all(self) -> dict:
-        """Every declared setting with its current value."""
-        return {name: self.get(name) for name in KEYS}
+        """Every declared setting. Secrets come back masked, never in clear."""
+        return {name: (mask(self.get(name)) if KEYS[name].kind == SECRET
+                       else self.get(name))
+                for name in KEYS}
+
+    def secret(self, key: str) -> str:
+        """Read an API key. The only way one leaves the store.
+
+        Raises on a key that was not declared SECRET, so a credential can
+        never be read through the ordinary accessor by accident.
+        """
+        spec = self._spec(key)
+        if spec.kind != SECRET:
+            raise KeyError(
+                "setting {0!r} is not a secret; use get()".format(key))
+        return str(self.get(key) or "")
+
+    def has_secret(self, key: str) -> bool:
+        return bool(self.secret(key).strip())
 
     def snap_types(self) -> "list":
         """``snap/types`` parsed into a clean list of lowercase names."""

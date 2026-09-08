@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.3.2
+version=1.3.3
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,27 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.2
+changelog=1.3.3
+    - Sorgenti DEM: un pulsante "Scarica un DEM..." nella scheda UAV apre una
+      finestra con le fonti disponibili. Il raster scaricato entra nel
+      progetto e compare nell'elenco DEM del pannello, senza altri passaggi.
+    - Ogni fonte dichiara lo stato del proprio schema di richiesta:
+      NASADEM via OpenTopography e' VERIFIED (endpoint e parametri letti
+      dalla documentazione ufficiale); Copernicus GLO-30, TINITALY e
+      Terrarium sono PARTIAL e il download resta disattivato, con scritto
+      quale elemento non e' stato verificato e il link alla fonte; la Google
+      Elevation API e' UNSUPPORTED e viene rifiutata.
+    - Uno stato PARTIAL non tenta la richiesta: nessun parametro viene
+      indovinato e nessun byte viene scaricato.
+    - Chiavi API solo nelle Impostazioni, con un tipo dedicato che non viene
+      mai stampato: non compaiono nei log, nei messaggi di errore, negli URL
+      mostrati ne' nell'elenco delle impostazioni.
+    - Cache su disco per coppia (fonte, area): una seconda richiesta identica
+      non riscarica nulla.
+    - Il download gira in un QgsTask annullabile. I byte vengono scritti in un
+      file .part e rinominati solo alla fine: un annullamento non lascia ne'
+      un DEM troncato ne' file temporanei.
+    1.3.2
     - Scheda UAV: la missione si genera dentro il pannello, non piu' solo
       passando dal dialogo dell'algoritmo. Area dallo stesso selettore delle
       schede Griglie e Foresta (poligono del progetto oppure disegnato con
