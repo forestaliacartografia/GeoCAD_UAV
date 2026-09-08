@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.3.0
+version=1.3.1
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.0
+changelog=1.3.1
+    - Scheda Griglie: si definisce l'estensione scegliendo un poligono gia'
+      presente nel progetto oppure disegnandolo sul momento con gli strumenti
+      Rettangolo e Polilinea gia' esistenti. Nessun nuovo digitalizzatore.
+    - Passo del reticolo da due click sulla mappa (misurati con lo strumento
+      Linea): la distanza compila il campo dx. Il campo numerico resta il
+      riferimento, digitare un valore sovrascrive la misura.
+    - Azimut da due click oppure parallelo al lato piu' lungo dell'estensione.
+    - Anteprima a rubber-band: i punti si vedono senza che nulla venga scritto.
+      Il layer nasce solo alla conferma, in un unico comando di annullamento.
+    - Scheda Foresta: stesso selettore di estensione, sesto d'impianto,
+      schema, orientamento delle file, margine dal bordo e filtro di pendenza
+      opzionale su un DEM del progetto. Gli indicatori (piante, file, densita'
+      per ettaro, riempimento) vengono da forest.stats.
+    - I generatori non sono stati toccati: il reticolo e' core.grid e
+      l'impianto e' forest.planting. I pannelli scelgono il dove, ritagliano
+      con lo stesso predicato del modulo Processing (intersects, non contains,
+      cosi' i nodi sul bordo restano) e scrivono con core.undo.
+    1.3.0
     - Strumento Ruota: rotazione di una feature esistente con maniglia,
       come si ruota un'immagine in un word processor. Trascinamento con
       angolo live nell'HUD, Shift aggancia ogni 15 gradi, angolo digitabile

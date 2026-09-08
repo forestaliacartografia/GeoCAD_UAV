@@ -31,6 +31,8 @@ from ..core import crs as crs_svc
 from ..core.models import AltitudeMode
 from ..core.units import format_duration
 from ..settings import settings as app_settings
+from .forest_panel import ForestPanel
+from .grid_panel import GridPanel
 from ..uav import cameras as cam_lib
 from ..uav import drones as drone_lib
 from ..uav import photogrammetry as pg
@@ -50,6 +52,13 @@ class GeoCadDock(QDockWidget):
         self.iface = iface
         self._connections = []
         self._cad_tool = None
+        for panel in (getattr(self, "grid_panel", None),
+                      getattr(self, "forest_panel", None)):
+            if panel is not None:
+                try:
+                    panel.teardown()
+                except Exception:                               # noqa: BLE001
+                    pass
         self._cameras = cam_lib.load_library()
         self._drones = drone_lib.load_library()
         self._camera_keys = sorted(self._cameras)
@@ -157,28 +166,12 @@ class GeoCadDock(QDockWidget):
                          tr("CAD"))
 
         # ------------------------------------------------------------ GRIGLIE
-        self.grid_button = QPushButton(tr("Griglia parametrica..."))
-        self.tabs.addTab(self._scroll_page([
-            self._placeholder(
-                tr("Griglie"),
-                tr("Il motore delle griglie e' completo e testato "
-                   "(rettangolare, quadrata, quinconce, esagonale, con "
-                   "ancoraggio stabile e ritaglio sull'area).\n\n"
-                   "I controlli dedicati in questa scheda arrivano con la "
-                   "milestone 1.2.4. Per ora si apre l'algoritmo Processing, "
-                   "che e' la stessa implementazione.")),
-            self.grid_button]), tr("Griglie"))
+        self.grid_panel = GridPanel(self.iface)
+        self.tabs.addTab(self._scroll_page([self.grid_panel]), tr("Griglie"))
 
         # ------------------------------------------------------------ FORESTA
-        self.forest_button = QPushButton(tr("Sesto d'impianto..."))
-        self.tabs.addTab(self._scroll_page([
-            self._placeholder(
-                tr("Foresta"),
-                tr("Il motore dei sesti d'impianto e' completo e testato, "
-                   "filtri di pendenza, quota ed esposizione inclusi.\n\n"
-                   "I controlli dedicati arrivano con la milestone 1.2.4. "
-                   "Per ora si apre l'algoritmo Processing.")),
-            self.forest_button]), tr("Foresta"))
+        self.forest_panel = ForestPanel(self.iface)
+        self.tabs.addTab(self._scroll_page([self.forest_panel]), tr("Foresta"))
 
         # ---------------------------------------------------------------- UAV
         area_box = QGroupBox(tr("1. Area"))
@@ -368,8 +361,6 @@ class GeoCadDock(QDockWidget):
             self._connections.append((signal, self.recompute))
 
         for button, slot in ((self.run_button, self._run_flight),
-                             (self.grid_button, self._run_grid),
-                             (self.forest_button, self._run_forest),
                              (self.cad_apply, self._apply_cad_values)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
@@ -510,6 +501,13 @@ class GeoCadDock(QDockWidget):
                 pass
         self._connections = []
         self._cad_tool = None
+        for panel in (getattr(self, "grid_panel", None),
+                      getattr(self, "forest_panel", None)):
+            if panel is not None:
+                try:
+                    panel.teardown()
+                except Exception:                               # noqa: BLE001
+                    pass
 
     # -- CAD tool binding --------------------------------------------------
 
