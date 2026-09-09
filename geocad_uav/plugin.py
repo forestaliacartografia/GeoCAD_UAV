@@ -29,14 +29,17 @@ MENU_TITLE = "GeoCad UAV Toolkit"
 #: Geometry type each CAD tool writes, and therefore which scratch layer it
 #: needs. Keys match ``cad.tools.TOOL_REGISTRY``.
 TOOL_GEOMETRY = {"line": "LineString", "polyline": "LineString",
-                 "rectangle": "Polygon", "circle": "Polygon"}
+                 "rectangle": "Polygon", "circle": "Polygon",
+                 "square": "Polygon", "ellipse": "Polygon",
+                 "regular_polygon": "Polygon"}
 
 #: Tools that edit an existing feature instead of creating one. They must
 #: never be handed a scratch layer: they rotate what the operator selected.
 EDIT_IN_PLACE_TOOLS = ("rotate",)
 
 #: CAD tools mounted on the dock's toolbar, in display order.
-CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "circle", "rotate")
+CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "square", "circle",
+                  "ellipse", "regular_polygon", "rotate")
 
 # Where an action is mounted.
 HOST_TOOLBAR = "toolbar"      # the QGIS main toolbar -- one action only

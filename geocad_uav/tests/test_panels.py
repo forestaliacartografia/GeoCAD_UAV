@@ -351,9 +351,16 @@ check_true("a closed ring becomes the extent polygon",
 check("the converted polygon has the ring's area", as_polygon.area(), 100.0,
       1e-6)
 
-check_true("no third digitizer was registered",
-           set(cad_tools.TOOL_REGISTRY) == {"line", "polyline", "rectangle",
-                                            "circle", "rotate"})
+# v1.4.0: this used to pin the five tools that existed in 1.3.1, which made
+# it fail the moment three legitimate CAD tools were added. What it is really
+# guarding is that ExtentSource registers no map tool of its own, so it now
+# asserts that every registered tool is one the plugin itself mounts.
+from geocad_uav import plugin as plugin_mod                     # noqa: E402
+
+check_true("the extent picker registered no digitizer of its own",
+           set(cad_tools.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
+check_true("...and it still reuses the drawing tools that exist",
+           {"rectangle", "polyline", "line"} <= set(cad_tools.TOOL_REGISTRY))
 
 panel.teardown()
 panel2.teardown()

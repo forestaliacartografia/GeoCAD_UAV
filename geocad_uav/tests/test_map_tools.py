@@ -1285,6 +1285,424 @@ check_true("plugin treats rotate as edit-in-place, never a scratch layer",
            "rotate" in plugin_mod.EDIT_IN_PLACE_TOOLS)
 
 
+# ==========================================================================
+# v1.4.0 - Square, Ellipse, RegularPolygon
+# ==========================================================================
+from geocad_uav.cad.tools import ellipse as ell_tool             # noqa: E402
+from geocad_uav.cad.tools import regular_polygon as rp_tool      # noqa: E402
+from geocad_uav.cad.tools import square as sq_tool               # noqa: E402
+from geocad_uav.core.errors import ConstraintError               # noqa: E402
+
+# --------------------------------------------------------------------------
+# SQ - Square
+# --------------------------------------------------------------------------
+print("\n== SQ1: square of side 10 ==")
+sq_layer = scratch_layer("Polygon", "cad_square")
+sq_session = sq_tool.SquareSession()
+sq = tb.BaseCadTool(sq_session)
+sq_session.set_origin(OX, OY)
+sq_session.submit("10")                          # side
+sq_session.submit("0d")                          # rotation
+check_true("fully constrained -> PREVIEW",
+           sq_session.state == tb.ToolState.PREVIEW)
+
+sq_feature = sq.commit(sq_layer, WORK_CRS, sq_layer.crs())
+check("one feature written", sq_layer.featureCount(), 1)
+sq_geom = sq_feature.geometry()
+check("area is 10 x 10", sq_geom.area(), 100.0, 1e-6)
+check("perimeter is 4 x 10", sq_geom.length(), 40.0, 1e-6)
+check("the ring closes with 5 points", len(vertices(sq_geom)), 5)
+
+expected_sq, _ = pr.build(pr.TOOL_SQUARE,
+                          {"x": OX, "y": OY, "side_m": 10.0,
+                           "azimuth_deg": 0.0}, WORK_CRS.authid())
+check("WKT matches the engine", max_vertex_gap(sq_geom, expected_sq), 0.0, 1e-6)
+check("area matches the engine exactly", sq_geom.area(), expected_sq.area(),
+      1e-9)
+
+print("\n== SQ2: side, diagonal, area and perimeter agree ==")
+equivalents = {
+    sq_tool.SIZE_SIDE: 10.0,
+    sq_tool.SIZE_DIAGONAL: 10.0 * math.sqrt(2.0),
+    sq_tool.SIZE_AREA: 100.0,
+    sq_tool.SIZE_PERIMETER: 40.0,
+}
+geoms = {}
+for mode, value in equivalents.items():
+    session = sq_tool.SquareSession(size_mode=mode)
+    session.set_origin(OX, OY)
+    session.submit("{0:.9f}".format(value))
+    session.submit("0d")
+    params = session.build_params()
+    check_true("{0}: the engine gets exactly one size".format(mode),
+               len([k for k in params
+                    if k in sq_tool.SIZE_LABELS]) == 1)
+    check_true("{0}: and it is the one that was typed".format(mode),
+               mode in params)
+    geom, _rec = pr.build(pr.TOOL_SQUARE, params, WORK_CRS.authid())
+    geoms[mode] = geom
+    check("{0}: side is 10".format(mode),
+          session.side_m(), 10.0, 1e-9)
+
+reference = geoms[sq_tool.SIZE_SIDE]
+for mode, geom in geoms.items():
+    check("{0}: same geometry as the side form".format(mode),
+          max_vertex_gap(geom, reference), 0.0, 1e-6)
+    check("{0}: same area".format(mode), geom.area(), 100.0, 1e-6)
+
+print("\n== SQ3: rotated 45 degrees ==")
+rot_session = sq_tool.SquareSession()
+rot_session.set_origin(OX, OY)
+rot_session.submit("10")
+rot_session.submit("45d")
+rot_geom, _ = pr.build(pr.TOOL_SQUARE, rot_session.build_params(),
+                       WORK_CRS.authid())
+check("area is unchanged by the rotation", rot_geom.area(), 100.0, 1e-6)
+check("perimeter is unchanged", rot_geom.length(), 40.0, 1e-6)
+check_true("the shape really moved",
+           max_vertex_gap(rot_geom, reference) > 1.0)
+corners = vertices(rot_geom)[:4]
+distances = np.hypot(corners[:, 0] - OX, corners[:, 1] - OY)
+check("every corner is half a diagonal from the centre",
+      float(np.max(np.abs(distances - 10.0 * math.sqrt(2.0) / 2.0))), 0.0, 1e-9)
+
+print("\n== SQ4: the record round-trips ==")
+sq_record = pa.read_record(sq_feature)
+check_true("cad_params round-trips off the feature", sq_record is not None)
+check("cad_params side", sq_record.params["side_m"], 10.0)
+check("cad_params rotation", sq_record.params["azimuth_deg"], 0.0)
+check_true("tool identifier stored", sq_record.tool == pr.TOOL_SQUARE)
+check("denormalised area column", sq_feature["area"], 100.0, 1e-6)
+sq_rebuilt, _ = pr.rebuild(sq_record)
+check("record rebuilds the identical geometry",
+      max_vertex_gap(sq_rebuilt, sq_geom), 0.0, 1e-9)
+
+print("\n== SQ5: Escape writes nothing ==")
+esc_session = sq_tool.SquareSession()
+esc_session.set_origin(OX + 50, OY + 50)
+esc_session.submit("25")
+before_count = sq_layer.featureCount()
+check_true("cancel reports there was work", esc_session.cancel())
+check_true("the session is IDLE", esc_session.state == tb.ToolState.IDLE)
+check("no feature was added", sq_layer.featureCount(), before_count)
+check_true("the size was forgotten",
+           esc_session.value(sq_tool.SIZE_SIDE) is None)
+
+print("\n== SQ6: 100 hovers build nothing ==")
+sq_hover_layer = scratch_layer("Polygon", "cad_square_hover")
+sq_map = sq_tool.create(canvas, iface=None,
+                        layer_provider=lambda: sq_hover_layer)
+sq_map.activate()
+sq_map.session.set_origin(OX, OY)
+baseline = canvas.refresh_calls
+for step in range(100):
+    sq_map.canvasMoveEvent(Move(OX + step * 0.4, OY + step * 0.3))
+check("no feature added during 100 hovers", sq_hover_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", sq_map.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+sq_map.session.submit("12")
+sq_map.session.submit("0d")
+sq_map._do_commit()
+check("committing after hovering adds exactly one feature",
+      sq_hover_layer.featureCount(), 1)
+check("exactly one geometry was built, at commit time",
+      sq_map.geometry_builds, 1)
+sq_map.deactivate()
+
+print("\n-- square from a second click --")
+pick = sq_tool.SquareSession()
+pick.set_origin(OX, OY)
+pick.set_second(OX + 5.0, OY + 5.0)
+check_true("two clicks complete the shape", pick.state == tb.ToolState.PREVIEW)
+check("the boundary reaches the click", pick.value(sq_tool.SIZE_SIDE), 10.0,
+      1e-9)
+
+# --------------------------------------------------------------------------
+# EL - Ellipse
+# --------------------------------------------------------------------------
+print("\n== EL1: a = 20, b = 10 ==")
+el_layer = scratch_layer("Polygon", "cad_ellipse")
+el_session = ell_tool.EllipseSession()
+el = tb.BaseCadTool(el_session)
+el_session.set_origin(OX, OY)
+el_session.submit("20")                          # semi-major
+el_session.submit("10")                          # semi-minor
+el_session.submit("0d")                          # rotation
+check_true("fully constrained -> PREVIEW",
+           el_session.state == tb.ToolState.PREVIEW)
+
+el_feature = el.commit(el_layer, WORK_CRS, el_layer.crs())
+check("one feature written", el_layer.featureCount(), 1)
+el_geom = el_feature.geometry()
+exact_area = math.pi * 20.0 * 10.0
+# An inscribed n-gon is always short of the true ellipse by exactly
+# 1 - (n / 2pi) sin(2pi / n): 0.127 % at the engine's segment count, the same
+# deficit the circle test above measures. Assert the closed form rather than a
+# loose percentage -- a tolerance would hide a wrong sampling, this cannot.
+n_seg = el_session.segments
+inscribed = exact_area * (n_seg / (2.0 * math.pi)) * math.sin(
+    2.0 * math.pi / n_seg)
+deficit = 100.0 * (1.0 - inscribed / exact_area)
+print("        area {0:.6f} m2 against pi*a*b = {1:.6f} ({2:.4f} % low, "
+      "{3} segments)".format(el_geom.area(), exact_area, deficit, n_seg))
+# 1e-6 m2 on 627 m2 is 1.6e-9 relative: as tight as a shoelace sum over 72
+# vertices can be held in double precision.
+check("area equals the inscribed n-gon", el_geom.area(), inscribed, 1e-6)
+check_true("...and that is within 0.5 % of pi*a*b, as for the circle",
+           abs(el_geom.area() - exact_area) / exact_area < 0.005)
+check("the segment count is the engine's",
+      len(vertices(el_geom)) - 1, el_session.segments)
+
+expected_el, _ = pr.build(pr.TOOL_ELLIPSE,
+                          {"x": OX, "y": OY, "semi_major_m": 20.0,
+                           "semi_minor_m": 10.0, "azimuth_deg": 0.0,
+                           "segments": el_session.segments},
+                          WORK_CRS.authid())
+check("WKT matches the engine", max_vertex_gap(el_geom, expected_el), 0.0, 1e-6)
+
+print("\n== EL2: azimuth 0 puts the major axis on the compass bearing ==")
+# The whole plugin reads azimuth as a compass bearing through
+# core.planar.along_track_unit: 0 is North (+Y), 90 is East (+X). The grid,
+# the rectangle and the flight strips all use it, so the ellipse does too.
+pts = vertices(el_geom)[:-1]
+span_x = float(pts[:, 0].max() - pts[:, 0].min())
+span_y = float(pts[:, 1].max() - pts[:, 1].min())
+print("        span north {0:.6f} m, span east {1:.6f} m".format(span_y, span_x))
+check("at azimuth 0 the major axis spans 2a northwards", span_y, 40.0, 1e-6)
+check("...and the minor axis spans 2b eastwards", span_x, 20.0, 1e-6)
+
+east_session = ell_tool.EllipseSession()
+east_session.set_origin(OX, OY)
+east_session.submit("20")
+east_session.submit("10")
+east_session.submit("90d")
+east_geom, _ = pr.build(pr.TOOL_ELLIPSE, east_session.build_params(),
+                        WORK_CRS.authid())
+east_pts = vertices(east_geom)[:-1]
+check("at azimuth 90 the major axis spans 2a eastwards",
+      float(east_pts[:, 0].max() - east_pts[:, 0].min()), 40.0, 1e-6)
+check("...and 2b northwards",
+      float(east_pts[:, 1].max() - east_pts[:, 1].min()), 20.0, 1e-6)
+
+print("\n== EL3: b > a is refused by the engine ==")
+bad = ell_tool.EllipseSession()
+bad.set_origin(OX, OY)
+bad.submit("10")                                 # semi-major
+bad.submit("20")                                 # semi-minor, larger
+bad.submit("0d")
+before_count = el_layer.featureCount()
+bad_tool = tb.BaseCadTool(bad)
+check_raises("commit raises ConstraintError", ConstraintError,
+             bad_tool.commit, el_layer, WORK_CRS, el_layer.crs())
+check("no feature was written", el_layer.featureCount(), before_count)
+try:
+    pr.build(pr.TOOL_ELLIPSE, bad.build_params(), WORK_CRS.authid())
+    raised_el = None
+except ConstraintError as exc:
+    raised_el = exc
+check_true("the engine's message is Italian and not empty",
+           raised_el is not None and bool(raised_el.user_message.strip()))
+check_true("it says which semi-axis is wrong",
+           "semiasse" in raised_el.user_message.lower())
+print("        {0}".format(raised_el.formatted()))
+check_true("nothing is previewed for a refused shape",
+           bad.preview_points() is None)
+check_true("no silent swap: the values are still as typed",
+           bad.value("semi_major_m") == 10.0
+           and bad.value("semi_minor_m") == 20.0)
+
+print("\n== EL4: the record round-trips ==")
+el_record = pa.read_record(el_feature)
+check_true("cad_params round-trips off the feature", el_record is not None)
+check("cad_params semi-major", el_record.params["semi_major_m"], 20.0)
+check("cad_params semi-minor", el_record.params["semi_minor_m"], 10.0)
+check_true("tool identifier stored", el_record.tool == pr.TOOL_ELLIPSE)
+el_rebuilt, _ = pr.rebuild(el_record)
+check("record rebuilds the identical geometry",
+      max_vertex_gap(el_rebuilt, el_geom), 0.0, 1e-9)
+
+print("\n== EL5: 100 hovers build nothing ==")
+el_hover_layer = scratch_layer("Polygon", "cad_ellipse_hover")
+el_map = ell_tool.create(canvas, iface=None,
+                         layer_provider=lambda: el_hover_layer)
+el_map.activate()
+el_map.session.set_origin(OX, OY)
+baseline = canvas.refresh_calls
+for step in range(100):
+    el_map.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.2))
+check("no feature added during 100 hovers", el_hover_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", el_map.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+el_map.deactivate()
+
+print("\n-- ellipse major axis from a second click --")
+el_pick = ell_tool.EllipseSession()
+el_pick.set_origin(OX, OY)
+el_pick.set_second(OX + 0.0, OY + 15.0)
+check("the click sets the semi-major", el_pick.value("semi_major_m"), 15.0,
+      1e-9)
+check("...and the bearing, due North", el_pick.value("azimuth_deg"), 0.0, 1e-9)
+check_true("the minor axis is still missing, so it is not ready",
+           not el_pick.is_ready)
+
+# --------------------------------------------------------------------------
+# RP - Regular polygon
+# --------------------------------------------------------------------------
+print("\n== RP1: hexagon of circumradius 10 ==")
+rp_layer = scratch_layer("Polygon", "cad_polygon")
+rp_session = rp_tool.RegularPolygonSession(n_sides=6)
+rp = tb.BaseCadTool(rp_session)
+rp_session.set_origin(OX, OY)
+rp_session.submit("10")                          # circumradius
+rp_session.submit("0d")                          # rotation
+rp_feature = rp.commit(rp_layer, WORK_CRS, rp_layer.crs())
+check("one feature written", rp_layer.featureCount(), 1)
+rp_geom = rp_feature.geometry()
+exact_hex = 3.0 * math.sqrt(3.0) / 2.0 * 100.0
+print("        area {0:.9f} m2 against (3*sqrt(3)/2)*r^2 = {1:.9f}".format(
+    rp_geom.area(), exact_hex))
+check("area is (3 sqrt3 / 2) r^2", rp_geom.area(), exact_hex, 1e-9)
+check("the ring has 6 sides", len(vertices(rp_geom)) - 1, 6)
+side_lengths = np.hypot(*np.diff(vertices(rp_geom), axis=0).T)
+check("for n = 6 the side equals the circumradius",
+      float(side_lengths.mean()), 10.0, 1e-9)
+check("every side is the same length",
+      float(side_lengths.max() - side_lengths.min()), 0.0, 1e-9)
+
+expected_rp, _ = pr.build(pr.TOOL_POLYGON,
+                          {"x": OX, "y": OY, "n_sides": 6, "radius_m": 10.0,
+                           "azimuth_deg": 0.0}, WORK_CRS.authid())
+check("WKT matches the engine", max_vertex_gap(rp_geom, expected_rp), 0.0, 1e-6)
+
+print("\n== RP2: radius, apothem, side and area agree ==")
+n = 6
+radius = 10.0
+rp_equivalents = {
+    rp_tool.SIZE_RADIUS: radius,
+    rp_tool.SIZE_APOTHEM: radius * math.cos(math.pi / n),
+    rp_tool.SIZE_SIDE: 2.0 * radius * math.sin(math.pi / n),
+    rp_tool.SIZE_AREA: 0.5 * n * radius ** 2 * math.sin(2.0 * math.pi / n),
+}
+rp_geoms = {}
+for mode, value in rp_equivalents.items():
+    session = rp_tool.RegularPolygonSession(n_sides=n, size_mode=mode)
+    session.set_origin(OX, OY)
+    session.submit("{0:.12f}".format(value))
+    session.submit("0d")
+    params = session.build_params()
+    check_true("{0}: exactly one size reaches the engine".format(mode),
+               len([k for k in params if k in rp_tool.SIZE_LABELS]) == 1)
+    geom, _rec = pr.build(pr.TOOL_POLYGON, params, WORK_CRS.authid())
+    rp_geoms[mode] = geom
+    check("{0}: circumradius is 10".format(mode), session.radius_m(), radius,
+          1e-9)
+
+rp_reference = rp_geoms[rp_tool.SIZE_RADIUS]
+for mode, geom in rp_geoms.items():
+    check("{0}: same geometry as the radius form".format(mode),
+          max_vertex_gap(geom, rp_reference), 0.0, 1e-6)
+    check("{0}: same area".format(mode), geom.area(), exact_hex, 1e-6)
+
+print("\n== RP3: the first vertex sits on the azimuth ==")
+for azimuth in (0.0, 30.0, 117.5):
+    session = rp_tool.RegularPolygonSession(n_sides=5)
+    session.set_origin(OX, OY)
+    session.submit("10")
+    session.submit("{0}d".format(azimuth))
+    geom, _rec = pr.build(pr.TOOL_POLYGON, session.build_params(),
+                          WORK_CRS.authid())
+    first = vertices(geom)[0]
+    bearing = math.degrees(math.atan2(first[0] - OX, first[1] - OY)) % 360.0
+    check("azimuth {0}: the first vertex bears {0}".format(azimuth),
+          bearing, azimuth % 360.0, 1e-9)
+    check("azimuth {0}: it is one circumradius away".format(azimuth),
+          math.hypot(first[0] - OX, first[1] - OY), 10.0, 1e-9)
+
+print("\n== RP4: fewer than three sides is refused ==")
+before_count = rp_layer.featureCount()
+for bad_n in (2, 1, 0):
+    session = rp_tool.RegularPolygonSession(n_sides=bad_n)
+    session.set_origin(OX, OY)
+    session.submit("10")
+    session.submit("0d")
+    check_raises("n_sides = {0} is refused".format(bad_n), InvalidInputError,
+                 pr.build, pr.TOOL_POLYGON, session.build_params(),
+                 WORK_CRS.authid())
+    check_true("n_sides = {0} previews nothing".format(bad_n),
+               session.preview_points() is None)
+check("no feature was written by any of them", rp_layer.featureCount(),
+      before_count)
+try:
+    ge.regular_polygon((OX, OY), 2, 0.0, radius_m=10.0)
+    rp_message = ""
+except InvalidInputError as exc:
+    rp_message = exc.user_message
+check_true("the refusal is Italian and explains the minimum",
+           "almeno 3 lati" in rp_message.lower())
+print("        {0}".format(rp_message))
+
+print("\n== RP5: 100 hovers build nothing ==")
+rp_hover_layer = scratch_layer("Polygon", "cad_polygon_hover")
+rp_map = rp_tool.create(canvas, iface=None,
+                        layer_provider=lambda: rp_hover_layer)
+rp_map.activate()
+rp_map.session.set_origin(OX, OY)
+baseline = canvas.refresh_calls
+for step in range(100):
+    rp_map.canvasMoveEvent(Move(OX + step * 0.3, OY + step * 0.6))
+check("no feature added during 100 hovers", rp_hover_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", rp_map.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+rp_map.deactivate()
+
+rp_record = pa.read_record(rp_feature)
+check_true("cad_params round-trips off the feature", rp_record is not None)
+check("cad_params n_sides", rp_record.params["n_sides"], 6)
+rp_rebuilt, _ = pr.rebuild(rp_record)
+check("record rebuilds the identical geometry",
+      max_vertex_gap(rp_rebuilt, rp_geom), 0.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# R2 - registration
+# --------------------------------------------------------------------------
+print("\n== R2: the three tools are registered like the others ==")
+check("the registry holds eight tools", len(tools_pkg.TOOL_REGISTRY), 8)
+for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
+                        ("ellipse", "Ellisse", ell_tool.EllipseSession),
+                        ("regular_polygon", "Poligono regolare",
+                         rp_tool.RegularPolygonSession)):
+    check_true("{0} is in the registry".format(key),
+               key in tools_pkg.TOOL_REGISTRY)
+    check_true("{0} has the right label".format(key),
+               tools_pkg.tool_label(key) == label)
+    check_true("{0} has a shortcut".format(key),
+               bool(tools_pkg.tool_shortcut(key)))
+    built = tools_pkg.create_tool(key, canvas, layer_provider=lambda: None)
+    check_true("{0} instantiates through the registry".format(key),
+               isinstance(built, tb.CadMapTool)
+               and isinstance(built.session, cls))
+    check_true("{0} writes polygons".format(key),
+               built.session.geometry_type == "Polygon")
+    built.deactivate()
+    check_true("{0} creates geometry, so it has a layer type".format(key),
+               plugin_mod.TOOL_GEOMETRY.get(key) == "Polygon")
+    check_true("{0} is not edit-in-place".format(key),
+               key not in plugin_mod.EDIT_IN_PLACE_TOOLS)
+    check_true("{0} is on the dock toolbar order".format(key),
+               key in plugin_mod.CAD_TOOL_ORDER)
+
+shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
+check("every shortcut is distinct", len(set(shortcuts)), len(shortcuts))
+check_true("every creating tool has a geometry type",
+           set(plugin_mod.TOOL_GEOMETRY)
+           == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
+check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
+check("the dock mounts all eight", len(plugin_mod.CAD_TOOL_ORDER), 8)
+
+
 print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()

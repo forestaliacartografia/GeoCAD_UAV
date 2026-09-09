@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.3.5
+version=1.4.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,22 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.5
+changelog=1.4.0
+    - Tre strumenti CAD nuovi sulla barra del pannello: Quadrato, Ellisse e
+      Poligono regolare. La barra passa da cinque a otto strumenti.
+    - Quadrato: si indica lato, diagonale, area oppure perimetro, e sono
+      quattro modi di dire lo stesso numero. Le conversioni sono quelle del
+      motore, quindi le quattro strade danno la stessa geometria.
+    - Poligono regolare: raggio circoscritto, apotema, lato o area, con il
+      primo vertice sull'azimut indicato. Il numero di lati e' un parametro
+      di costruzione, come i segmenti del cerchio.
+    - Ellisse: semiasse maggiore, semiasse minore e orientamento; il secondo
+      click fissa asse maggiore e direzione. Un semiasse minore piu' grande
+      del maggiore viene rifiutato dal motore e non viene scambiato di
+      nascosto: si vede il messaggio, non una forma diversa da quella chiesta.
+    - Come per gli altri strumenti, il passaggio del mouse non costruisce
+      nulla: una sola geometria, al momento della conferma.
+    1.3.5
     - Scheda Layer/Export: il segnaposto e' sostituito dalla scheda vera. La
       sorgente e' la missione gia' generata nella scheda UAV; senza missione
       tutto resta disabilitato e il pannello spiega perche'.

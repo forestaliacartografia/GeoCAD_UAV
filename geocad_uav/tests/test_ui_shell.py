@@ -213,10 +213,13 @@ cad_mounted = real_actions(cad_toolbar)
 print("        CAD toolbar actions: {0}".format(
     [a.text() for a in cad_mounted]))
 check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
-check_true("at least Line, Rectangle and Circle are present",
-           len(cad_mounted) >= 3)
+# v1.4.0: 5 tools became 8 (Square, Ellisse, Poligono regolare joined). The
+# count is asserted against the registry below, so it follows the shipped set;
+# this literal is the floor that says the toolbar was actually populated.
+check("the toolbar carries every shipped CAD tool", len(cad_mounted), 8)
 labels = {a.text() for a in cad_mounted}
-for expected in ("Linea", "Rettangolo", "Cerchio"):
+for expected in ("Linea", "Polilinea", "Rettangolo", "Quadrato", "Cerchio",
+                 "Ellisse", "Poligono regolare", "Ruota"):
     check_true("'{0}' is on the dock toolbar".format(expected),
                expected in labels)
 check_true("every registered CAD tool is mounted",
