@@ -17,7 +17,7 @@ about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
     report con profilo altimetrico.
     Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
     I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
-version=1.3.3
+version=1.3.4
 author=Niccolo Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -33,7 +33,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.3
+changelog=1.3.4
+    - Simulazione del volo nella scheda UAV: Play, Pausa, Stop e velocita' di
+      riproduzione 1x/2x/5x sulla rotta gia' generata.
+    - Un marker percorre il tracciato e un secondo marker lampeggia a ogni
+      centro di presa attraversato: a fine corsa i lampi sono esattamente
+      quanti gli scatti della missione.
+    - Il simulatore non ricalcola nulla. I tempi vengono dalla stessa funzione
+      che ha cronometrato le strip, uav.terrain_follow.segment_flight_time, e
+      quote, velocita' e waypoint sono letti dalla missione senza toccarli.
+    - Due orologi distinti e dichiarati: il tempo di percorso, che e' quello
+      che si guarda scorrere, e il tempo di missione riportato dal
+      pianificatore, che comprende anche decolli, atterraggi e virate.
+    - La velocita' di riproduzione moltiplica solo l'orologio: la missione
+      resta identica waypoint per waypoint.
+    - L'anteprima e' una rubber-band: nessuna feature scritta, nessun layer
+      creato, nessun ridisegno forzato della mappa. Stop ripulisce tutto.
+    - Senza una rotta generata il pulsante Play resta disabilitato e dice
+      perche'.
+    1.3.3
     - Sorgenti DEM: un pulsante "Scarica un DEM..." nella scheda UAV apre una
       finestra con le fonti disponibili. Il raster scaricato entra nel
       progetto e compare nell'elenco DEM del pannello, senza altri passaggi.

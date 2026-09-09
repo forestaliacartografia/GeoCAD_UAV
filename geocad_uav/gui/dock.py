@@ -16,14 +16,16 @@ from qgis.gui import QgsMapLayerComboBox
 from qgis.PyQt.QtCore import QCoreApplication, QSize, Qt
 from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
                                  QDoubleSpinBox, QFormLayout, QGroupBox,
-                                 QLabel, QPushButton, QScrollArea, QSpinBox,
-                                 QTabWidget, QToolBar, QVBoxLayout, QWidget)
+                                 QHBoxLayout, QLabel, QPushButton, QScrollArea,
+                                 QSpinBox, QTabWidget, QToolBar, QVBoxLayout,
+                                 QWidget)
 
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
 from ..settings import settings as app_settings
 from .forest_panel import ForestPanel
 from .grid_panel import GridPanel
+from .mission_player import MissionPlayer, RATES as PLAYER_RATES
 from .uav_panel import UavPanel
 
 
@@ -42,7 +44,8 @@ class GeoCadDock(QDockWidget):
         self._cad_tool = None
         for panel in (getattr(self, "grid_panel", None),
                       getattr(self, "forest_panel", None),
-                      getattr(self, "uav_panel", None)):
+                      getattr(self, "uav_panel", None),
+                      getattr(self, "player", None)):
             if panel is not None:
                 try:
                     panel.teardown()
@@ -163,7 +166,8 @@ class GeoCadDock(QDockWidget):
             "Scarica un modello di elevazione e aggiungilo al progetto; "
             "comparira' nell'elenco DEM qui sopra."))
         self.tabs.addTab(
-            self._scroll_page([self.uav_panel, self.dem_download_button]),
+            self._scroll_page([self.uav_panel, self.dem_download_button,
+                               self._build_player_box()]),
             tr("UAV"))
 
         # ------------------------------------------------------- LAYER/EXPORT
@@ -237,6 +241,30 @@ class GeoCadDock(QDockWidget):
         self.settings_reset = QPushButton(tr("Ripristina i valori predefiniti"))
         return [units_box, snap_box, default_box, self.settings_reset]
 
+    def _build_player_box(self):
+        """Transport controls over the mission the UAV panel already built."""
+        box = QGroupBox(tr("Simulazione del volo"))
+        layout = QVBoxLayout(box)
+        self.player = MissionPlayer(self.iface, self)
+
+        row = QHBoxLayout()
+        self.play_button = QPushButton(tr("Play"))
+        self.pause_button = QPushButton(tr("Pausa"))
+        self.stop_button = QPushButton(tr("Stop"))
+        self.rate_combo = QComboBox()
+        for rate in PLAYER_RATES:
+            self.rate_combo.addItem("{0}x".format(rate), rate)
+        for widget in (self.play_button, self.pause_button, self.stop_button,
+                       self.rate_combo):
+            row.addWidget(widget)
+        layout.addLayout(row)
+
+        self.player_status = QLabel()
+        self.player_status.setWordWrap(True)
+        layout.addWidget(self.player_status)
+        self._refresh_player()
+        return box
+
     def _spin(self, value, minimum, maximum, step, suffix):
         spin = QDoubleSpinBox()
         spin.setRange(minimum, maximum)
@@ -250,9 +278,23 @@ class GeoCadDock(QDockWidget):
     def _wire(self):
         """Connect the dock's own controls, recording each link."""
         for button, slot in ((self.cad_apply, self._apply_cad_values),
-                             (self.dem_download_button, self._open_dem_dialog)):
+                             (self.dem_download_button, self._open_dem_dialog),
+                             (self.play_button, self._play_mission),
+                             (self.pause_button, self._pause_mission),
+                             (self.stop_button, self._stop_mission)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
+
+        # The panel owns last_mission; the dock only reacts to it. Its own
+        # slots are connected first, so by the time these run the attribute
+        # already holds the mission that was just generated.
+        for signal, slot in (
+                (self.rate_combo.currentIndexChanged, self._change_rate),
+                (self.uav_panel.generate_button.clicked, self._refresh_player),
+                (self.player.ticked, self._on_player_tick),
+                (self.player.finished, self._refresh_player)):
+            signal.connect(slot)
+            self._connections.append((signal, slot))
 
         for widget, signal_name, slot in (
                 (self.set_length_unit, "currentIndexChanged", self._save_settings),
@@ -384,7 +426,8 @@ class GeoCadDock(QDockWidget):
         self._cad_tool = None
         for panel in (getattr(self, "grid_panel", None),
                       getattr(self, "forest_panel", None),
-                      getattr(self, "uav_panel", None)):
+                      getattr(self, "uav_panel", None),
+                      getattr(self, "player", None)):
             if panel is not None:
                 try:
                     panel.teardown()
@@ -525,6 +568,47 @@ class GeoCadDock(QDockWidget):
         except Exception as exc:                                # noqa: BLE001
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), str(exc), level=Qgis.Warning)
+
+    # -- mission playback --------------------------------------------------
+
+    def _play_mission(self, *_args):
+        mission = self.uav_panel.last_mission
+        if mission is None:
+            self.player_status.setText(tr(
+                "Nessuna missione da simulare: premi prima Genera rotta."))
+            self._refresh_player()
+            return
+        if not self.player.play(mission):
+            self.player_status.setText(self.player.message)
+        self._refresh_player()
+
+    def _pause_mission(self, *_args):
+        self.player.pause()
+        self._refresh_player()
+
+    def _stop_mission(self, *_args):
+        self.player.stop()
+        self._refresh_player()
+
+    def _change_rate(self, *_args):
+        self.player.set_rate(self.rate_combo.currentData() or 1)
+        self._refresh_player()
+
+    def _on_player_tick(self, *_args):
+        self.player_status.setText(self.player.summary())
+
+    def _refresh_player(self, *_args):
+        """Play is enabled only when the panel actually holds a mission."""
+        mission = getattr(self.uav_panel, "last_mission", None)
+        self.play_button.setEnabled(mission is not None)
+        self.pause_button.setEnabled(self.player.is_playing)
+        self.stop_button.setEnabled(self.player.mission is not None)
+        if mission is None:
+            self.player_status.setText(tr(
+                "Nessuna missione da simulare: genera prima la rotta qui "
+                "sopra."))
+        else:
+            self.player_status.setText(self.player.summary())
 
     def _open_dem_dialog(self, *_args):
         """Modeless: the download runs on the task manager, not here."""
