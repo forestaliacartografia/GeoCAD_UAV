@@ -33,7 +33,8 @@ EXCLUDE_NAMES = {".DS_Store", "Thumbs.db"}
 OPTIONAL_DIRS = {"tests"}
 
 #: Files that must be present, or the archive is not installable.
-REQUIRED = ["metadata.txt", "__init__.py", "plugin.py", "icon.svg",
+REQUIRED = ["metadata.txt", "__init__.py", "plugin.py", "icon.png",
+            "icon.svg",
             os.path.join("profiles", "cameras.json"),
             os.path.join("profiles", "drones.json")]
 

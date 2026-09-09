@@ -13,6 +13,7 @@ NEEDS QGIS. Run with:
 """
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
@@ -300,6 +301,89 @@ else:
 
 plugin.unload()
 check("final unload leaves no dock", len(iface.docks), 0)
+
+# --------------------------------------------------------------------------
+# I1 (v1.3.5): the shipped icon and the stated identity
+# --------------------------------------------------------------------------
+print("\n== I1: the archive carries the icon, the metadata carries the name ==")
+import tempfile                                                 # noqa: E402
+import zipfile                                                  # noqa: E402
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))
+PACKAGE_DIR = os.path.join(ROOT, "geocad_uav")
+
+metadata = open(os.path.join(PACKAGE_DIR, "metadata.txt"),
+                encoding="utf-8").read()
+check_true("metadata declares the raster icon",
+           "icon=icon.png" in metadata)
+check_true("the icon file is in the package", os.path.isfile(
+    os.path.join(PACKAGE_DIR, "icon.png")))
+
+source_icon = os.path.join(ROOT, "icon_plugin_cad.png")
+if os.path.isfile(source_icon):
+    with open(source_icon, "rb") as handle:
+        original = handle.read()
+    with open(os.path.join(PACKAGE_DIR, "icon.png"), "rb") as handle:
+        packaged = handle.read()
+    check_true("the packaged icon is the artwork byte for byte",
+               original == packaged)
+else:
+    skip("the packaged icon is the artwork byte for byte",
+         "icon_plugin_cad.png is not in the repository root")
+
+description = re.search(r"^description=(.+)$", metadata, re.M)
+check_true("description is present and not empty",
+           description is not None and len(description.group(1).strip()) > 40)
+check_true("description fits the plugin manager (< 250 chars)",
+           description is not None and len(description.group(1)) < 250)
+
+about = re.search(r"^about=(?:.*\n)(?:[ \t]+.*\n)*", metadata, re.M)
+about_text = about.group(0) if about else ""
+check_true("about names the author",
+           "Cap. Niccol\u00f2 Marco Mancini" in about_text)
+check_true("about names the unit", "RGPBIO" in about_text)
+check_true("about names the Cartografia Numerica group",
+           "Cartografia Numerica" in about_text)
+check_true("author= carries the rank",
+           "author=Cap. Niccol\u00f2 Marco Mancini" in metadata)
+check_true("email is present and untouched",
+           re.search(r"^email=\S+@\S+$", metadata, re.M) is not None)
+check_true("no marketing comparison in the metadata",
+           not any(word in metadata.lower()
+                   for word in ("litchi mission hub e' meglio", "thopos",
+                                "piu' potente", "powered by")))
+
+sys.path.insert(0, ROOT)
+import zip_plugin                                               # noqa: E402
+
+check_true("the builder requires the icon in the archive",
+           "icon.png" in zip_plugin.REQUIRED)
+
+build_dir = tempfile.mkdtemp(prefix="geocad_zip_")
+archive_path = zip_plugin.build(build_dir, with_tests=False)
+with zipfile.ZipFile(archive_path) as archive:
+    names = archive.namelist()
+    icon_bytes = archive.read("geocad_uav/icon.png")
+check_true("the archive contains geocad_uav/icon.png",
+           "geocad_uav/icon.png" in names)
+check_true("the archived icon is the artwork, uncompressed and unresized",
+           icon_bytes == open(os.path.join(PACKAGE_DIR, "icon.png"),
+                              "rb").read())
+check_true("the archive root is still the package alone",
+           {name.split("/")[0] for name in names} == {"geocad_uav"})
+zip_plugin.verify(archive_path)
+
+# The dock was unloaded above, so build a fresh one to read its credit line.
+fresh = plugin_mod.GeoCadUavPlugin(FakeIface())
+fresh.initGui()
+credit = fresh.dock.credit.text()
+print("        credit: {0}".format(credit))
+check_true("the dock shows the credit line",
+           "RGPBIO" in credit
+           and "Cap. Niccol\u00f2 Marco Mancini" in credit
+           and "Cartografia Numerica" in credit)
+fresh.unload()
 
 print("\n" + "=" * 78)
 QgsProject.instance().removeAllMapLayers()

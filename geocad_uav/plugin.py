@@ -68,7 +68,7 @@ class GeoCadUavPlugin:
         from qgis.PyQt.QtCore import QCoreApplication
         return QCoreApplication.translate("GeoCadUav", text)
 
-    def _icon(self, name="icon.svg"):
+    def _icon(self, name="icon.png"):
         path = os.path.join(PLUGIN_DIR, name)
         return QIcon(path) if os.path.exists(path) else QIcon()
 

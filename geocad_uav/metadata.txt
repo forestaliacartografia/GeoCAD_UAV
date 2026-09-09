@@ -2,23 +2,22 @@
 name=GeoCad UAV Toolkit
 qgisMinimumVersion=3.34
 qgisMaximumVersion=3.99
-description=Geometria CAD dimensionale, griglie parametriche, progettazione di impianti forestali e pianificazione di voli UAV fotogrammetrici con inseguimento del terreno da DEM/DTM.
-about=GeoCad UAV Toolkit riunisce quattro strumenti in un unico ambiente QGIS.
-    CAD: primitive dimensionali calcolate (non disegnate a occhio), input dinamico
-    (@25<37, #x,y), vincoli di lunghezza, angolo, raggio e area, editor parametrico.
-    GRID: griglie rettangolari, quadrate, esagonali e a quinconce, orientabili e
-    ritagliate sull'area di progetto.
-    FOREST: sesti d'impianto dentro un poligono esistente, con filtri topografici
-    reali su pendenza, quota ed esposizione ricavati dal DEM.
-    UAV: pianificazione fotogrammetrica completa con terrain following obbligatorio
-    (Z = DEM + H_AGL + margine), calcolo di GSD, impronta a terra, D_side, D_front,
-    limiti di velocita' per mosso, intervallo di scatto e rateo di salita,
-    ottimizzazione delle strip, divisione automatica per batteria, validatore e
-    report con profilo altimetrico.
-    Nessuna dipendenza esterna: solo API QGIS, Qt, GDAL e numpy gia' presenti in QGIS.
-    I formati di esportazione dichiarati sono solo quelli il cui schema e' verificato.
+description=CAD parametrico, griglie e impianti forestali, pianificazione fotogrammetrica UAV con terrain following su DEM/DTM, validazione ed export missione (Litchi, QGC, GPKG) dentro QGIS.
+about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
+    topografico, forestale e fotogrammetrico. Consente di: disegnare
+    geometrie CAD dimensionalmente precise (quota, lunghezza, angolo,
+    raggio) con snapping nativo QGIS; ruotare feature già create
+    (maniglia tipo Word); generare griglie e sesti d'impianto su un
+    poligono esistente o disegnato in mappa; pianificare missioni UAV
+    ad AGL costante sul DEM/DTM (terrain following), con camera,
+    overlap, velocità in km/h, intervallo di scatto, preview, simulazione
+    e export verso formati verificati. I calcoli metrici non avvengono
+    in EPSG:4326. I formati drone non verificati (es. DJI WPML nativo)
+    sono rifiutati, non simulati.
+    Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
+    Cartografia Numerica del RGPBIO.
 version=1.3.4
-author=Niccolo Marco Mancini
+author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
 tracker=https://example.invalid/geocad-uav/issues
@@ -28,7 +27,7 @@ homepage=https://example.invalid/geocad-uav
 tags=cad,uav,drone,photogrammetry,dem,terrain following,grid,forestry,survey,flight planning,gsd
 
 category=Plugins
-icon=icon.svg
+icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes

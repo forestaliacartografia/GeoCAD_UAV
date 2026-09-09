@@ -239,7 +239,14 @@ class GeoCadDock(QDockWidget):
         default_form.addRow(self.settings_hint)
 
         self.settings_reset = QPushButton(tr("Ripristina i valori predefiniti"))
-        return [units_box, snap_box, default_box, self.settings_reset]
+
+        self.credit = QLabel(tr(
+            "Ideato e realizzato dal Cap. Niccolò Marco Mancini — "
+            "Gruppo di Cartografia Numerica, RGPBIO."))
+        self.credit.setWordWrap(True)
+        self.credit.setStyleSheet("color:#555;")
+        return [units_box, snap_box, default_box, self.settings_reset,
+                self.credit]
 
     def _build_player_box(self):
         """Transport controls over the mission the UAV panel already built."""
