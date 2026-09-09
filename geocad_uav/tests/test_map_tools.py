@@ -1669,7 +1669,9 @@ check("record rebuilds the identical geometry",
 # R2 - registration
 # --------------------------------------------------------------------------
 print("\n== R2: the three tools are registered like the others ==")
-check("the registry holds eight tools", len(tools_pkg.TOOL_REGISTRY), 8)
+# v1.4.1: eight became ten when Move and Resize joined. Both are
+# edit-in-place, so TOOL_GEOMETRY stays at seven.
+check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
 for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
                         ("ellipse", "Ellisse", ell_tool.EllipseSession),
                         ("regular_polygon", "Poligono regolare",
@@ -1700,7 +1702,490 @@ check_true("every creating tool has a geometry type",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
 check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all eight", len(plugin_mod.CAD_TOOL_ORDER), 8)
+check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+
+
+# ==========================================================================
+# v1.4.1 - Move and Resize, both edit-in-place
+# ==========================================================================
+from geocad_uav.cad.tools import move as mv_tool                 # noqa: E402
+from geocad_uav.cad.tools import resize as rs_tool               # noqa: E402
+from geocad_uav.core.errors import ConstraintError as _CErr      # noqa: E402
+
+
+def build_feature(layer, tool, params):
+    """Write one parametric feature and hand it back off the layer."""
+    geom, record = pr.build(tool, params, WORK_CRS.authid())
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(geom)
+    attributes = pa.record_to_attributes(record)
+    values = [attributes.get(field.name()) for field in layer.fields()]
+    feature.setAttributes(values)
+    layer.dataProvider().addFeatures([feature])
+    layer.updateExtents()
+    newest = max(layer.getFeatures(), key=lambda f: f.id())
+    return newest
+
+
+def wkt_of(layer, fid):
+    return layer.getFeature(fid).geometry().asWkt(9)
+
+
+def params_of(layer, fid):
+    record = pa.read_record(layer.getFeature(fid))
+    return None if record is None else dict(pr.input_params(record))
+
+
+# --------------------------------------------------------------------------
+# MV1 - a rectangle moves without changing shape
+# --------------------------------------------------------------------------
+print("\n== MV1: rect 50 x 30, dx = 10, dy = -4 ==")
+mv_layer = scratch_layer("Polygon", "cad_move")
+mv_feature = build_feature(mv_layer, pr.TOOL_RECTANGLE,
+                           {"mode": "center", "x": OX, "y": OY,
+                            "width_m": 50.0, "height_m": 30.0,
+                            "azimuth_deg": 0.0})
+before_area = mv_feature.geometry().area()
+before_centre = mv_feature.geometry().boundingBox().center()
+check("the fixture is 50 x 30", before_area, 1500.0, 1e-6)
+
+mv = mv_tool.create(canvas, iface=None, layer_provider=lambda: mv_layer)
+mv.activate()
+mv.adopt_feature(mv_layer, mv_feature)
+check_true("the session captured the feature", mv.session.has_feature)
+mv.session.submit("@10,-4")
+check_true("the typed token filled both deltas",
+           mv.session.value("dx_m") == 10.0 and mv.session.value("dy_m") == -4.0)
+moved, kept = mv.move_committed()
+
+check("area is unchanged", moved.area(), 1500.0, 1e-6)
+check("perimeter is unchanged", moved.length(), 160.0, 1e-6)
+after_centre = moved.boundingBox().center()
+check("the centre moved by dx", after_centre.x() - before_centre.x(), 10.0,
+      1e-9)
+check("...and by dy", after_centre.y() - before_centre.y(), -4.0, 1e-9)
+check("still one feature on the layer", mv_layer.featureCount(), 1)
+
+mv_params = params_of(mv_layer, mv_feature.id())
+check_true("cad_params were kept", kept)
+check("width is untouched", mv_params["width_m"], 50.0)
+check("height is untouched", mv_params["height_m"], 30.0)
+check("azimuth is untouched", mv_params["azimuth_deg"], 0.0)
+check("the anchor followed the move in x", mv_params["x"], OX + 10.0, 1e-9)
+check("...and in y", mv_params["y"], OY - 4.0, 1e-9)
+
+mv_record = pa.read_record(mv_layer.getFeature(mv_feature.id()))
+rebuilt_mv, _ = pr.rebuild(mv_record)
+check("the record rebuilds exactly where the geometry now is",
+      max_vertex_gap(rebuilt_mv, moved), 0.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# MV2 - a circle dragged 25 m north
+# --------------------------------------------------------------------------
+print("\n== MV2: circle r = 10 dragged 25 m north ==")
+mv2_layer = scratch_layer("Polygon", "cad_move_circle")
+mv2_feature = build_feature(mv2_layer, pr.TOOL_CIRCLE,
+                            {"mode": "center_radius", "x": OX, "y": OY,
+                             "radius_m": 10.0})
+before_area = mv2_feature.geometry().area()
+mv2 = mv_tool.create(canvas, iface=None, layer_provider=lambda: mv2_layer)
+mv2.activate()
+mv2.adopt_feature(mv2_layer, mv2_feature)
+mv2.session.begin_drag(OX, OY)
+mv2.session.hover(OX, OY + 25.0)
+check("the drag produced dy = 25", mv2.session.value("dy_m"), 25.0, 1e-9)
+check("...and dx = 0", mv2.session.value("dx_m"), 0.0, 1e-9)
+mv2.session.end_drag()
+moved2, kept2 = mv2.move_committed()
+
+# 1e-6 m2 on 313 m2 is 3e-9 relative: what a shoelace sum holds after the
+# whole ring is shifted 25 m at UTM northings of 5 000 000.
+check("area is unchanged by the drag", moved2.area(), before_area, 1e-6)
+check_true("area is still within 0.5 % of pi r^2, as for a fresh circle",
+           abs(moved2.area() - math.pi * 100.0) / (math.pi * 100.0) < 0.005)
+centre2 = moved2.boundingBox().center()
+check("the centre moved 25 m north", centre2.y() - OY, 25.0, 1e-9)
+check("...and not at all east", centre2.x() - OX, 0.0, 1e-9)
+mv2_params = params_of(mv2_layer, mv2_feature.id())
+check("the radius is untouched", mv2_params["radius_m"], 10.0)
+check("the anchor followed", mv2_params["y"], OY + 25.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# MV3 - Escape mid-drag changes nothing
+# --------------------------------------------------------------------------
+print("\n== MV3: Escape half way through a drag ==")
+mv3_layer = scratch_layer("Polygon", "cad_move_escape")
+mv3_feature = build_feature(mv3_layer, pr.TOOL_SQUARE,
+                            {"x": OX, "y": OY, "side_m": 12.0,
+                             "azimuth_deg": 30.0})
+fid3 = mv3_feature.id()
+wkt_before = wkt_of(mv3_layer, fid3)
+params_before = params_of(mv3_layer, fid3)
+count_before = mv3_layer.featureCount()
+
+mv3 = mv_tool.create(canvas, iface=None, layer_provider=lambda: mv3_layer)
+mv3.activate()
+mv3.adopt_feature(mv3_layer, mv3_feature)
+mv3.session.begin_drag(OX, OY)
+mv3.session.hover(OX + 40.0, OY + 40.0)
+check_true("a delta was accumulated", mv3.session.value("dx_m") == 40.0)
+mv3._escape()
+
+check_true("the session is IDLE", mv3.session.state == tb.ToolState.IDLE)
+check_true("nothing is captured any more", not mv3.session.has_feature)
+check_true("the WKT is byte-identical", wkt_of(mv3_layer, fid3) == wkt_before)
+check_true("cad_params are identical",
+           params_of(mv3_layer, fid3) == params_before)
+check("no feature was added", mv3_layer.featureCount(), count_before)
+
+# --------------------------------------------------------------------------
+# MV4 - hovering is free, committing is one undo command
+# --------------------------------------------------------------------------
+print("\n== MV4: 100 hovers, then one commit ==")
+mv4_layer = scratch_layer("Polygon", "cad_move_hover")
+mv4_feature = build_feature(mv4_layer, pr.TOOL_RECTANGLE,
+                            {"mode": "center", "x": OX, "y": OY,
+                             "width_m": 20.0, "height_m": 10.0,
+                             "azimuth_deg": 0.0})
+fid4 = mv4_feature.id()
+wkt4_before = wkt_of(mv4_layer, fid4)
+mv4 = mv_tool.create(canvas, iface=None, layer_provider=lambda: mv4_layer)
+mv4.activate()
+mv4.adopt_feature(mv4_layer, mv4_feature)
+mv4.session.begin_drag(OX, OY)
+
+baseline_refresh = canvas.refresh_calls
+builds_before = mv4.geometry_builds
+mv4_layer.startEditing()
+stack = mv4_layer.undoStack()
+commands_before = stack.count()
+for step in range(100):
+    mv4.session.hover(OX + step * 0.5, OY + step * 0.25)
+check("no QgsGeometry built during 100 hovers",
+      mv4.geometry_builds - builds_before, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline_refresh, 0)
+check("no undo command opened during 100 hovers",
+      stack.count() - commands_before, 0)
+check("no feature added", mv4_layer.featureCount(), 1)
+
+mv4.session.end_drag()
+mv4.move_committed()
+check("exactly one geometry was built, at commit time",
+      mv4.geometry_builds - builds_before, 1)
+check("the commit is a single undo command", stack.count() - commands_before, 1)
+check_true("the geometry really moved",
+           wkt_of(mv4_layer, fid4) != wkt4_before)
+stack.undo()
+check_true("one undo puts the geometry back",
+           wkt_of(mv4_layer, fid4) == wkt4_before)
+mv4_layer.rollBack()
+
+# --------------------------------------------------------------------------
+# MV5 - a feature whose record is broken still moves
+# --------------------------------------------------------------------------
+print("\n== MV5: broken cad_params ==")
+mv5_layer = scratch_layer("Polygon", "cad_move_broken")
+mv5_feature = build_feature(mv5_layer, pr.TOOL_RECTANGLE,
+                            {"mode": "center", "x": OX, "y": OY,
+                             "width_m": 40.0, "height_m": 20.0,
+                             "azimuth_deg": 0.0})
+fid5 = mv5_feature.id()
+index = mv5_layer.fields().indexOf(pa.PARAMS_FIELD)
+mv5_layer.dataProvider().changeAttributeValues(
+    {fid5: {index: "{not json at all"}})
+broken_feature = mv5_layer.getFeature(fid5)
+
+
+def unreadable(feature):
+    """True when cad_params cannot be parsed at all.
+
+    read_record raises GeometryError on malformed JSON rather than returning
+    None, which is what move.py catches; the test asserts that behaviour
+    instead of assuming a quieter one.
+    """
+    try:
+        return pa.read_record(feature) is None
+    except GeoCadError:
+        return True
+
+
+check_true("the record can no longer be read", unreadable(broken_feature))
+
+area_before = broken_feature.geometry().area()
+mv5 = mv_tool.create(canvas, iface=None, layer_provider=lambda: mv5_layer)
+mv5.activate()
+warnings_seen = []
+mv5._warn = lambda text: warnings_seen.append(text)
+mv5.adopt_feature(mv5_layer, broken_feature)
+mv5.session.submit("@5,5")
+moved5, kept5 = mv5.move_committed()
+
+check_true("the parameters were not claimed to survive", not kept5)
+check("the geometry moved anyway", moved5.area(), area_before, 1e-6)
+centre5 = moved5.boundingBox().center()
+check("...by exactly the delta", centre5.x() - OX, 5.0, 1e-9)
+check("still one feature", mv5_layer.featureCount(), 1)
+check_true("the operator was warned, in Italian",
+           any("parametri cad" in w.lower() for w in warnings_seen))
+check_true("the record is still unreadable, not silently rewritten",
+           unreadable(mv5_layer.getFeature(fid5)))
+print("        {0}".format(warnings_seen[0] if warnings_seen else ""))
+
+# --------------------------------------------------------------------------
+# MV6 - a geographic CRS is refused, exactly as Rotate refuses it
+# --------------------------------------------------------------------------
+print("\n== MV6: EPSG:4326 goes through the same CRS gate as Rotate ==")
+geo_canvas = CountingCanvas()
+geo_canvas.setDestinationCrs(QgsCoordinateReferenceSystem("EPSG:4326"))
+geo_canvas.setExtent(QgsRectangle(9.0, 45.0, 9.1, 45.1))
+geo_layer = lf.memory_layer("Polygon", "cad_move_geo", "EPSG:4326",
+                            pa.METADATA_FIELDS)
+QgsProject.instance().addMapLayer(geo_layer)
+
+mv6 = mv_tool.create(geo_canvas, iface=None, layer_provider=lambda: geo_layer)
+mv6.activate()
+rot6 = rot_tool.create(geo_canvas, iface=None, layer_provider=lambda: geo_layer)
+rot6.activate()
+print("        move decision {0!r}, rotate decision {1!r}".format(
+    mv6._work_decision, rot6._work_decision))
+check_true("Move reaches the same verdict as Rotate on the same canvas",
+           (mv6._work_decision is None) == (rot6._work_decision is None))
+if mv6._work_decision is None:
+    check_true("blocked, with a reason in Italian",
+               bool((mv6._blocked_reason or "").strip()))
+    check_true("Rotate is blocked for the same reason",
+               mv6._blocked_reason == rot6._blocked_reason)
+else:
+    check_true("a projected working CRS was resolved instead of using degrees",
+               mv6.work_crs_object is not None
+               and not crs_svc.is_geographic(mv6.work_crs_object))
+    check_true("Rotate resolved the same one",
+               rot6.work_crs_object.authid() == mv6.work_crs_object.authid())
+check("no feature was created on the geographic layer",
+      geo_layer.featureCount(), 0)
+mv6.deactivate()
+rot6.deactivate()
+
+# --------------------------------------------------------------------------
+# RS1 - a rectangle resized to an absolute width
+# --------------------------------------------------------------------------
+print("\n== RS1: rect 50 x 30, width -> 70 ==")
+rs_layer = scratch_layer("Polygon", "cad_resize")
+rs_feature = build_feature(rs_layer, pr.TOOL_RECTANGLE,
+                           {"mode": "center", "x": OX, "y": OY,
+                            "width_m": 50.0, "height_m": 30.0,
+                            "azimuth_deg": 0.0})
+fid_rs = rs_feature.id()
+centre_before = rs_feature.geometry().boundingBox().center()
+
+rs = rs_tool.create(canvas, iface=None, layer_provider=lambda: rs_layer)
+rs.activate()
+targets = rs.adopt_feature(rs_layer, rs_feature)
+print("        editable dimensions: {0}".format(targets))
+check_true("both sides of a rectangle are offered",
+           targets == ["width_m", "height_m"])
+rs.session.submit("70")                          # width
+rs.session.submit("30")                          # height, unchanged
+resized, ok = rs.resize_committed()
+
+check("area is 70 x 30", resized.area(), 2100.0, 1e-6)
+check("the height did not change", params_of(rs_layer, fid_rs)["height_m"],
+      30.0)
+check("the width is the typed one", params_of(rs_layer, fid_rs)["width_m"],
+      70.0)
+centre_after = resized.boundingBox().center()
+check("the centre did not move in x", centre_after.x() - centre_before.x(),
+      0.0, 1e-9)
+check("...nor in y", centre_after.y() - centre_before.y(), 0.0, 1e-9)
+check("the azimuth is untouched", params_of(rs_layer, fid_rs)["azimuth_deg"],
+      0.0)
+check_true("the record still describes the shape", ok)
+check("still one feature", rs_layer.featureCount(), 1)
+rs_record = pa.read_record(rs_layer.getFeature(fid_rs))
+rebuilt_rs, _ = pr.rebuild(rs_record)
+check("the record rebuilds the resized geometry",
+      max_vertex_gap(rebuilt_rs, resized), 0.0, 1e-9)
+
+# --------------------------------------------------------------------------
+# RS2 - a square stays square, a circle stays round
+# --------------------------------------------------------------------------
+print("\n== RS2: square 10 -> 7, circle r 10 -> 4 ==")
+sq_rs_layer = scratch_layer("Polygon", "cad_resize_square")
+sq_rs_feature = build_feature(sq_rs_layer, pr.TOOL_SQUARE,
+                              {"x": OX, "y": OY, "side_m": 10.0,
+                               "azimuth_deg": 0.0})
+sq_rs = rs_tool.create(canvas, iface=None,
+                       layer_provider=lambda: sq_rs_layer)
+sq_rs.activate()
+sq_targets = sq_rs.adopt_feature(sq_rs_layer, sq_rs_feature)
+check_true("a square offers exactly one size", sq_targets == ["side_m"])
+sq_rs.session.submit("7")
+sq_resized, _ = sq_rs.resize_committed()
+check("area is 7 x 7", sq_resized.area(), 49.0, 1e-6)
+sq_box = sq_resized.boundingBox()
+check("it is still square", sq_box.width() - sq_box.height(), 0.0, 1e-9)
+check("the side is 7", sq_box.width(), 7.0, 1e-9)
+
+ci_rs_layer = scratch_layer("Polygon", "cad_resize_circle")
+ci_rs_feature = build_feature(ci_rs_layer, pr.TOOL_CIRCLE,
+                              {"mode": "center_radius", "x": OX, "y": OY,
+                               "radius_m": 10.0})
+ci_rs = rs_tool.create(canvas, iface=None,
+                       layer_provider=lambda: ci_rs_layer)
+ci_rs.activate()
+ci_targets = ci_rs.adopt_feature(ci_rs_layer, ci_rs_feature)
+check_true("a circle offers its radius", ci_targets == ["radius_m"])
+ci_rs.session.submit("4")
+ci_resized, _ = ci_rs.resize_committed()
+check_true("area is within 0.5 % of pi * 16",
+           abs(ci_resized.area() - math.pi * 16.0) / (math.pi * 16.0) < 0.005)
+check("the centre did not move",
+      ci_resized.boundingBox().center().x(), OX, 1e-9)
+check("the stored radius is 4",
+      params_of(ci_rs_layer, ci_rs_feature.id())["radius_m"], 4.0)
+
+# --------------------------------------------------------------------------
+# RS3 - an ellipse refuses b > a and stays as it was
+# --------------------------------------------------------------------------
+print("\n== RS3: ellipse a = 20, b -> 25 ==")
+el_rs_layer = scratch_layer("Polygon", "cad_resize_ellipse")
+el_rs_feature = build_feature(el_rs_layer, pr.TOOL_ELLIPSE,
+                              {"x": OX, "y": OY, "semi_major_m": 20.0,
+                               "semi_minor_m": 10.0, "azimuth_deg": 0.0})
+fid_el = el_rs_feature.id()
+wkt_el_before = wkt_of(el_rs_layer, fid_el)
+params_el_before = params_of(el_rs_layer, fid_el)
+
+el_rs = rs_tool.create(canvas, iface=None,
+                       layer_provider=lambda: el_rs_layer)
+el_rs.activate()
+el_targets = el_rs.adopt_feature(el_rs_layer, el_rs_feature)
+check_true("both semi-axes are offered",
+           el_targets == ["semi_major_m", "semi_minor_m"])
+el_rs.session.submit("20")                       # semi-major unchanged
+el_rs.session.submit("25")                       # semi-minor, too large
+check_raises("the commit raises ConstraintError", _CErr,
+             el_rs.resize_committed)
+check_true("the WKT is unchanged", wkt_of(el_rs_layer, fid_el) == wkt_el_before)
+check_true("cad_params are unchanged",
+           params_of(el_rs_layer, fid_el) == params_el_before)
+check_true("no silent swap: a is still 20 and b still 10",
+           params_of(el_rs_layer, fid_el)["semi_major_m"] == 20.0
+           and params_of(el_rs_layer, fid_el)["semi_minor_m"] == 10.0)
+check("still one feature", el_rs_layer.featureCount(), 1)
+try:
+    pr.build(pr.TOOL_ELLIPSE,
+             rs_tool.resized_params(pa.read_record(
+                 el_rs_layer.getFeature(fid_el)),
+                 {"semi_minor_m": 25.0}), WORK_CRS.authid())
+    el_message = ""
+except _CErr as exc:
+    el_message = exc.user_message
+check_true("the message is Italian and names the semi-axis",
+           "semiasse" in el_message.lower())
+print("        {0}".format(el_message))
+
+# --------------------------------------------------------------------------
+# RS4 - a polyline has no single dimension
+# --------------------------------------------------------------------------
+print("\n== RS4: a polyline cannot be resized ==")
+pl_layer = scratch_layer("LineString", "cad_resize_polyline")
+pl_feature = build_feature(pl_layer, pr.TOOL_POLYLINE,
+                           {"x": OX, "y": OY,
+                            "points": [[OX, OY], [OX + 10, OY],
+                                       [OX + 10, OY + 10]]})
+count_pl = pl_layer.featureCount()
+pl_rs = rs_tool.create(canvas, iface=None, layer_provider=lambda: pl_layer)
+pl_rs.activate()
+check_raises("adopting a polyline is refused", InvalidInputError,
+             pl_rs.adopt_feature, pl_layer, pl_feature)
+check("the feature count is unchanged", pl_layer.featureCount(), count_pl)
+check_true("nothing was captured", not pl_rs.session.has_feature)
+try:
+    rs_tool.editable_dimensions(pa.read_record(pl_feature))
+    pl_message = ""
+except InvalidInputError as exc:
+    pl_message = exc.user_message
+check_true("the refusal names the polyline, in Italian",
+           "polilinea" in pl_message.lower())
+print("        {0}".format(pl_message))
+
+# --------------------------------------------------------------------------
+# RS5 - Escape and hovering
+# --------------------------------------------------------------------------
+print("\n== RS5: Escape and 100 hovers ==")
+rs5_layer = scratch_layer("Polygon", "cad_resize_escape")
+rs5_feature = build_feature(rs5_layer, pr.TOOL_RECTANGLE,
+                            {"mode": "center", "x": OX, "y": OY,
+                             "width_m": 25.0, "height_m": 15.0,
+                             "azimuth_deg": 0.0})
+fid_rs5 = rs5_feature.id()
+wkt_rs5 = wkt_of(rs5_layer, fid_rs5)
+params_rs5 = params_of(rs5_layer, fid_rs5)
+
+rs5 = rs_tool.create(canvas, iface=None, layer_provider=lambda: rs5_layer)
+rs5.activate()
+rs5.adopt_feature(rs5_layer, rs5_feature)
+rs5.session.submit("80")
+rs5._escape()
+check_true("the session is IDLE", rs5.session.state == tb.ToolState.IDLE)
+check_true("the WKT is byte-identical", wkt_of(rs5_layer, fid_rs5) == wkt_rs5)
+check_true("cad_params are identical",
+           params_of(rs5_layer, fid_rs5) == params_rs5)
+check("no feature was added", rs5_layer.featureCount(), 1)
+
+rs5.adopt_feature(rs5_layer, rs5_layer.getFeature(fid_rs5))
+baseline_refresh = canvas.refresh_calls
+builds_before = rs5.geometry_builds
+rs5_layer.startEditing()
+stack5 = rs5_layer.undoStack()
+commands_before = stack5.count()
+for step in range(100):
+    rs5.session.hover(OX + step * 0.4, OY + step * 0.4)
+check("no QgsGeometry built during 100 hovers",
+      rs5.geometry_builds - builds_before, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline_refresh, 0)
+check("no undo command opened during 100 hovers",
+      stack5.count() - commands_before, 0)
+rs5_layer.rollBack()
+
+# --------------------------------------------------------------------------
+# R2 (1.4.1) - registration
+# --------------------------------------------------------------------------
+print("\n== R2: Move and Resize are registered as edit-in-place ==")
+check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
+check("seven tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
+check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check_true("the registry and the toolbar order agree",
+           set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
+for key, label, cls in (("move", "Sposta", mv_tool.MoveTool),
+                        ("resize", "Ridimensiona", rs_tool.ResizeTool)):
+    check_true("{0} is in the registry".format(key),
+               key in tools_pkg.TOOL_REGISTRY)
+    check_true("{0} has the right label".format(key),
+               tools_pkg.tool_label(key) == label)
+    built = tools_pkg.create_tool(key, canvas, layer_provider=lambda: None)
+    check_true("{0} instantiates through the registry".format(key),
+               isinstance(built, cls))
+    built.deactivate()
+    check_true("{0} is edit-in-place".format(key),
+               key in plugin_mod.EDIT_IN_PLACE_TOOLS)
+    check_true("{0} never gets a scratch layer".format(key),
+               key not in plugin_mod.TOOL_GEOMETRY)
+check_true("every creating tool still has a geometry type",
+           set(plugin_mod.TOOL_GEOMETRY)
+           == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
+shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
+check("every shortcut is still distinct", len(set(shortcuts)), len(shortcuts))
+check_true("neither tool imports the mission side",
+           all(token not in open(
+               os.path.join(os.path.dirname(os.path.dirname(
+                   os.path.abspath(__file__))), "cad", "tools", name),
+               encoding="utf-8").read()
+               for name in ("move.py", "resize.py")
+               for token in ("last_mission", "uav.", "export")))
 
 
 print("\n" + "=" * 80)

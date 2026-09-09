@@ -21,6 +21,8 @@ TOOL_REGISTRY = {
     "ellipse": ("ellipse", "Ellisse", "Alt+Shift+E"),
     "regular_polygon": ("regular_polygon", "Poligono regolare", "Alt+Shift+G"),
     "rotate": ("rotate", "Ruota", "Alt+Shift+T"),
+    "move": ("move", "Sposta", "Alt+Shift+M"),
+    "resize": ("resize", "Ridimensiona", "Alt+Shift+Z"),
 }
 
 

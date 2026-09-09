@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.0
+version=1.4.1
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,29 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.0
+changelog=1.4.1
+    - Sposta e Ridimensiona: due strumenti che modificano la feature
+      selezionata, come Ruota, senza creare nulla di nuovo.
+    - Sposta accetta @dx,dy digitato, due lunghezze, un trascinamento oppure
+      un punto base e uno di destinazione. Area, forma e orientamento restano
+      quelli di prima: e' una traslazione.
+    - Anche i parametri CAD si spostano: l'ancora della forma segue la
+      geometria, altrimenti la prima ricostruzione la riporterebbe indietro.
+      Se i parametri non sono leggibili la geometria si sposta lo stesso e il
+      messaggio lo dice, invece di lasciarlo scoprire dopo.
+    - Ridimensiona lavora su misure assolute, non su fattori di scala: si
+      scrive la larghezza, il raggio o il semiasse che si vuole e la forma
+      viene ricostruita dal motore. Centro e orientamento non si muovono.
+    - Le misure modificabili dipendono dalla forma: rettangolo larghezza e
+      altezza, quadrato un lato solo, cerchio il raggio, ellisse i due
+      semiassi, poligono una misura fra raggio, apotema, lato e area. Una
+      polilinea non ha una misura sola e viene rifiutata dicendolo.
+    - Un semiasse minore piu' grande del maggiore resta un errore del motore:
+      la geometria non cambia e non viene scambiato nulla.
+    - Escape lascia geometria e parametri identici a prima. Il passaggio del
+      mouse non costruisce geometrie e non apre comandi di annullamento: un
+      solo comando per ogni conferma.
+    1.4.0
     - Tre strumenti CAD nuovi sulla barra del pannello: Quadrato, Ellisse e
       Poligono regolare. La barra passa da cinque a otto strumenti.
     - Quadrato: si indica lato, diagonale, area oppure perimetro, e sono
