@@ -27,6 +27,7 @@ import numpy as np
 
 from ...core import geometry_engine as ge
 from ...core.constants import CIRCLE_SEGMENTS
+from ...core.planar import across_track_unit, along_track_unit
 from .. import dynamic_input as di
 from .. import primitives as pr
 from .base import CadMapTool, CadToolSession, ConstraintSlot
@@ -88,15 +89,50 @@ class EllipseSession(CadToolSession):
             return None
         minor = self.value("semi_minor_m")
         if minor is None:
-            # Nothing to preview yet for the second axis: show the major axis
-            # as a circle rather than inventing a ratio.
-            minor = major
+            # Measured before it was fixed (T-CE1): this used to fall back to
+            # minor = major, so the operator drawing an ellipse watched a
+            # perfect circle until they typed b. The engine was never wrong --
+            # ge.ellipse_ring(20, 10, 0) spans 20 m East by 40 m North -- the
+            # preview was. With b unknown there is no ellipse to draw, so the
+            # major axis is drawn instead: it is what has actually been
+            # decided, and it cannot be mistaken for a finished shape.
+            return self._major_axis(major, azimuth or 0.0)
         if minor > major:
             # The engine will refuse this on commit. Previewing the refused
             # shape would suggest it is about to be drawn.
             return None
         return ge.ellipse_ring(self.origin, major, minor, azimuth or 0.0,
                                self.segments)
+
+    def _major_axis(self, semi_major: float, azimuth_deg: float) -> np.ndarray:
+        """The two ends of the major axis, through the centre."""
+        ux, uy = along_track_unit(azimuth_deg)
+        cx, cy = float(self.origin[0]), float(self.origin[1])
+        return np.array([[cx - semi_major * ux, cy - semi_major * uy],
+                         [cx + semi_major * ux, cy + semi_major * uy]],
+                        dtype=float)
+
+    def axes_points(self):
+        """Major and minor axis ends, for a caller that can draw two bands.
+
+        Returned as ``(major, minor)`` arrays, or ``(major, None)`` while the
+        second axis is still unknown. The single rubber band the base tool
+        owns can only draw one path, so this is here for the panel and the
+        tests rather than for the canvas.
+        """
+        major = self.value("semi_major_m")
+        azimuth = self.value("azimuth_deg") or 0.0
+        if self.origin is None or not major:
+            return None, None
+        minor = self.value("semi_minor_m")
+        major_pts = self._major_axis(float(major), azimuth)
+        if not minor:
+            return major_pts, None
+        vx, vy = across_track_unit(azimuth)
+        cx, cy = float(self.origin[0]), float(self.origin[1])
+        minor_pts = np.array([[cx - minor * vx, cy - minor * vy],
+                              [cx + minor * vx, cy + minor * vy]], dtype=float)
+        return major_pts, minor_pts
 
     # -- readout -----------------------------------------------------------
 
@@ -108,6 +144,8 @@ class EllipseSession(CadToolSession):
         if major:
             lines.append("a {0:.3f} m".format(major))
             lines.append("2a {0:.3f} m".format(2.0 * major))
+        if major and not minor:
+            lines.append("b = ? (anteprima: solo l'asse maggiore)")
         if major and minor:
             lines.append("b {0:.3f} m".format(minor))
             if minor > major:

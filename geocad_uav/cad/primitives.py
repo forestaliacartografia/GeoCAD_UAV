@@ -32,12 +32,13 @@ TOOL_SQUARE = "square"
 TOOL_CIRCLE = "circle"
 TOOL_POLYGON = "polygon"
 TOOL_ELLIPSE = "ellipse"
+TOOL_ARC = "arc"
 
 TOOL_LABELS = {
     TOOL_POINT: "Punto", TOOL_LINE: "Linea", TOOL_POLYLINE: "Polilinea",
     TOOL_RECTANGLE: "Rettangolo", TOOL_SQUARE: "Quadrato",
     TOOL_CIRCLE: "Cerchio", TOOL_POLYGON: "Poligono regolare",
-    TOOL_ELLIPSE: "Ellisse",
+    TOOL_ELLIPSE: "Ellisse", TOOL_ARC: "Arco",
 }
 
 _CLOSED_TOOLS = (TOOL_RECTANGLE, TOOL_SQUARE, TOOL_CIRCLE, TOOL_POLYGON,
@@ -192,6 +193,14 @@ def _ring_for(tool: str, params: dict):
             params["semi_minor_m"], params.get("azimuth_deg", 0.0),
             int(params.get("segments", CIRCLE_SEGMENTS))), True
 
+    if tool == TOOL_ARC:
+        # An arc is a line, not a ring: closed=False, so build() routes it
+        # through points_to_line and it lands on a LineString layer.
+        return ge.arc_ring(
+            (params["x"], params["y"]), params["radius_m"],
+            params["start_az"], params["end_az"],
+            params.get("segments")), False
+
     raise InvalidInputError(
         "unknown tool {0!r}".format(tool),
         user_message="Strumento non riconosciuto: '{0}'.".format(tool))
@@ -240,7 +249,7 @@ def measure(geom, tool: str) -> dict:
     if tool in _CLOSED_TOOLS:
         out["measured_area_m2"] = round(float(geom.area()), 6)
         out["measured_perimeter_m"] = round(float(geom.length()), 6)
-    elif tool in (TOOL_LINE, TOOL_POLYLINE):
+    elif tool in (TOOL_LINE, TOOL_POLYLINE, TOOL_ARC):
         out["measured_length_m"] = round(float(geom.length()), 6)
     return out
 

@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem,  # noqa: E402
                        QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
-                       QgsRectangle)
+                       QgsRectangle, QgsWkbTypes)
 
 QGS = QgsApplication([], False)
 QGS.initQgis()
@@ -1280,7 +1280,8 @@ check_true("it has a label and a shortcut",
 built_rot = tools_pkg.create_tool("rotate", canvas, layer_provider=lambda: None)
 check_true("it instantiates through the registry",
            isinstance(built_rot, rot_tool.RotateHandleTool))
-check_true("pivot modes are declared", len(rot_tool.PIVOT_LABELS) == 3)
+# v1.4.3: a vertex joined bbox / params / custom.
+check_true("pivot modes are declared", len(rot_tool.PIVOT_LABELS) == 4)
 built_rot.deactivate()
 check_true("plugin treats rotate as edit-in-place, never a scratch layer",
            "rotate" in plugin_mod.EDIT_IN_PLACE_TOOLS)
@@ -1670,9 +1671,9 @@ check("record rebuilds the identical geometry",
 # R2 - registration
 # --------------------------------------------------------------------------
 print("\n== R2: the three tools are registered like the others ==")
-# v1.4.1: eight became ten when Move and Resize joined. Both are
-# edit-in-place, so TOOL_GEOMETRY stays at seven.
-check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
+# v1.4.1: eight became ten when Move and Resize joined; v1.4.3 made
+# it eleven with the Arco: so TOOL_GEOMETRY is eight.
+check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
 for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
                         ("ellipse", "Ellisse", ell_tool.EllipseSession),
                         ("regular_polygon", "Poligono regolare",
@@ -1702,8 +1703,8 @@ check("every shortcut is distinct", len(set(shortcuts)), len(shortcuts))
 check_true("every creating tool has a geometry type",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
-check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check("eight tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
+check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
 
 
 # ==========================================================================
@@ -2156,9 +2157,9 @@ rs5_layer.rollBack()
 # R2 (1.4.1) - registration
 # --------------------------------------------------------------------------
 print("\n== R2: Move and Resize are registered as edit-in-place ==")
-check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
-check("seven tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
+check("eight tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
+check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
 check_true("the registry and the toolbar order agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 for key, label, cls in (("move", "Sposta", mv_tool.MoveTool),
@@ -2397,6 +2398,338 @@ check_true("the ids are 1, 2, 3 in order", expected_ids == [1, 2, 3])
 check("three features", mixed.featureCount(), 3)
 check("no canvas.refresh() was added by the attribute work",
       canvas.refresh_calls - baseline_refresh, 0)
+
+
+# ==========================================================================
+# v1.4.3 - a circle is not an ellipse, an arc, and a pivot on a vertex
+# ==========================================================================
+from geocad_uav.cad.tools import arc as arc_tool                 # noqa: E402
+
+
+def spans(points):
+    """(east, north) extent of a point array."""
+    arr = np.asarray(points, dtype=float)
+    return (float(arr[:, 0].max() - arr[:, 0].min()),
+            float(arr[:, 1].max() - arr[:, 1].min()))
+
+
+print("\n== CE1: an ellipse is not square ==")
+ce_ring = ge.ellipse_ring((OX, OY), 20.0, 10.0, 0.0)
+ce_east, ce_north = spans(ce_ring)
+print("        engine a=20 b=10 az=0 -> {0:.6f} east x {1:.6f} north".format(
+    ce_east, ce_north))
+check("the engine spans 2b eastwards", ce_east, 20.0, 1e-6)
+check("...and 2a northwards", ce_north, 40.0, 1e-6)
+check_true("so the engine is not drawing a square",
+           abs(ce_east - ce_north) > 1.0)
+
+ce_geom, _ce_record = pr.build(
+    pr.TOOL_ELLIPSE, {"x": OX, "y": OY, "semi_major_m": 20.0,
+                      "semi_minor_m": 10.0, "azimuth_deg": 0.0},
+    WORK_CRS.authid())
+ce_box = ce_geom.boundingBox()
+check("the built geometry has the same bbox width", ce_box.width(), 20.0, 1e-6)
+check("...and height", ce_box.height(), 40.0, 1e-6)
+
+# The bug was in the preview, and this is the assertion that pins it.
+ce_session = ell_tool.EllipseSession()
+ce_session.set_origin(OX, OY)
+ce_session.submit("20")
+partial = ce_session.preview_points()
+check_true("with only a typed, something is previewed", partial is not None)
+pe, pn = spans(partial)
+print("        preview with a only -> {0:.3f} east x {1:.3f} north".format(
+    pe, pn))
+check_true("...and it is NOT a circle", abs(pe - pn) > 1.0)
+check("the major axis alone is previewed: 2 points", len(partial), 2)
+check("it spans 2a", pn, 40.0, 1e-9)
+check("and nothing across", pe, 0.0, 1e-9)
+check_true("the HUD says the second axis is still missing",
+           any("b = ?" in line for line in ce_session.hud_lines()))
+
+ce_session.submit("10")
+full = ce_session.preview_points()
+fe, fn = spans(full)
+check("once b is typed the preview is the ellipse: 2b east", fe, 20.0, 1e-9)
+check("...and 2a north", fn, 40.0, 1e-9)
+major_axis, minor_axis = ce_session.axes_points()
+check("axes_points gives the major axis", len(major_axis), 2)
+check("...and the minor one", len(minor_axis), 2)
+check("the minor axis is 2b long",
+      float(np.hypot(*(minor_axis[1] - minor_axis[0]))), 20.0, 1e-9)
+
+print("\n== CE2: the circle stays a circle ==")
+ce2 = circle_tool.CircleSession()
+ce2.set_origin(OX, OY)
+ce2.submit("10")
+c_pts = ce2.preview_points()
+ce, cn = spans(c_pts)
+check("the circle preview spans 2r east", ce, 20.0, 1e-6)
+check("...and 2r north", cn, 20.0, 1e-6)
+check_true("the circle HUD leads with the radius",
+           any(line.startswith("R ") for line in ce2.hud_lines()))
+check_true("the ellipse HUD leads with the semi-axis",
+           any(line.startswith("a ") for line in ce_session.hud_lines()))
+_c_geom, c_record = pr.build(pr.TOOL_CIRCLE, ce2.build_params(),
+                             WORK_CRS.authid())
+check_true("the record says circle", c_record.tool == pr.TOOL_CIRCLE)
+check_true("the ellipse record says ellipse",
+           pr.build(pr.TOOL_ELLIPSE, ce_session.build_params(),
+                    WORK_CRS.authid())[1].tool == pr.TOOL_ELLIPSE)
+
+print("\n== CE3: hovering an ellipse is still free ==")
+ce3_layer = scratch_layer("Polygon", "cad_ce3")
+ce3 = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce3_layer)
+ce3.activate()
+ce3.session.set_origin(OX, OY)
+baseline = canvas.refresh_calls
+for step in range(100):
+    ce3.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.3))
+check("no feature added during 100 hovers", ce3_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", ce3.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+ce3.deactivate()
+
+# --------------------------------------------------------------------------
+# AR - the arc
+# --------------------------------------------------------------------------
+print("\n== AR1: r = 10, sweep 90 degrees ==")
+ar_layer = scratch_layer("LineString", "cad_arc")
+ar_session = arc_tool.ArcSession()
+ar = tb.BaseCadTool(ar_session)
+ar_session.set_origin(OX, OY)
+ar_session.submit("10")                          # radius
+ar_session.submit("0d")                          # start azimuth, North
+ar_session.submit("90d")                         # end azimuth, East
+check_true("fully constrained -> PREVIEW",
+           ar_session.state == tb.ToolState.PREVIEW)
+check("the sweep is 90 degrees", ar_session.sweep_deg, 90.0, 1e-9)
+
+ar_feature = ar.commit(ar_layer, WORK_CRS, ar_layer.crs())
+ar_geom = ar_feature.geometry()
+check("one feature written", ar_layer.featureCount(), 1)
+check_true("it is a line, not a polygon",
+           ar_geom.type() == QgsWkbTypes.LineGeometry)
+check_true("it is not closed",
+           vertices(ar_geom)[0].tolist() != vertices(ar_geom)[-1].tolist())
+
+ends = vertices(ar_geom)
+check("the first point is due North of the centre",
+      float(ends[0][1] - OY), 10.0, 1e-9)
+check("...exactly on the axis", float(ends[0][0] - OX), 0.0, 1e-9)
+check("the last point is due East", float(ends[-1][0] - OX), 10.0, 1e-9)
+check("...on the axis", float(ends[-1][1] - OY), 0.0, 1e-9)
+
+true_length = ge.arc_length(10.0, 90.0)
+chord = 2.0 * 10.0 * math.sin(math.radians(90.0) / 2.0)
+sagitta = 10.0 * (1.0 - math.cos(math.radians(90.0) / 2.0))
+measured = ar_geom.length()
+print("        true {0:.6f} m, measured {1:.6f} m ({2:.4f} % low), "
+      "chord {3:.6f}, sagitta {4:.6f}".format(
+          true_length, measured, 100.0 * (1 - measured / true_length),
+          chord, sagitta))
+check("the chord is r sqrt2", chord, 10.0 * math.sqrt(2.0), 1e-9)
+check("the sagitta is r(1 - cos(sweep/2))", sagitta,
+      10.0 * (1.0 - math.cos(math.pi / 4.0)), 1e-9)
+check("the chord matches the two endpoints",
+      float(np.hypot(*(ends[-1] - ends[0]))), chord, 1e-9)
+check_true("the densified length is short of the true arc by less than the "
+           "0.5 % the circle test allows",
+           0.0 < (true_length - measured) / true_length < 0.005)
+
+print("\n== AR2: three points on a quarter circle ==")
+ar2 = arc_tool.ArcSession(mode=arc_tool.MODE_THREE_POINTS)
+ar2.set_origin(OX, OY + 10.0)                                    # North
+ar2.add_point(OX + 10.0 * math.sin(math.radians(45.0)),
+              OY + 10.0 * math.cos(math.radians(45.0)))          # NE
+ar2.add_point(OX + 10.0, OY)                                     # East
+centre, radius, start, end = ar2.resolved()
+check("the solved radius is 10", radius, 10.0, 1e-6)
+check("the solved centre x", float(centre[0]), OX, 1e-6)
+check("the solved centre y", float(centre[1]), OY, 1e-6)
+# A bearing is an angle on a circle: 360 and 0 are the same direction, and
+# atan2 of a tiny negative number lands on one or the other. Compare the
+# turn between them, not the representative.
+check("it starts due North", ge.arc_sweep(0.0, start) % 360.0, 360.0, 1e-6)
+check("it ends due East", end % 360.0, 90.0, 1e-6)
+check("the sweep is the quarter that holds the middle point",
+      ar2.sweep_deg, 90.0, 1e-6)
+ar2_geom, _ = pr.build(pr.TOOL_ARC, ar2.build_params(), WORK_CRS.authid())
+check("the three-point arc has the same length as the typed one",
+      ar2_geom.length(), measured, 1e-6)
+
+print("\n== AR3: three collinear points ==")
+ar3 = arc_tool.ArcSession(mode=arc_tool.MODE_THREE_POINTS)
+ar3.set_origin(OX, OY)
+ar3.add_point(OX + 10.0, OY)
+before_count = ar_layer.featureCount()
+check_raises("the engine refuses a straight line", ConstraintError,
+             ar3.add_point, OX + 20.0, OY)
+check_true("nothing was solved", ar3.resolved() is None)
+check_true("nothing is previewed", ar3.preview_points() is None)
+check("no feature was written", ar_layer.featureCount(), before_count)
+try:
+    ge.arc_from_3_points((OX, OY), (OX + 10, OY), (OX + 20, OY))
+    ar3_message = ""
+except ConstraintError as exc:
+    ar3_message = exc.user_message
+check_true("the refusal is Italian and says they are aligned",
+           "allineati" in ar3_message.lower())
+print("        {0}".format(ar3_message))
+
+check_raises("a zero radius is refused", InvalidInputError,
+             ge.arc_ring, (OX, OY), 0.0, 0.0, 90.0)
+check("a sweep of 0 is read as a full turn, not as nothing",
+      ge.arc_sweep(30.0, 30.0), 360.0)
+
+print("\n== AR4: the arc carries the CAD attributes ==")
+ar4 = newest(ar_layer)
+print("        cad_id {0}, area_ha {1}, perimeter_m {2}".format(
+    ar4[lf.CAD_ID_FIELD], ar4[lf.AREA_HA_FIELD], ar4[lf.PERIMETER_FIELD]))
+check("cad_id is 1", ar4[lf.CAD_ID_FIELD], 1)
+check("an arc has no area", ar4[lf.AREA_HA_FIELD], 0.0)
+check("perimeter_m is the measured length, not the true arc",
+      ar4[lf.PERIMETER_FIELD], round(measured, 3), 1e-9)
+ar_record = pa.read_record(ar4)
+check_true("the record says arc", ar_record.tool == pr.TOOL_ARC)
+check("the record kept the sweep", ar_record.params["sweep_deg"], 90.0, 1e-9)
+rebuilt_arc, _ = pr.rebuild(ar_record)
+check("the record rebuilds the identical arc",
+      max_vertex_gap(rebuilt_arc, ar_geom), 0.0, 1e-9)
+
+print("\n-- two endpoints and a radius: the minor arc, and it says so --")
+ar5 = arc_tool.ArcSession(mode=arc_tool.MODE_ENDPOINTS_RADIUS)
+ar5.set_origin(OX, OY + 10.0)
+ar5.submit("10")
+ar5.add_point(OX + 10.0, OY)
+check_true("a solution was found", ar5.resolved() is not None)
+check_true("the sweep is the minor arc", abs(ar5.sweep_deg) <= 180.0 + 1e-9)
+check_true("the operator is told there were two",
+           any("minore" in line for line in ar5.hud_lines()))
+
+print("\n-- 100 hovers on the arc --")
+ar_hover_layer = scratch_layer("LineString", "cad_arc_hover")
+ar_map = arc_tool.create(canvas, iface=None,
+                         layer_provider=lambda: ar_hover_layer)
+ar_map.activate()
+ar_map.session.set_origin(OX, OY)
+baseline = canvas.refresh_calls
+for step in range(100):
+    ar_map.canvasMoveEvent(Move(OX + step * 0.4, OY + step * 0.4))
+check("no feature added during 100 hovers", ar_hover_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", ar_map.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+ar_map.session.cancel()
+check("Escape leaves the layer empty", ar_hover_layer.featureCount(), 0)
+ar_map.deactivate()
+
+# --------------------------------------------------------------------------
+# PV - rotate about a vertex
+# --------------------------------------------------------------------------
+print("\n== PV1: rectangle rotated about its own SW vertex ==")
+pv_layer = scratch_layer("Polygon", "cad_pivot")
+pv_feature = build_feature(pv_layer, pr.TOOL_RECTANGLE,
+                           {"mode": "center", "x": OX, "y": OY,
+                            "width_m": 50.0, "height_m": 30.0,
+                            "azimuth_deg": 0.0})
+corners_before = vertices(pv_feature.geometry())[:4]
+south_west = min(corners_before.tolist(), key=lambda p: (p[0], p[1]))
+print("        SW vertex {0:.3f}, {1:.3f}".format(*south_west))
+
+pv = rot_tool.create(canvas, iface=None, layer_provider=lambda: pv_layer)
+pv.activate()
+pivot = pv.adopt_feature(pv_layer, pv_feature,
+                         pivot_mode=rot_tool.PIVOT_VERTEX,
+                         custom_pivot=south_west)
+check("the pivot landed exactly on the vertex, in x", pivot[0],
+      south_west[0], 1e-9)
+check("...and in y", pivot[1], south_west[1], 1e-9)
+check_true("it is one of the feature's own vertices",
+           any(abs(c[0] - pivot[0]) < 1e-9 and abs(c[1] - pivot[1]) < 1e-9
+               for c in corners_before))
+
+pv.session.submit("90d")
+rotated, _kept = pv.rotate_committed()
+corners_after = vertices(rotated)[:4]
+check("the area is unchanged", rotated.area(), 1500.0, 1e-6)
+check_true("the pivot vertex is still there, fixed",
+           any(abs(c[0] - pivot[0]) < 1e-9 and abs(c[1] - pivot[1]) < 1e-9
+               for c in corners_after))
+moved_count = sum(
+    1 for c in corners_after
+    if not any(abs(c[0] - b[0]) < 1e-6 and abs(c[1] - b[1]) < 1e-6
+               for b in corners_before))
+check("the other three corners moved", moved_count, 3)
+
+# the same rotation, done by the frozen numeric engine about the same pivot
+expected = t2d.rotate(corners_before, 90.0, pivot)
+check("every corner matches transform2d.rotate about that vertex",
+      float(np.max(np.min(np.hypot(
+          *(corners_after[:, None, :] - expected[None, :, :]).T), axis=0))),
+      0.0, 1e-9)
+
+print("\n== PV2: Escape from a vertex rotation ==")
+pv2_layer = scratch_layer("Polygon", "cad_pivot_escape")
+pv2_feature = build_feature(pv2_layer, pr.TOOL_SQUARE,
+                            {"x": OX, "y": OY, "side_m": 20.0,
+                             "azimuth_deg": 0.0})
+fid_pv2 = pv2_feature.id()
+wkt_pv2 = wkt_of(pv2_layer, fid_pv2)
+params_pv2 = params_of(pv2_layer, fid_pv2)
+pv2 = rot_tool.create(canvas, iface=None, layer_provider=lambda: pv2_layer)
+pv2.activate()
+pv2.adopt_feature(pv2_layer, pv2_feature, pivot_mode=rot_tool.PIVOT_VERTEX,
+                  custom_pivot=(OX - 10.0, OY - 10.0))
+pv2.session.submit("35d")
+pv2._escape()
+check_true("the WKT is byte-identical", wkt_of(pv2_layer, fid_pv2) == wkt_pv2)
+check_true("cad_params are identical",
+           params_of(pv2_layer, fid_pv2) == params_pv2)
+check("no feature was added", pv2_layer.featureCount(), 1)
+
+print("\n== PV3: the default pivot is still the bounding-box centre ==")
+pv3_layer = scratch_layer("Polygon", "cad_pivot_default")
+pv3_feature = build_feature(pv3_layer, pr.TOOL_RECTANGLE,
+                            {"mode": "center", "x": OX, "y": OY,
+                             "width_m": 40.0, "height_m": 20.0,
+                             "azimuth_deg": 0.0})
+pv3 = rot_tool.create(canvas, iface=None, layer_provider=lambda: pv3_layer)
+pv3.activate()
+default_pivot = pv3.adopt_feature(pv3_layer, pv3_feature)
+check("the default pivot is the centre in x", default_pivot[0], OX, 1e-9)
+check("...and in y", default_pivot[1], OY, 1e-9)
+check_true("vertex is an option, not the default",
+           pv3.session.pivot_mode == rot_tool.PIVOT_BBOX)
+check_true("...and it is offered with a label",
+           rot_tool.PIVOT_VERTEX in rot_tool.PIVOT_LABELS)
+check("four pivot modes are now declared", len(rot_tool.PIVOT_LABELS), 4)
+pv3.session.submit("20d")
+pv3_rotated, _ = pv3.rotate_committed()
+check("rotating about the centre still preserves the area",
+      pv3_rotated.area(), 800.0, 1e-6)
+check("the centre did not move",
+      pv3_rotated.boundingBox().center().x(), OX, 1e-9)
+
+print("\n== R2 (1.4.3): the arc joins the registry ==")
+check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
+check("eight tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
+check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
+check_true("the registry and the toolbar order still agree",
+           set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
+check_true("the arc is registered", "arc" in tools_pkg.TOOL_REGISTRY)
+check_true("with an Italian label", tools_pkg.tool_label("arc") == "Arco")
+check_true("the arc writes lines, not polygons",
+           plugin_mod.TOOL_GEOMETRY["arc"] == "LineString")
+check_true("it is not edit-in-place",
+           "arc" not in plugin_mod.EDIT_IN_PLACE_TOOLS)
+built_arc = tools_pkg.create_tool("arc", canvas, layer_provider=lambda: None)
+check_true("it instantiates through the registry",
+           isinstance(built_arc, arc_tool.ArcTool))
+built_arc.deactivate()
+shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
+check("every shortcut is still distinct", len(set(shortcuts)), len(shortcuts))
 
 
 print("\n" + "=" * 80)

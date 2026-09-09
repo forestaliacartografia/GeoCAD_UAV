@@ -53,8 +53,10 @@ HANDLE_MIN_OFFSET_M = 1.0
 PIVOT_BBOX = "bbox"          # centre of the bounding box (default)
 PIVOT_PARAMS = "params"      # the shape's own anchor, when cad_params are intact
 PIVOT_CUSTOM = "custom"      # a point clicked on the map
+PIVOT_VERTEX = "vertex"      # the feature's own vertex nearest the click
 
-PIVOT_LABELS = {PIVOT_BBOX: "Centro del rettangolo di selezione",
+PIVOT_LABELS = {PIVOT_VERTEX: "Vertice della geometria",
+                PIVOT_BBOX: "Centro del rettangolo di selezione",
                 PIVOT_PARAMS: "Centro dei parametri CAD",
                 PIVOT_CUSTOM: "Punto indicato sulla mappa"}
 
@@ -342,6 +344,10 @@ class RotateHandleTool(CadMapTool):
     def _resolve_pivot(self, feature, pivot_mode, custom_pivot):
         if pivot_mode == PIVOT_CUSTOM and custom_pivot is not None:
             return (float(custom_pivot[0]), float(custom_pivot[1]))
+        if pivot_mode == PIVOT_VERTEX:
+            vertex = self._nearest_vertex(feature, custom_pivot)
+            if vertex is not None:
+                return vertex
         if pivot_mode == PIVOT_PARAMS:
             anchor = self._params_anchor(feature)
             if anchor is not None:
@@ -349,6 +355,29 @@ class RotateHandleTool(CadMapTool):
         box = feature.geometry().boundingBox()
         centre = box.center()
         return (centre.x(), centre.y())
+
+    def _nearest_vertex(self, feature, near=None):
+        """The feature's own vertex closest to ``near``, or the first one.
+
+        The pivot is a vertex of the geometry, so it lands exactly on a
+        corner rather than near it: QgsGeometry.closestVertex is the same
+        search QGIS's own vertex tool uses, and the returned point is the
+        stored coordinate, not a snapped approximation of it.
+        """
+        from qgis.core import QgsPointXY                        # noqa: PLC0415
+
+        geometry = feature.geometry()
+        if geometry is None or geometry.isEmpty():
+            return None
+        if near is None:
+            for vertex in geometry.vertices():
+                return (float(vertex.x()), float(vertex.y()))
+            return None
+        point, _index, _prev, _next, _dist = geometry.closestVertex(
+            QgsPointXY(float(near[0]), float(near[1])))
+        if point is None or point.isEmpty():
+            return None
+        return (float(point.x()), float(point.y()))
 
     def _params_anchor(self, feature):
         try:

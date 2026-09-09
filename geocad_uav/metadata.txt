@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.2
+version=1.4.3
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,27 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.2
+changelog=1.4.3
+    - Un'ellisse non sembra piu' un cerchio mentre la si disegna. Finche' il
+      semiasse minore non e' stato indicato l'anteprima mostrava una
+      circonferenza: ora mostra l'asse maggiore, che e' l'unica cosa davvero
+      decisa, e il pannello scrive «b = ?». Il motore era corretto: a=20 b=10
+      con azimut 0 occupa 20 m in Est e 40 m in Nord.
+    - Nuovo strumento Arco, undicesimo della barra CAD. Si costruisce in tre
+      modi: centro con raggio e due azimut, tre punti sulla circonferenza,
+      oppure due estremi e un raggio (viene scelto l'arco minore e il
+      pannello lo dichiara). L'arco e' una linea: finisce su un layer di
+      linee, con area zero e la lunghezza misurata in perimeter_m.
+    - Tre punti allineati, raggio nullo o ampiezza impossibile vengono
+      rifiutati dal motore con il motivo in chiaro.
+    - La rotazione puo' ora avvenire attorno a un vertice della geometria,
+      oltre che attorno al centro, all'ancora dei parametri o a un punto
+      indicato. Il vertice e' una scelta in piu': il centro resta il default.
+    - Corretta la precisione del cerchio per tre punti: il calcolo veniva
+      svolto rispetto all'origine del sistema di riferimento e alle coordinate
+      UTM perdeva sette cifre, sbagliando di 0,76 mm un raggio di 10 m. Ora
+      viene svolto rispetto al primo punto e l'errore scende a 1e-10 m.
+    1.4.2
     - Ogni geometria creata con gli strumenti CAD porta ora tre colonne
       leggibili nella tabella attributi, oltre ai parametri: cad_id
       progressivo sul layer, area_ha in ettari con due decimali e

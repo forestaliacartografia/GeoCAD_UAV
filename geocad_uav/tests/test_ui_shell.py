@@ -217,10 +217,11 @@ check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
 # v1.4.1: 8 became 10 (Sposta and Ridimensiona, both edit-in-place). The count
 # is asserted against the registry below, so it follows the shipped set; this
 # literal is the floor that says the toolbar was actually populated.
-check("the toolbar carries every shipped CAD tool", len(cad_mounted), 10)
+# v1.4.3: ten became eleven when the Arco tool joined.
+check("the toolbar carries every shipped CAD tool", len(cad_mounted), 11)
 labels = {a.text() for a in cad_mounted}
 for expected in ("Linea", "Polilinea", "Rettangolo", "Quadrato", "Cerchio",
-                 "Ellisse", "Poligono regolare", "Ruota", "Sposta",
+                 "Ellisse", "Arco", "Poligono regolare", "Ruota", "Sposta",
                  "Ridimensiona"):
     check_true("'{0}' is on the dock toolbar".format(expected),
                expected in labels)

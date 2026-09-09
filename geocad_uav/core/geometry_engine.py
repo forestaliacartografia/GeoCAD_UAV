@@ -281,9 +281,113 @@ def circle_ring(center, radius_m: float,
     return close_ring(pts)
 
 
+#: Points per full turn when densifying an arc, so a 90 deg arc gets a
+#: quarter of what a whole circle would: an arc and a circle of the same
+#: radius are then approximated to the same fidelity.
+ARC_SEGMENTS_PER_TURN = CIRCLE_SEGMENTS
+
+
+def arc_sweep(start_az: float, end_az: float) -> float:
+    """Signed sweep from ``start_az`` to ``end_az``, in the compass sense.
+
+    Azimuths grow clockwise on the map here, as everywhere else in this
+    plugin (``planar.along_track_unit``, ``transform2d.rotate``), so a sweep
+    from 0 to 90 is a quarter turn to the East and comes out positive. A full
+    turn is reported as 360, never as 0: an arc of zero sweep is a point and
+    is refused by :func:`arc_ring`.
+    """
+    sweep = (float(end_az) - float(start_az)) % 360.0
+    return 360.0 if abs(sweep) < GEOM_EPS_M else sweep
+
+
+def arc_ring(center, radius_m: float, start_az: float, end_az: float,
+             segments: Optional[int] = None) -> np.ndarray:
+    """Open polyline along a circular arc. Not closed: an arc is a line.
+
+    The first and last points sit exactly on ``start_az`` and ``end_az``, so
+    an arc chained to a line meets it at the vertex the operator picked
+    rather than at the nearest densified sample.
+    """
+    c = _point(center, "center")
+    radius_m = _positive(radius_m, "radius_m", "Il raggio")
+    sweep = arc_sweep(start_az, end_az)
+    if segments is None:
+        segments = max(2, int(round(ARC_SEGMENTS_PER_TURN * sweep / 360.0)))
+    segments = int(segments)
+    if segments < 2:
+        raise InvalidInputError(
+            "an arc needs at least 2 segments, got {0!r}".format(segments),
+            user_message="Servono almeno 2 segmenti per approssimare un arco.")
+    ang = np.radians(float(start_az) + np.linspace(0.0, sweep, segments + 1))
+    return np.column_stack([c[0] + radius_m * np.sin(ang),
+                            c[1] + radius_m * np.cos(ang)])
+
+
+def arc_length(radius_m: float, sweep_deg: float) -> float:
+    """True length of the arc, before any densification."""
+    return abs(float(sweep_deg)) * math.pi / 180.0 * float(radius_m)
+
+
+def arc_from_3_points(p1, p2, p3):
+    """``(center, radius, start_az, end_az)`` through three points.
+
+    The middle point decides the direction: the arc is the one that actually
+    passes through it, so clicking start / middle / end never produces the
+    complementary arc.
+    """
+    centre, radius = circle_from_3_points(p1, p2, p3)
+    a = _point(p1, "p1")
+    b = _point(p2, "p2")
+    c = _point(p3, "p3")
+
+    def bearing(point):
+        return math.degrees(math.atan2(point[0] - centre[0],
+                                       point[1] - centre[1])) % 360.0
+
+    start, mid, end = bearing(a), bearing(b), bearing(c)
+    # Clockwise from start, is the middle point reached before the end?
+    if arc_sweep(start, mid) <= arc_sweep(start, end):
+        return centre, radius, start, end
+    return centre, radius, end, start
+
+
+def arc_from_endpoints_radius(p1, p2, radius_m: float, side: str = "left"):
+    """``(center, radius, start_az, end_az)`` for the minor arc through two points.
+
+    Two circles of that radius pass through the pair, and each offers a minor
+    and a major arc. This returns the minor one -- the sweep at most 180 deg --
+    because that is the arc an operator means by "these two ends, this radius";
+    the caller is told which it got through the returned sweep.
+    """
+    centre, radius = circle_from_2_points_radius(p1, p2, radius_m, side)
+    a = _point(p1, "p1")
+    b = _point(p2, "p2")
+
+    def bearing(point):
+        return math.degrees(math.atan2(point[0] - centre[0],
+                                       point[1] - centre[1])) % 360.0
+
+    start, end = bearing(a), bearing(b)
+    if arc_sweep(start, end) > 180.0:
+        start, end = end, start
+    return centre, radius, start, end
+
+
 def circle_from_3_points(p1, p2, p3):
-    """Circumcircle of three points. Returns ``(center, radius)``."""
-    a, b, c = _point(p1, "p1"), _point(p2, "p2"), _point(p3, "p3")
+    """Circumcircle of three points. Returns ``(center, radius)``.
+
+    Solved about the first point rather than about the CRS origin. The
+    determinant squares the coordinates, so at UTM eastings and northings of
+    5e6 the squares reach 2.5e13 and cancellation eats seven digits: a
+    quarter-circle of radius 10 m came out as 9.99924 m, an error of 0.76 mm
+    that grows with distance from the origin. Shifting first is the same
+    arithmetic on numbers small enough to hold: the same case then solves to
+    9.1e-11 m.
+    """
+    origin = _point(p1, "p1")
+    a = origin - origin
+    b = _point(p2, "p2") - origin
+    c = _point(p3, "p3") - origin
     d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1])
                + c[0] * (a[1] - b[1]))
     if abs(d) < GEOM_EPS_M:
@@ -296,8 +400,8 @@ def circle_from_3_points(p1, p2, p3):
     sc = c[0] ** 2 + c[1] ** 2
     ux = (sa * (b[1] - c[1]) + sb * (c[1] - a[1]) + sc * (a[1] - b[1])) / d
     uy = (sa * (c[0] - b[0]) + sb * (a[0] - c[0]) + sc * (b[0] - a[0])) / d
-    centre = np.array([ux, uy])
-    return centre, float(np.hypot(*(a - centre)))
+    centre = np.array([ux, uy]) + origin
+    return centre, float(np.hypot(*(origin - centre)))
 
 
 def circle_from_2_points_radius(p1, p2, radius_m: float, side: str = "left"):
