@@ -448,6 +448,152 @@ p2_panel.teardown()
 p3_panel.teardown()
 
 # --------------------------------------------------------------------------
+# RM (v1.4.8) - the tab is named for what it does, and offers every scheme
+# --------------------------------------------------------------------------
+print("\n== RM3: the tab is called Rimboschimento ==")
+from geocad_uav import plugin as plugin_rm                      # noqa: E402
+
+
+class RmIface(FakeIface):
+    """Enough of an interface for the dock to mount itself."""
+
+    def __init__(self):
+        super().__init__()
+        self.toolbars = []
+        self.docks = []
+        self.menu_actions = []
+
+    def addToolBar(self, name):                                 # noqa: N802
+        toolbar = self._window.addToolBar(name)
+        self.toolbars.append(toolbar)
+        return toolbar
+
+    def addDockWidget(self, area, widget):                      # noqa: N802
+        self._window.addDockWidget(area, widget)
+        self.docks.append(widget)
+
+    def removeDockWidget(self, widget):                         # noqa: N802
+        self._window.removeDockWidget(widget)
+        if widget in self.docks:
+            self.docks.remove(widget)
+
+    def addPluginToMenu(self, menu, action):                    # noqa: N802
+        self.menu_actions.append((menu, action))
+
+    def removePluginMenu(self, menu, action):                   # noqa: N802
+        if (menu, action) in self.menu_actions:
+            self.menu_actions.remove((menu, action))
+
+
+rm_plugin = plugin_rm.GeoCadUavPlugin(RmIface())
+rm_plugin.initGui()
+rm_tabs = rm_plugin.dock.tabs
+rm_titles = [rm_tabs.tabText(i) for i in range(rm_tabs.count())]
+print("        tabs: {0}".format(rm_titles))
+check_true("one tab is called Rimboschimento", "Rimboschimento" in rm_titles)
+check("...exactly one", rm_titles.count("Rimboschimento"), 1)
+check_true("no tab is called Foresta any more",
+           not any("orest" in title for title in rm_titles))
+check("the tab count is unchanged", len(rm_titles), 5)
+check_true("the toolbar tip does not promise a tab that is gone",
+           "Foresta" not in rm_plugin.dock_action.toolTip()
+           and "Griglie" not in rm_plugin.dock_action.toolTip())
+rm_plugin.unload()
+
+# --------------------------------------------------------------------------
+# RM2 - the panel still plans exactly what the engine plans
+# --------------------------------------------------------------------------
+print("\n== RM2: 200 x 100, 3 x 2, margin 2 ==")
+rm_aoi = QgsGeometry.fromWkt(rect_wkt(OX, OY, 200.0, 100.0))
+rm_panel = ForestPanel(iface)
+rm_panel.extent.set_extent(rm_aoi, CRS)
+rm_panel.plant_spacing.setValue(3.0)
+rm_panel.row_spacing.setValue(2.0)
+rm_panel.margin.setValue(2.0)
+rm_panel.azimuth.setValue(0.0)
+rm_result = rm_panel.compute()
+
+reference = planting_mod.plan_planting_for_geometry(
+    rm_aoi, rm_panel.build_spec(), compute_edge_distance=False)
+print("        panel {0:,} plants, engine {1:,}".format(
+    len(rm_result.plants), len(reference.plants)))
+check("the panel plants what the engine plants", len(rm_result.plants),
+      len(reference.plants))
+check("...and lays the same number of rows", rm_result.n_rows,
+      reference.n_rows)
+
+rm_eroded = rm_aoi.buffer(-2.0, 12)
+outside_rm = [p for p in rm_result.plants
+              if not rm_eroded.intersects(
+                  QgsGeometry.fromPointXY(QgsPointXY(p.x, p.y)))]
+check("no plant falls outside the eroded AOI", len(outside_rm), 0)
+
+rm_stats = stats_mod.compute_stats(rm_result)
+check("the KPI are compute_stats", rm_stats.n_plants, len(rm_result.plants))
+check("...including the row count", rm_stats.n_rows, rm_result.n_rows)
+check_true("...and the densities", rm_stats.density_per_ha > 0
+           and rm_stats.theoretical_density_per_ha > 0)
+
+# --------------------------------------------------------------------------
+# RM6 - every scheme in the combo has a generator behind it
+# --------------------------------------------------------------------------
+print("\n== RM6: each scheme in the combo really builds something ==")
+check("the combo offers every pattern the engine has",
+      rm_panel.pattern.count(), len(grid_mod.ALL_PATTERNS))
+offered = [rm_panel.pattern.itemData(i)
+           for i in range(rm_panel.pattern.count())]
+check_true("every entry is a pattern core.grid knows",
+           all(key in grid_mod.ALL_PATTERNS for key in offered))
+check_true("and none of them is invented",
+           set(offered) == set(grid_mod.ALL_PATTERNS))
+
+for index in range(rm_panel.pattern.count()):
+    rm_panel.pattern.setCurrentIndex(index)
+    key = rm_panel.pattern.itemData(index)
+    label = rm_panel.pattern.itemText(index)
+    rm_panel.plant_spacing.setValue(5.0)
+    rm_panel.margin.setValue(0.0)
+    spec = rm_panel.build_spec()
+    plan = rm_panel.compute()
+    print("        {0:<24} {1:>6,} plants, {2:>4} rows".format(
+        label, len(plan.plants), plan.n_rows))
+    check_true("{0}: the spec carries the engine's key".format(label),
+               spec.pattern == key)
+    check_true("{0}: the label is the engine's own".format(label),
+               label == grid_mod.PATTERN_LABELS[key])
+    check_true("{0}: it plants something on 200 x 100".format(label),
+               len(plan.plants) > 0)
+    check_true("{0}: and the plants are inside the AOI".format(label),
+               all(rm_aoi.intersects(QgsGeometry.fromPointXY(
+                   QgsPointXY(p.x, p.y))) for p in plan.plants[:50]))
+
+print("\n-- a square scheme has one distance, not two --")
+square_index = offered.index(grid_mod.PATTERN_SQUARE)
+rm_panel.pattern.setCurrentIndex(square_index)
+rm_panel.plant_spacing.setValue(4.0)
+check_true("the row spacing is locked while the scheme is square",
+           not rm_panel.row_spacing.isEnabled())
+check("...and mirrors the plant spacing", rm_panel.row_spacing.value(), 4.0,
+      1e-9)
+check("the label says so",
+      1.0 if "= piante" in rm_panel.row_label.text() else 0.0, 1.0)
+square_spec = rm_panel.build_spec()
+check("the engine gets the same value both ways",
+      square_spec.effective_spacing[0], square_spec.effective_spacing[1], 1e-9)
+square_plan = rm_panel.compute()
+square_along, square_across = spacing_measurements(square_plan)
+check("so the plants really are 4 m apart along a row",
+      float(np.mean(square_along)), 4.0, 1e-6)
+check("...and 4 m between rows", float(np.mean(square_across)), 4.0, 1e-6)
+
+rect_index = offered.index(grid_mod.PATTERN_RECT)
+rm_panel.pattern.setCurrentIndex(rect_index)
+check_true("switching back to a rectangular scheme frees the row spacing",
+           rm_panel.row_spacing.isEnabled())
+
+rm_panel.teardown()
+
+# --------------------------------------------------------------------------
 # G1 (v1.4.5) - the Grid tab left, the lattice engine stayed
 # --------------------------------------------------------------------------
 print("\n== G1: no Grid tab, and no orphan imports ==")

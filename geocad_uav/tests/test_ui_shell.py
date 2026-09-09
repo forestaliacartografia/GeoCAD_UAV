@@ -201,8 +201,10 @@ print("        tabs: {0}".format(titles))
 # schemes are built on it, they simply no longer have a tab of their own.
 check("tab count", tabs.count(), 5)
 check_true("titles and order match the contract",
-           titles == ["CAD", "Foresta", "UAV", "Layer/Export",
+           titles == ["CAD", "Rimboschimento", "UAV", "Layer/Export",
                       "Impostazioni"])
+check_true("the forestry tab is named for the work, not the subject",
+           "Foresta" not in titles and "Rimboschimento" in titles)
 check_true("no Grid tab is left, not even an empty one",
            not any("rigli" in t for t in titles))
 check_true("no MISSIONI tab was added",

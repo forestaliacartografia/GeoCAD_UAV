@@ -145,7 +145,8 @@ class GeoCadDock(QDockWidget):
 
         # ------------------------------------------------------------ FORESTA
         self.forest_panel = ForestPanel(self.iface)
-        self.tabs.addTab(self._scroll_page([self.forest_panel]), tr("Foresta"))
+        self.tabs.addTab(self._scroll_page([self.forest_panel]),
+                         tr("Rimboschimento"))
 
         # ---------------------------------------------------------------- UAV
         self.uav_panel = UavPanel(self.iface)

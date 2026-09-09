@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.7
+version=1.4.8
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,18 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.7
+changelog=1.4.8
+    - La scheda si chiama «Rimboschimento», non piu' «Foresta»: e' il lavoro
+      che si fa, non l'argomento. Anche il suggerimento dell'icona in barra
+      elenca ora solo le schede che esistono davvero.
+    - Il menu degli schemi offre tutti e cinque i sesti che il motore sa
+      generare: rettangolare, quadrato, quinconce (triangolare), esagonale e
+      a file. Nessuno schema senza generatore dietro.
+    - Con lo schema quadrato la distanza fra le file segue quella fra le
+      piante ed e' bloccata, perche' e' cosi' che il motore lo costruisce:
+      prima si poteva digitare un valore che veniva ignorato.
+    - Lo schema predefinito resta quello rettangolare, come nel motore.
+    1.4.7
     - Le due distanze del sesto ora si distinguono a colpo d'occhio:
       «Distanza fra le piante (sulla fila)» e «Distanza fra le file». Il
       motore le rispettava gia': misurate su un sesto 5x5 le piante cadono a

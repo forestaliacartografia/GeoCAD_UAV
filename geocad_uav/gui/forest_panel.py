@@ -44,8 +44,15 @@ def tr(text):
 class ForestPanel(QWidget):
     """Planting parameters, KPI, one write."""
 
+    #: Every scheme core.grid actually generates, in the order an operator
+    #: is likely to want them. There is no sixth: a scheme without a
+    #: generator would be a label over nothing.
+    #: Rectangular first, because that is GridSpec's own default: a panel
+    #: that opened on a square scheme would silently force dy = dx on an
+    #: operator who had typed two different distances.
     PATTERN_KEYS = (grid_mod.PATTERN_RECT, grid_mod.PATTERN_SQUARE,
-                    grid_mod.PATTERN_QUINCUNX, grid_mod.PATTERN_HEX)
+                    grid_mod.PATTERN_QUINCUNX, grid_mod.PATTERN_HEX,
+                    grid_mod.PATTERN_ROWS)
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -56,6 +63,7 @@ class ForestPanel(QWidget):
         self.last_stats = None
         self.last_schedule = []
         self._build()
+        self._apply_pattern_defaults()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -74,7 +82,8 @@ class ForestPanel(QWidget):
         form.addRow(tr("Distanza fra le piante (sulla fila)"),
                     self.plant_spacing)
         self.row_spacing = self._spin(2.0, 0.01, 1000.0, " m")
-        form.addRow(tr("Distanza fra le file"), self.row_spacing)
+        self.row_label = QLabel(tr("Distanza fra le file"))
+        form.addRow(self.row_label, self.row_spacing)
         self.step_from_map = QPushButton(tr("Misura distanza in mappa"))
         self.step_from_map.setToolTip(tr(
             "Due click sulla mappa: la distanza misurata diventa la "
@@ -128,6 +137,13 @@ class ForestPanel(QWidget):
         buttons.addWidget(self.confirm_button)
         layout.addLayout(buttons)
 
+        self.plant_spacing.valueChanged.connect(self._mirror_square)
+        self._connections.append((self.plant_spacing.valueChanged,
+                                  self._mirror_square))
+        self.pattern.currentIndexChanged.connect(self._on_pattern_changed)
+        self._connections.append((self.pattern.currentIndexChanged,
+                                  self._on_pattern_changed))
+
         for widget, signal_name in (
                 (self.plant_spacing, "valueChanged"),
                 (self.row_spacing, "valueChanged"),
@@ -149,6 +165,26 @@ class ForestPanel(QWidget):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
 
+    def _on_pattern_changed(self, *_args):
+        """A square scheme has one distance, not two.
+
+        ``GridSpec.effective_spacing`` already forces dy = dx for the square
+        pattern, so a row spacing the operator can still type would be
+        ignored by the engine. The field is mirrored and disabled instead of
+        quietly having no effect.
+        """
+        square = self.pattern.currentData() == grid_mod.PATTERN_SQUARE
+        self.row_spacing.setEnabled(not square)
+        if square:
+            self.row_spacing.setValue(self.plant_spacing.value())
+        self.row_label.setText(
+            tr("Distanza fra le file (= piante)") if square
+            else tr("Distanza fra le file"))
+
+    def _apply_pattern_defaults(self):
+        """Called once the widgets exist, so the first scheme is consistent."""
+        self._on_pattern_changed()
+
     def _spin(self, value, minimum, maximum, suffix):
         spin = QDoubleSpinBox()
         spin.setRange(minimum, maximum)
@@ -159,6 +195,10 @@ class ForestPanel(QWidget):
         return spin
 
     # -- parameters --------------------------------------------------------
+
+    def _mirror_square(self, *_args):
+        if self.pattern.currentData() == grid_mod.PATTERN_SQUARE:
+            self.row_spacing.setValue(self.plant_spacing.value())
 
     def build_spec(self) -> grid_mod.GridSpec:
         return grid_mod.GridSpec(

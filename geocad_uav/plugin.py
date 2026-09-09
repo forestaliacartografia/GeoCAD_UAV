@@ -149,7 +149,7 @@ class GeoCadUavPlugin:
         # THE single icon on the QGIS toolbar.
         self.dock_action = self._make_action(
             self.tr("GeoCad UAV Toolkit"), self.toggle_dock, checkable=True,
-            tip=self.tr("Apre il pannello CAD / Griglie / Foresta / UAV"),
+            tip=self.tr("Apre il pannello CAD / Rimboschimento / UAV"),
             host=HOST_TOOLBAR)
 
         # The dock is built now, hidden, because it hosts the CAD toolbar.
