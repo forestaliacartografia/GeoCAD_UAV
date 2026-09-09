@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.3.4
+version=1.3.5
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,24 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.3.4
+changelog=1.3.5
+    - Scheda Layer/Export: il segnaposto e' sostituito dalla scheda vera. La
+      sorgente e' la missione gia' generata nella scheda UAV; senza missione
+      tutto resta disabilitato e il pannello spiega perche'.
+    - Ogni formato porta il proprio stato accanto al nome. I nove scrittori
+      esistenti (GeoPackage, GeoJSON, KML, KMZ, GPX, CSV waypoint, CSV centri
+      di presa, Litchi Mission Hub, QGC WPL 110) sono VERIFIED perche' la
+      suite li scrive e li rilegge contando i record, non perche' lo dice una
+      tabella. Il WPML DJI nativo e' elencato come UNSUPPORTED, non e'
+      selezionabile e mostra il motivo: lo schema non e' verificato.
+    - Cartella, nome base e anteprima: i percorsi si vedono prima di
+      scrivere, e non viene creato un solo byte finche' non si preme Esporta.
+    - Il riferimento di quota arriva dalle Impostazioni ed e' scritto per
+      esteso; se e' relativo al decollo viene dichiarata anche la quota di
+      riferimento usata.
+    - Prima di esportare gira il validatore: gli errori bloccano l'export e
+      vengono elencati in italiano, gli avvisi si leggono e si procede.
+    1.3.4
     - Simulazione del volo nella scheda UAV: Play, Pausa, Stop e velocita' di
       riproduzione 1x/2x/5x sulla rotta gia' generata.
     - Un marker percorre il tracciato e un secondo marker lampeggia a ogni

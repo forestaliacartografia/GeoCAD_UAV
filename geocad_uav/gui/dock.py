@@ -23,6 +23,7 @@ from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
 from ..settings import settings as app_settings
+from .export_panel import ExportPanel
 from .forest_panel import ForestPanel
 from .grid_panel import GridPanel
 from .mission_player import MissionPlayer, RATES as PLAYER_RATES
@@ -45,6 +46,7 @@ class GeoCadDock(QDockWidget):
         for panel in (getattr(self, "grid_panel", None),
                       getattr(self, "forest_panel", None),
                       getattr(self, "uav_panel", None),
+                      getattr(self, "export_panel", None),
                       getattr(self, "player", None)):
             if panel is not None:
                 try:
@@ -77,16 +79,6 @@ class GeoCadDock(QDockWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         return scroll
-
-    def _placeholder(self, title, text):
-        """An honest 'not built yet' panel, not a fake control."""
-        box = QGroupBox(title)
-        layout = QVBoxLayout(box)
-        label = QLabel(text)
-        label.setWordWrap(True)
-        label.setStyleSheet("color:#666;")
-        layout.addWidget(label)
-        return box
 
     def _build(self):
         """One dock, six tabs. Every widget below already existed in 1.1.1;
@@ -171,18 +163,12 @@ class GeoCadDock(QDockWidget):
             tr("UAV"))
 
         # ------------------------------------------------------- LAYER/EXPORT
-        self.tabs.addTab(self._scroll_page([
-            self._placeholder(
-                tr("Layer / Export"),
-                tr("Gli esportatori esistono e sono verificati: GeoPackage, "
-                   "GeoJSON, KML, KMZ, GPX, CSV waypoint e centri di presa, "
-                   "Litchi Mission Hub CSV, QGC WPL 110.\n\n"
-                   "Il WPML DJI nativo resta rifiutato: lo schema non e' "
-                   "verificato.\n\n"
-                   "La scheda unificata, con lo stato VERIFIED / PARTIAL / "
-                   "UNSUPPORTED per ogni adattatore, arriva con la milestone "
-                   "1.2.6. Per ora si esporta dal dialogo dell'algoritmo."))]),
-            tr("Layer/Export"))
+        # The panel reads uav_panel.last_mission through a callable: the
+        # UAV tab owns the mission, this tab only exports it.
+        self.export_panel = ExportPanel(
+            self.iface, lambda: self.uav_panel.last_mission)
+        self.tabs.addTab(self._scroll_page([self.export_panel]),
+                         tr("Layer/Export"))
 
         # ------------------------------------------------------- IMPOSTAZIONI
         self.tabs.addTab(self._scroll_page(self._build_settings_widgets()),
@@ -298,6 +284,8 @@ class GeoCadDock(QDockWidget):
         for signal, slot in (
                 (self.rate_combo.currentIndexChanged, self._change_rate),
                 (self.uav_panel.generate_button.clicked, self._refresh_player),
+                (self.uav_panel.generate_button.clicked,
+                 self.export_panel.refresh),
                 (self.player.ticked, self._on_player_tick),
                 (self.player.finished, self._refresh_player)):
             signal.connect(slot)
@@ -434,6 +422,7 @@ class GeoCadDock(QDockWidget):
         for panel in (getattr(self, "grid_panel", None),
                       getattr(self, "forest_panel", None),
                       getattr(self, "uav_panel", None),
+                      getattr(self, "export_panel", None),
                       getattr(self, "player", None)):
             if panel is not None:
                 try:
