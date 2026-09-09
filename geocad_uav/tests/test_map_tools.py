@@ -2545,8 +2545,137 @@ check("every shortcut is still distinct", len(set(shortcuts)), len(shortcuts))
 
 
 # ==========================================================================
-# v1.4.4 - construction guides on a second rubber band
+# v1.4.6 - three columns visible, the bookkeeping ones hidden but kept
 # ==========================================================================
+from qgis.core import QgsEditorWidgetSetup                       # noqa: E402
+
+
+def visible_fields(layer):
+    """Names of the columns an operator actually meets in the table."""
+    return [field.name() for index, field in enumerate(layer.fields())
+            if layer.editorWidgetSetup(index).type() != "Hidden"]
+
+
+def hidden_fields(layer):
+    return [field.name() for index, field in enumerate(layer.fields())
+            if layer.editorWidgetSetup(index).type() == "Hidden"]
+
+
+print("\n== ATV1: a rectangle shows three columns and no more ==")
+atv_layer = scratch_layer("Polygon", "cad_visible")
+atv_session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CENTER)
+atv = tb.BaseCadTool(atv_session)
+atv_session.set_origin(OX, OY)
+atv_session.submit("50")
+atv_session.submit("30")
+atv_session.submit("0d")
+atv.commit(atv_layer, WORK_CRS, atv_layer.crs())
+written = newest(atv_layer)
+
+print("        visible: {0}".format(visible_fields(atv_layer)))
+print("        hidden : {0}".format(hidden_fields(atv_layer)))
+check("cad_id is 1", written[lf.CAD_ID_FIELD], 1)
+check("area_ha is 0.15", written[lf.AREA_HA_FIELD], 0.15, 1e-9)
+check("perimeter_m is 160.000", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
+check("exactly three columns are visible", len(visible_fields(atv_layer)), 3)
+check_true("...and they are the three that mean something",
+           set(visible_fields(atv_layer))
+           == {lf.CAD_ID_FIELD, lf.AREA_HA_FIELD, lf.PERIMETER_FIELD})
+check_true("they are in reading order",
+           visible_fields(atv_layer) == [lf.CAD_ID_FIELD, lf.AREA_HA_FIELD,
+                                         lf.PERIMETER_FIELD])
+
+print("\n== ATV2: the second commit takes the next id ==")
+atv_session.set_origin(OX + 200, OY)
+atv_session.submit("50")
+atv_session.submit("30")
+atv_session.submit("0d")
+atv.commit(atv_layer, WORK_CRS, atv_layer.crs())
+check("cad_id is 2", newest(atv_layer)[lf.CAD_ID_FIELD], 2)
+check("still three visible columns", len(visible_fields(atv_layer)), 3)
+
+print("\n== ATV3: a line has no area ==")
+atv_line_layer = scratch_layer("LineString", "cad_visible_line")
+atv_line_session = line_tool.LineSession()
+atv_line = tb.BaseCadTool(atv_line_session)
+atv_line_session.set_origin(OX, OY)
+atv_line_session.submit("100")
+atv_line_session.submit("0d")
+atv_line.commit(atv_line_layer, WORK_CRS, atv_line_layer.crs())
+line_written = newest(atv_line_layer)
+check("area_ha is 0.00", line_written[lf.AREA_HA_FIELD], 0.0)
+check("perimeter_m carries the length", line_written[lf.PERIMETER_FIELD],
+      100.0, 1e-6)
+check("three visible columns on a line layer too",
+      len(visible_fields(atv_line_layer)), 3)
+
+print("\n== ATV4: a circle's area comes from measure(), not from pi r^2 ==")
+atv_circle_layer = scratch_layer("Polygon", "cad_visible_circle")
+atv_circle_session = circle_tool.CircleSession()
+atv_circle = tb.BaseCadTool(atv_circle_session)
+atv_circle_session.set_origin(OX, OY)
+atv_circle_session.submit("10")
+atv_circle.commit(atv_circle_layer, WORK_CRS, atv_circle_layer.crs())
+circle_written = newest(atv_circle_layer)
+measured_m2 = circle_written.geometry().area()
+by_hand = math.pi * 100.0
+print("        measured {0:.6f} m2 -> {1} ha; pi r^2 would be {2:.6f}".format(
+    measured_m2, circle_written[lf.AREA_HA_FIELD], by_hand))
+check("area_ha is the measured area over 10 000, to 2 decimals",
+      circle_written[lf.AREA_HA_FIELD], round(measured_m2 / 10_000.0, 2), 1e-9)
+check_true("the measured area really is below pi r^2",
+           measured_m2 < by_hand)
+
+print("\n== ATV5: cad_params is hidden, not deleted ==")
+provider_names = [f.name() for f in atv_layer.dataProvider().fields()]
+check_true("cad_params is still in the provider",
+           pa.PARAMS_FIELD in provider_names)
+check_true("...and hidden from the table",
+           pa.PARAMS_FIELD in hidden_fields(atv_layer))
+check_true("the record still reads off the feature",
+           pa.read_record(newest(atv_layer)) is not None)
+rebuilt_atv, _ = pr.rebuild(pa.read_record(newest(atv_layer)))
+check("...and rebuilds the geometry it describes",
+      max_vertex_gap(rebuilt_atv, newest(atv_layer).geometry()), 0.0, 1e-9)
+for bookkeeping in ("tool", "width", "height", "radius", "rotation", "area",
+                    "perimeter", "created"):
+    check_true("{0} is hidden, not dropped".format(bookkeeping),
+               bookkeeping in provider_names
+               and bookkeeping in hidden_fields(atv_layer))
+
+print("\n== ATV6: moving a feature leaves the three columns alone ==")
+atv6_layer = scratch_layer("Polygon", "cad_visible_move")
+atv6_feature = build_feature(atv6_layer, pr.TOOL_RECTANGLE,
+                             {"mode": "center", "x": OX, "y": OY,
+                              "width_m": 50.0, "height_m": 30.0,
+                              "azimuth_deg": 0.0})
+lf.ensure_cad_fields(atv6_layer)
+index = atv6_layer.fields().indexOf(lf.CAD_ID_FIELD)
+atv6_layer.dataProvider().changeAttributeValues(
+    {atv6_feature.id(): {
+        index: 1,
+        atv6_layer.fields().indexOf(lf.AREA_HA_FIELD): 0.15,
+        atv6_layer.fields().indexOf(lf.PERIMETER_FIELD): 160.0}})
+before = [newest(atv6_layer)[name] for name in lf.VISIBLE_CAD_FIELDS]
+
+mv_atv = mv_tool.create(canvas, iface=None,
+                        layer_provider=lambda: atv6_layer)
+mv_atv.activate()
+mv_atv.adopt_feature(atv6_layer, newest(atv6_layer))
+mv_atv.session.submit("@10,-4")
+moved_atv, _ = mv_atv.move_committed()
+after = [newest(atv6_layer)[name] for name in lf.VISIBLE_CAD_FIELDS]
+print("        before {0}, after {1}".format(before, after))
+check_true("the three columns survive the move unchanged", before == after)
+check("the geometry really moved",
+      moved_atv.boundingBox().center().x() - OX, 10.0, 1e-9)
+check("the area did not change", moved_atv.area(), 1500.0, 1e-6)
+check("three columns are still the visible ones",
+      len(visible_fields(atv6_layer)), 3)
+mv_atv.deactivate()
+
+
+print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()
 if SKIPS:

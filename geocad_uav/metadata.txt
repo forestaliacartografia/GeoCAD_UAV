@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.5
+version=1.4.6
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,17 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.5
+changelog=1.4.6
+    - La tabella attributi di un layer CAD mostra ora tre sole colonne, in
+      quest'ordine: cad_id, area_ha e perimeter_m. Sono quelle che si leggono
+      e si ordinano davvero.
+    - Le altre colonne restano nel file, semplicemente nascoste. cad_params
+      in particolare non viene mai cancellato: e' quello che Sposta, Ruota,
+      Ridimensiona e la ricostruzione leggono, e senza di lui quegli
+      strumenti diventerebbero ciechi sulla geometria.
+    - La visibilita' viene riapplicata a ogni conferma, cosi' anche un layer
+      creato con una versione precedente si presenta pulito.
+    1.4.5
     - Ritirata la scheda Griglie. Il motore del reticolo resta e continua a
       generare i sesti d'impianto: e' la scheda a sparire, non la funzione.
     - Il selettore dell'area vive ora per conto suo, in gui/extent_source.py,

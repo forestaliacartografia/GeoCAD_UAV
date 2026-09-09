@@ -119,6 +119,45 @@ CAD_ATTRIBUTE_FIELDS = [
 ]
 
 
+#: The only columns an operator should meet in the attribute table.
+VISIBLE_CAD_FIELDS = (CAD_ID_FIELD, AREA_HA_FIELD, PERIMETER_FIELD)
+
+
+def apply_cad_field_visibility(layer) -> int:
+    """Hide every column except the three that mean something to a reader.
+
+    Hidden, never dropped. ``cad_params`` is what ``primitives.rebuild``,
+    Rotate, Move and Resize all read: delete it and those tools go blind on
+    the feature. The denormalised columns (``width``, ``radius``, ``area``
+    and the rest) are write-only today -- ``read_record`` reads
+    ``cad_params`` and nothing else -- but they are still written on every
+    commit, and a project may already style or filter on them, so they are
+    hidden rather than removed.
+
+    Returns how many columns were hidden. Never raises: a layer that will not
+    take the setting keeps its columns visible, which is untidy, not broken.
+    """
+    if layer is None:
+        return 0
+    try:
+        from qgis.core import QgsEditorWidgetSetup                # noqa: PLC0415
+
+        hidden = QgsEditorWidgetSetup("Hidden", {})
+        fields = layer.fields()
+    except (AttributeError, ImportError, RuntimeError):
+        return 0
+    count = 0
+    for index, field in enumerate(fields):
+        if field.name() in VISIBLE_CAD_FIELDS:
+            continue
+        try:
+            layer.setEditorWidgetSetup(index, hidden)
+            count += 1
+        except (AttributeError, RuntimeError):
+            continue
+    return count
+
+
 def ensure_cad_fields(layer):
     """Add the CAD attribute columns to ``layer`` if they are missing.
 
@@ -136,6 +175,10 @@ def ensure_cad_fields(layer):
     missing = [spec for spec in CAD_ATTRIBUTE_FIELDS
                if spec[0] not in existing]
     if not missing:
+        # Already schema-complete, but the visibility still has to be
+        # asserted: a layer created before this version, or reloaded from a
+        # project, comes back with every column showing.
+        apply_cad_field_visibility(layer)
         return []
 
     provider = layer.dataProvider()
@@ -154,6 +197,7 @@ def ensure_cad_fields(layer):
         layer.updateFields()
     except (AttributeError, RuntimeError):
         return None
+    apply_cad_field_visibility(layer)
     return [name for name, _kind in missing]
 
 
