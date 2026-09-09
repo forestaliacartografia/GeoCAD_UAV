@@ -441,6 +441,9 @@ class BaseCadTool:
         self.target_layer = None
         self._band = None
         self._marker = None
+        #: Second band, for construction guides a session chooses to publish
+        #: (an ellipse's axes today). Never carries the committed shape.
+        self._guide_band = None
         self._typed = ""
         #: Mirrors settings "snap/enabled"; refreshed on activate().
         self.snap_enabled = True
@@ -547,6 +550,11 @@ class BaseCadTool:
         self._marker.setColor(QColor(255, 140, 0))
         self._marker.setPenWidth(2)
         self._marker.hide()
+        self._guide_band = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+        self._guide_band.setColor(QColor(255, 140, 0, 140))
+        self._guide_band.setWidth(1)
+        self._guide_band.setLineStyle(Qt.PenStyle.DotLine)
+        self._guide_band.hide()
         return self._band
 
     def update_band(self, canvas, to_canvas=None):
@@ -571,19 +579,49 @@ class BaseCadTool:
             self._band.addPoint(QgsPointXY(x, y), False)
         self._band.updatePosition()
         self._band.show()
+        self.update_guides(to_canvas)
         return len(points)
+
+    def update_guides(self, to_canvas=None):
+        """Draw whatever construction guides the session publishes.
+
+        A session opts in by offering ``axes_points()``; nothing else in the
+        base class knows what a guide means. Each returned array becomes its
+        own part of one band, so a mouse move still builds no QgsGeometry.
+        """
+        from qgis.core import QgsPointXY, QgsWkbTypes              # noqa: PLC0415
+
+        band = self._guide_band
+        if band is None:
+            return 0
+        band.reset(QgsWkbTypes.LineGeometry)
+        publisher = getattr(self.session, "axes_points", None)
+        parts = [p for p in (publisher() if publisher else ()) if p is not None]
+        for index, part in enumerate(parts):
+            for point in np.asarray(part, dtype=float):
+                x, y = float(point[0]), float(point[1])
+                if to_canvas is not None:
+                    x, y = to_canvas(x, y)
+                band.addPoint(QgsPointXY(x, y), False, index)
+        band.updatePosition()
+        band.setVisible(bool(parts))
+        return len(parts)
 
     def clear_band(self):
         if self._band is not None:
             is_polygon = self.session.geometry_type != "LineString"
             self._band.reset(rubber_band_geometry_type(is_polygon))
             self._band.hide()
+        if self._guide_band is not None:
+            from qgis.core import QgsWkbTypes                     # noqa: PLC0415
+            self._guide_band.reset(QgsWkbTypes.LineGeometry)
+            self._guide_band.hide()
         if self._marker is not None:
             self._marker.hide()
 
     def destroy_band(self, canvas):
         """Remove the rubber band from the scene. Called on deactivate."""
-        for item in (self._band, self._marker):
+        for item in (self._band, self._guide_band, self._marker):
             if item is None:
                 continue
             try:
@@ -593,6 +631,7 @@ class BaseCadTool:
             except (AttributeError, RuntimeError):
                 pass
         self._band = None
+        self._guide_band = None
         self._marker = None
 
 

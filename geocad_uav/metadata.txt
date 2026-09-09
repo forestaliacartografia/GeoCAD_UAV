@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.3
+version=1.4.4
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,16 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.3
+changelog=1.4.4
+    - Mentre si disegna un'ellisse i due assi vengono tracciati sulla mappa
+      con una linea punteggiata, oltre al contorno: si vede subito quale
+      semiasse e' quale e come e' orientata la figura.
+    - Le guide vivono su una seconda banda elastica, separata dalla forma:
+      non entrano mai nella geometria salvata e non costano nulla al
+      passaggio del mouse.
+    - I diametri del cerchio non sono ancora disegnati: lo strumento cerchio
+      non pubblica i propri assi e in questa versione non e' stato toccato.
+    1.4.3
     - Un'ellisse non sembra piu' un cerchio mentre la si disegna. Finche' il
       semiasse minore non e' stato indicato l'anteprima mostrava una
       circonferenza: ora mostra l'asse maggiore, che e' l'unica cosa davvero

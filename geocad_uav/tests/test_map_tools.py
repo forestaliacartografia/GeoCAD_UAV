@@ -2732,6 +2732,96 @@ shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
 check("every shortcut is still distinct", len(set(shortcuts)), len(shortcuts))
 
 
+# ==========================================================================
+# v1.4.4 - construction guides on a second rubber band
+# ==========================================================================
+print("\n== CE4: the ellipse draws its axes ==")
+ce4_layer = scratch_layer("Polygon", "cad_guides")
+ce4 = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce4_layer)
+ce4.activate()
+ce4.session.set_origin(OX, OY)
+ce4.session.submit("20")
+ce4.session.submit("10")
+ce4.session.submit("0d")
+ce4.update_band(canvas, None)
+
+guide = ce4._guide_band
+check_true("a second band exists for the guides", guide is not None)
+check("both axes are drawn", guide.size(), 2)
+check("each axis is a segment", guide.partSize(0), 2)
+check("...and so is the other", guide.partSize(1), 2)
+check("four guide vertices in all", guide.numberOfVertices(), 4)
+
+
+def part_span(band, index):
+    """(east, north) extent of one part of a rubber band."""
+    points = [band.getPoint(index, i) for i in range(band.partSize(index))]
+    xs = [p.x() for p in points]
+    ys = [p.y() for p in points]
+    return max(xs) - min(xs), max(ys) - min(ys)
+
+
+major_e, major_n = part_span(guide, 0)
+minor_e, minor_n = part_span(guide, 1)
+print("        major {0:.6f} E x {1:.6f} N, minor {2:.6f} E x {3:.6f} N".format(
+    major_e, major_n, minor_e, minor_n))
+check("the major axis runs 2a = 40 m north", major_n, 40.0, 1e-6)
+check("...and nothing east", major_e, 0.0, 1e-6)
+check("the minor axis runs 2b = 20 m east", minor_e, 20.0, 1e-6)
+check("...and nothing north", minor_n, 0.0, 1e-6)
+check_true("the shape band still holds the ellipse itself",
+           ce4._band.numberOfVertices() > 4)
+
+print("\n-- the guides follow the shape --")
+# Every slot is already filled, so submit() has nothing left to take:
+# change the value the panel's spin box would change.
+ce4.session.set_value("azimuth_deg", 90.0)
+ce4.update_band(canvas, None)
+major_e, major_n = part_span(ce4._guide_band, 0)
+check("at azimuth 90 the major axis runs east", major_e, 40.0, 1e-6)
+check("...and no longer north", major_n, 0.0, 1e-6)
+
+print("\n-- a tool that publishes no guides draws none --")
+rect_guides = rect_tool.create(canvas, iface=None,
+                               layer_provider=lambda: ce4_layer)
+rect_guides.activate()
+rect_guides.session.set_origin(OX, OY)
+rect_guides.session.submit("30")
+rect_guides.session.submit("20")
+rect_guides.session.submit("0d")
+rect_guides.update_band(canvas, None)
+check("a rectangle publishes no axes", rect_guides._guide_band.size(), 0)
+check_true("so the guide band stays hidden",
+           rect_guides._guide_band.isVisible() is False)
+check_true("its shape band is drawn as usual",
+           rect_guides._band.numberOfVertices() >= 4)
+rect_guides.deactivate()
+
+print("\n-- guides cost nothing on a hover and vanish on Escape --")
+ce4b_layer = scratch_layer("Polygon", "cad_guides_hover")
+ce4b = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce4b_layer)
+ce4b.activate()
+ce4b.session.set_origin(OX, OY)
+ce4b.session.submit("15")
+baseline = canvas.refresh_calls
+builds = ce4b.geometry_builds
+for step in range(100):
+    ce4b.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.2))
+check("no QgsGeometry built during 100 hovers with guides on",
+      ce4b.geometry_builds - builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - baseline, 0)
+check("no feature added", ce4b_layer.featureCount(), 0)
+ce4b.clear_band()
+check("Escape empties the guide band", ce4b._guide_band.numberOfVertices(), 0)
+check_true("...and hides it", ce4b._guide_band.isVisible() is False)
+ce4b.deactivate()
+ce4.deactivate()
+
+check_true("the circle publishes no axes yet, so it draws no diameters",
+           not hasattr(circle_tool.CircleSession(), "axes_points"))
+
+
 print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()
