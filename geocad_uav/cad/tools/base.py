@@ -37,6 +37,7 @@ import numpy as np
 from ...core import crs as crs_svc
 from ...core.constants import GEOM_EPS_M
 from ...core.errors import GeoCadError, InvalidInputError, LayerError
+from ...io import layer_factory as lf
 from .. import dynamic_input as di
 from .. import parametric as pa
 from .. import primitives as pr
@@ -495,7 +496,18 @@ class BaseCadTool:
         if layer_crs is not None and work_crs is not None and layer_crs != work_crs:
             geometry = crs_svc.transform_geometry(geometry, work_crs, layer_crs)
 
+        # The CAD columns an operator actually reads in the attribute table.
+        # Added here because commit() is the one place a feature is written;
+        # a layer that refuses them still gets its geometry, with a warning.
         attributes = pa.record_to_attributes(record)
+        self.attribute_warning = ""
+        if lf.ensure_cad_fields(layer) is None:
+            self.attribute_warning = (
+                "Il layer '{0}' non accetta nuovi campi: la geometria e' "
+                "stata scritta, gli attributi CAD no.".format(layer.name()))
+        else:
+            attributes.update(lf.cad_attributes(record, layer))
+
         fields = layer.fields()
         feature = QgsFeature(fields)
         feature.setGeometry(geometry)
@@ -825,6 +837,7 @@ class CadMapTool(QgsMapTool, BaseCadTool):
             self._warn(exc.formatted())
             self.session.state = ToolState.PREVIEW
             return
+        self._warn(getattr(self, "attribute_warning", ""))
         self._typed = ""
         self.clear_band()
         self._paint_hud()

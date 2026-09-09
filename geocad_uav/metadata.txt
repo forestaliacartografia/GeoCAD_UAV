@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.1
+version=1.4.2
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,21 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.1
+changelog=1.4.2
+    - Ogni geometria creata con gli strumenti CAD porta ora tre colonne
+      leggibili nella tabella attributi, oltre ai parametri: cad_id
+      progressivo sul layer, area_ha in ettari con due decimali e
+      perimeter_m in metri (per una linea e' la lunghezza, per un punto zero).
+    - Le colonne vengono aggiunte al layer di destinazione se mancano, una
+      volta sola. Se il layer non le accetta, la geometria viene scritta lo
+      stesso e il messaggio dice quale layer ha rifiutato: non si perde una
+      forma per tre colonne.
+    - Il progressivo e' il massimo esistente piu' uno, non il numero di
+      feature: dopo una cancellazione nessun id viene riassegnato.
+    - Area e perimetro non vengono ricalcolati dagli strumenti: sono le
+      misure che il motore ha gia' preso alla costruzione, nel CRS metrico di
+      lavoro. Gli ettari non nascono mai da coordinate in gradi.
+    1.4.1
     - Sposta e Ridimensiona: due strumenti che modificano la feature
       selezionata, come Ruota, senza creare nulla di nuovo.
     - Sposta accetta @dx,dy digitato, due lunghezze, un trascinamento oppure

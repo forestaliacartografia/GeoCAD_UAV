@@ -102,6 +102,111 @@ def _num(value):
 
 
 # --------------------------------------------------------------------------
+# CAD attributes
+# --------------------------------------------------------------------------
+
+CAD_ID_FIELD = "cad_id"
+AREA_HA_FIELD = "area_ha"
+PERIMETER_FIELD = "perimeter_m"
+
+#: Written on every feature the CAD tools create, on top of the parametric
+#: columns in ``cad.parametric.METADATA_FIELDS``. They exist because an
+#: operator reads the attribute table, not the JSON in ``cad_params``.
+CAD_ATTRIBUTE_FIELDS = [
+    (CAD_ID_FIELD, "int"),
+    (AREA_HA_FIELD, "double"),
+    (PERIMETER_FIELD, "double"),
+]
+
+
+def ensure_cad_fields(layer):
+    """Add the CAD attribute columns to ``layer`` if they are missing.
+
+    Returns the names that were added, ``[]`` when they were already there,
+    and ``None`` when the layer refused them -- a read-only source, or one
+    whose provider cannot add attributes. The caller writes the geometry
+    either way: losing three columns is not a reason to lose the shape.
+    """
+    if layer is None:
+        return None
+    try:
+        existing = {field.name() for field in layer.fields()}
+    except (AttributeError, RuntimeError):
+        return None
+    missing = [spec for spec in CAD_ATTRIBUTE_FIELDS
+               if spec[0] not in existing]
+    if not missing:
+        return []
+
+    provider = layer.dataProvider()
+    try:
+        from qgis.core import QgsVectorDataProvider              # noqa: PLC0415
+
+        # Scoped form: it exists on 3.40 and on 4.0, both reporting 8.
+        add_attributes = QgsVectorDataProvider.Capability.AddAttributes
+        if not provider.capabilities() & add_attributes:
+            return None
+    except (AttributeError, RuntimeError, ImportError):
+        pass
+    try:
+        if not provider.addAttributes(list(make_fields(missing))):
+            return None
+        layer.updateFields()
+    except (AttributeError, RuntimeError):
+        return None
+    return [name for name, _kind in missing]
+
+
+def next_cad_id(layer) -> int:
+    """The next progressive id on ``layer``: ``max(cad_id) + 1``, else 1.
+
+    Deliberately not a running count of features: after a delete the ids must
+    not be handed out twice, and ``max + 1`` keeps every id unique for the
+    life of the layer without renumbering anything that already exists.
+    """
+    if layer is None:
+        return 1
+    try:
+        index = layer.fields().indexOf(CAD_ID_FIELD)
+    except (AttributeError, RuntimeError):
+        return 1
+    if index < 0:
+        return 1
+    highest = 0
+    try:
+        for feature in layer.getFeatures():
+            value = feature.attribute(index)
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            highest = max(highest, value)
+    except (AttributeError, RuntimeError):
+        return 1
+    return highest + 1
+
+
+def cad_attributes(record, layer) -> dict:
+    """The three CAD columns for one freshly built record.
+
+    The numbers come from ``primitives.measure`` -- which already stored them
+    in the record at build time, in the metric working CRS -- so the tool
+    never computes an area of its own and hectares are never derived from
+    degrees. Hectares are rounded to 2 decimals because that is the precision
+    a planting or forestry document is written in; metres keep 3.
+    """
+    params = getattr(record, "params", {}) or {}
+    area_m2 = params.get("measured_area_m2")
+    perimeter = (params.get("measured_perimeter_m")
+                 or params.get("measured_length_m"))
+    return {
+        CAD_ID_FIELD: next_cad_id(layer),
+        AREA_HA_FIELD: round(float(area_m2) / 10_000.0, 2) if area_m2 else 0.0,
+        PERIMETER_FIELD: round(float(perimeter), 3) if perimeter else 0.0,
+    }
+
+
+# --------------------------------------------------------------------------
 # Mission layers
 # --------------------------------------------------------------------------
 

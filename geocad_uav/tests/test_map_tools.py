@@ -29,6 +29,7 @@ QGS.initQgis()
 
 # Only after QgsApplication exists: qgis.gui pulls in Qt widgets, and importing
 # it (or qgis.analysis) beforehand crashes the interpreter with no traceback.
+from qgis.core import QgsVectorDataProvider                     # noqa: E402
 from qgis.gui import QgsMapCanvas                               # noqa: E402
 from qgis.PyQt.QtCore import Qt                                 # noqa: E402
 
@@ -2186,6 +2187,216 @@ check_true("neither tool imports the mission side",
                encoding="utf-8").read()
                for name in ("move.py", "resize.py")
                for token in ("last_mission", "uav.", "export")))
+
+
+# ==========================================================================
+# v1.4.2 slice A - the CAD attributes every commit must write
+# ==========================================================================
+def newest(layer):
+    """The feature the layer holds last.
+
+    commit() hands back the QgsFeature it built, whose id stays provisional
+    until the provider assigns one, so every attribute assertion below reads
+    the value off the layer rather than off that object.
+    """
+    return max(layer.getFeatures(), key=lambda f: f.id())
+
+
+print("\n== AT1: rectangle 50 x 30 ==")
+at_layer = scratch_layer("Polygon", "cad_attrs")
+check_true("the fixture layer starts without the CAD columns",
+           lf.CAD_ID_FIELD not in {f.name() for f in at_layer.fields()})
+
+at_session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CENTER)
+at_tool = tb.BaseCadTool(at_session)
+at_session.set_origin(OX, OY)
+at_session.submit("50")
+at_session.submit("30")
+at_session.submit("0d")
+first = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
+
+names = {f.name() for f in at_layer.fields()}
+check_true("cad_id was added to the layer", lf.CAD_ID_FIELD in names)
+check_true("area_ha was added", lf.AREA_HA_FIELD in names)
+check_true("perimeter_m was added", lf.PERIMETER_FIELD in names)
+check_true("cad_params is still there", pa.PARAMS_FIELD in names)
+
+written = newest(at_layer)
+print("        cad_id {0}, area_ha {1}, perimeter_m {2}".format(
+    written[lf.CAD_ID_FIELD], written[lf.AREA_HA_FIELD],
+    written[lf.PERIMETER_FIELD]))
+check("cad_id is 1 on the first feature", written[lf.CAD_ID_FIELD], 1)
+check("area_ha is 1500 m2 in hectares", written[lf.AREA_HA_FIELD], 0.15, 1e-9)
+check("perimeter_m is 2*(50+30)", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
+check("the area column agrees with the engine's measure()",
+      written[lf.AREA_HA_FIELD],
+      round(written.geometry().area() / 10_000.0, 2), 1e-9)
+
+at_session.set_origin(OX + 200, OY)
+at_session.submit("50")
+at_session.submit("30")
+at_session.submit("0d")
+second = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
+second = newest(at_layer)
+check("the second feature takes cad_id 2", second[lf.CAD_ID_FIELD], 2)
+check("...with the same area", second[lf.AREA_HA_FIELD], 0.15, 1e-9)
+check("two features on the layer", at_layer.featureCount(), 2)
+
+print("\n== AT2: circle r = 10 ==")
+ci_layer = scratch_layer("Polygon", "cad_attrs_circle")
+ci_session = circle_tool.CircleSession()
+ci = tb.BaseCadTool(ci_session)
+ci_session.set_origin(OX, OY)
+ci_session.submit("10")
+ci_feature = ci.commit(ci_layer, WORK_CRS, ci_layer.crs())
+ci_written = newest(ci_layer)
+
+engine_area = ci_written.geometry().area()
+engine_perimeter = ci_written.geometry().length()
+print("        area {0:.6f} m2 -> {1} ha, perimeter {2:.6f} m".format(
+    engine_area, ci_written[lf.AREA_HA_FIELD], engine_perimeter))
+check("area_ha is the measured area, not pi r^2",
+      ci_written[lf.AREA_HA_FIELD], round(engine_area / 10_000.0, 2), 1e-9)
+check("area_ha rounds to 0.03 ha", ci_written[lf.AREA_HA_FIELD], 0.03, 1e-9)
+check("perimeter_m is the measured perimeter, not 2 pi r",
+      ci_written[lf.PERIMETER_FIELD], round(engine_perimeter, 3), 1e-9)
+check_true("...which is shorter than the true circumference",
+           ci_written[lf.PERIMETER_FIELD] < 2.0 * math.pi * 10.0)
+check("cad_id is 1 on its own layer", ci_written[lf.CAD_ID_FIELD], 1)
+
+print("\n== AT3: a line has no area ==")
+ln_layer = scratch_layer("LineString", "cad_attrs_line")
+ln_session = line_tool.LineSession()
+ln = tb.BaseCadTool(ln_session)
+ln_session.set_origin(OX, OY)
+ln_session.submit("100")
+ln_session.submit("0d")
+ln_feature = ln.commit(ln_layer, WORK_CRS, ln_layer.crs())
+ln_written = newest(ln_layer)
+check("area_ha is 0.00 for a line", ln_written[lf.AREA_HA_FIELD], 0.0)
+check("perimeter_m carries the length", ln_written[lf.PERIMETER_FIELD],
+      100.0, 1e-6)
+check("cad_id is 1", ln_written[lf.CAD_ID_FIELD], 1)
+check("the geometry really is 100 m long",
+      ln_written.geometry().length(), 100.0, 1e-6)
+
+print("\n== AT4: ids continue from what the layer already holds ==")
+seeded = lf.memory_layer("Polygon", "cad_attrs_seeded", WORK_CRS.authid(),
+                         pa.METADATA_FIELDS + lf.CAD_ATTRIBUTE_FIELDS)
+seed_geom, seed_record = pr.build(
+    pr.TOOL_RECTANGLE, {"mode": "center", "x": OX, "y": OY, "width_m": 10.0,
+                        "height_m": 10.0, "azimuth_deg": 0.0},
+    WORK_CRS.authid())
+seed = QgsFeature(seeded.fields())
+seed.setGeometry(seed_geom)
+seed_attrs = pa.record_to_attributes(seed_record)
+seed_attrs[lf.CAD_ID_FIELD] = 7
+seeded.dataProvider().addFeatures([seed])
+index = seeded.fields().indexOf(lf.CAD_ID_FIELD)
+seeded.dataProvider().changeAttributeValues(
+    {max(f.id() for f in seeded.getFeatures()): {index: 7}})
+check("the seeded feature carries cad_id 7",
+      max(seeded.getFeatures(), key=lambda f: f.id())[lf.CAD_ID_FIELD], 7)
+check("next_cad_id reads the maximum, not the count",
+      lf.next_cad_id(seeded), 8)
+
+seed_session = rect_tool.RectangleSession(
+    reference=rect_tool.REFERENCE_CENTER)
+seed_tool = tb.BaseCadTool(seed_session)
+seed_session.set_origin(OX + 100, OY)
+seed_session.submit("20")
+seed_session.submit("20")
+seed_session.submit("0d")
+eighth = seed_tool.commit(seeded, WORK_CRS, seeded.crs())
+check("the new feature takes cad_id 8",
+      newest(seeded)[lf.CAD_ID_FIELD], 8)
+check("area_ha of a 20 x 20", newest(seeded)[lf.AREA_HA_FIELD],
+      0.04, 1e-9)
+
+print("\n== AT5: a layer that refuses new columns still gets the geometry ==")
+
+
+class RefusingLayer:
+    """A layer whose provider cannot add attributes.
+
+    Not a mock of the tool: a stand-in for a read-only source, which is the
+    case the operator actually hits on a shapefile they do not own.
+    """
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def dataProvider(self):                                     # noqa: N802
+        provider = self._wrapped.dataProvider()
+
+        class NoAttributes:
+            def __getattr__(inner, name):                       # noqa: N805
+                return getattr(provider, name)
+
+            def capabilities(inner):                            # noqa: N805
+                # Everything the real provider can do, minus the one
+                # capability under test: the layer still takes features, it
+                # just will not grow a column. Returning 0 would have made it
+                # refuse the geometry too, which is a different failure.
+                return (provider.capabilities()
+                        & ~QgsVectorDataProvider.Capability.AddAttributes)
+
+        return NoAttributes()
+
+
+bare = lf.memory_layer("Polygon", "cad_attrs_readonly", WORK_CRS.authid(),
+                       pa.METADATA_FIELDS)
+refusing = RefusingLayer(bare)
+check_true("ensure_cad_fields reports that it could not",
+           lf.ensure_cad_fields(refusing) is None)
+
+ro_session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CENTER)
+ro_tool = tb.BaseCadTool(ro_session)
+ro_session.set_origin(OX, OY)
+ro_session.submit("40")
+ro_session.submit("25")
+ro_session.submit("0d")
+ro_feature = ro_tool.commit(refusing, WORK_CRS, bare.crs())
+check("the geometry was written anyway", bare.featureCount(), 1)
+check("the area is right, it just is not in a column",
+      newest(bare).geometry().area(), 1000.0, 1e-6)
+check_true("cad_params survived", pa.read_record(newest(bare)) is not None)
+check_true("the operator gets a message naming the layer",
+           "attributi cad" in ro_tool.attribute_warning.lower()
+           and bare.name() in ro_tool.attribute_warning)
+print("        {0}".format(ro_tool.attribute_warning))
+
+check_true("a layer that accepts them says so instead",
+           lf.ensure_cad_fields(scratch_layer("Polygon", "cad_attrs_ok"))
+           == [lf.CAD_ID_FIELD, lf.AREA_HA_FIELD, lf.PERIMETER_FIELD])
+
+print("\n== AT6: the shapes from 1.4.0 and 1.4.1 still commit ==")
+mixed = scratch_layer("Polygon", "cad_attrs_mixed")
+baseline_refresh = canvas.refresh_calls
+expected_ids = []
+for index, (session, submissions) in enumerate((
+        (sq_tool.SquareSession(), ("10", "0d")),
+        (ell_tool.EllipseSession(), ("20", "10", "0d")),
+        (rp_tool.RegularPolygonSession(n_sides=6), ("10", "0d")))):
+    tool = tb.BaseCadTool(session)
+    session.set_origin(OX + index * 100, OY)
+    for text in submissions:
+        session.submit(text)
+    feature = tool.commit(mixed, WORK_CRS, mixed.crs())
+    stored = newest(mixed)
+    expected_ids.append(stored[lf.CAD_ID_FIELD])
+    check_true("{0} wrote an area".format(session.title),
+               stored[lf.AREA_HA_FIELD] > 0.0)
+    check("{0}: area_ha matches its own geometry".format(session.title),
+          stored[lf.AREA_HA_FIELD],
+          round(stored.geometry().area() / 10_000.0, 2), 1e-9)
+check_true("the ids are 1, 2, 3 in order", expected_ids == [1, 2, 3])
+check("three features", mixed.featureCount(), 3)
+check("no canvas.refresh() was added by the attribute work",
+      canvas.refresh_calls - baseline_refresh, 0)
 
 
 print("\n" + "=" * 80)
