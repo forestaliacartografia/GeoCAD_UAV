@@ -34,7 +34,7 @@ from geocad_uav.core import grid as grid_mod                    # noqa: E402
 from geocad_uav.core import undo                                # noqa: E402
 from geocad_uav.forest import stats as stats_mod                # noqa: E402
 from geocad_uav.gui.forest_panel import ForestPanel             # noqa: E402
-from geocad_uav.gui.grid_panel import ExtentSource, GridPanel   # noqa: E402
+from geocad_uav.gui.extent_source import ExtentSource           # noqa: E402
 from geocad_uav.io import layer_factory as lf                   # noqa: E402
 
 FAILURES = []
@@ -100,6 +100,15 @@ class FakeIface:
         return self._bar
 
 
+def _refuses(call):
+    """True when the call raises: an absent tool must fail, not return None."""
+    try:
+        call()
+    except Exception:                                           # noqa: BLE001
+        return True
+    return False
+
+
 def rect_wkt(x0, y0, w, h):
     return "POLYGON(({0} {1},{2} {1},{2} {3},{0} {3},{0} {1}))".format(
         x0, y0, x0 + w, y0 + h)
@@ -117,127 +126,13 @@ def engine_count(geometry, spec):
                                              float(result.xy[i, 1]))))
 
 
+def ExtentSourceHost(interface):
+    """ExtentSource on its own, the way every panel now creates it."""
+    return ExtentSource(interface)
+
+
 iface = FakeIface()
 canvas = iface.mapCanvas()
-
-# --------------------------------------------------------------------------
-# F1 - drawn extent, counted against the engine
-# --------------------------------------------------------------------------
-print("\n== F1: drawn rectangle 100 x 80, step 5 x 5, no margin ==")
-panel = GridPanel(iface)
-extent_geom = QgsGeometry.fromWkt(rect_wkt(OX, OY, 100.0, 80.0))
-panel.extent.set_extent(extent_geom, CRS)
-panel.spacing_x.setValue(5.0)
-panel.spacing_y.setValue(5.0)
-panel.margin.setValue(0.0)
-
-result = panel.compute()
-expected = engine_count(extent_geom, panel.build_spec())
-print("        panel says {0}, engine says {1}".format(len(result), expected))
-check("node count matches core.grid + intersects", len(result), expected)
-check_true("the count is not trivially zero", len(result) > 0)
-check("a full lattice: (100/5 + 1) x (80/5 + 1)", len(result),
-      (100.0 / 5.0 + 1) * (80.0 / 5.0 + 1))
-
-xy = result.xy
-check_true("no node lies outside the extent",
-           all(extent_geom.intersects(
-               QgsGeometry.fromPointXY(QgsPointXY(float(x), float(y))))
-               for x, y in xy))
-check("rows are renumbered from 0", int(result.row.min()), 0)
-check("spacing really is 5 m",
-      float(np.diff(np.unique(np.round(xy[:, 0], 6)))[0]), 5.0, 1e-9)
-
-# --------------------------------------------------------------------------
-# F2 - the same extent taken from a layer feature
-# --------------------------------------------------------------------------
-print("\n== F2: same extent, this time picked from an existing feature ==")
-source_layer = lf.memory_layer("Polygon", "estensione esistente",
-                               CRS.authid(), [("id", "int")])
-feature = QgsFeature(source_layer.fields())
-feature.setGeometry(QgsGeometry.fromWkt(rect_wkt(OX, OY, 100.0, 80.0)))
-source_layer.dataProvider().addFeatures([feature])
-# The combo is backed by the project's model, so register before selecting.
-QgsProject.instance().addMapLayer(source_layer)
-
-panel2 = GridPanel(iface)
-panel2.spacing_x.setValue(5.0)
-panel2.spacing_y.setValue(5.0)
-panel2.margin.setValue(0.0)
-# Go through the empty entry so layerChanged really fires: the combo
-# pre-selects the only matching layer by itself, silently.
-panel2.extent.layer_combo.setLayer(None)
-check_true("the empty entry clears the extent",
-           panel2.extent.geometry() is None)
-panel2.extent.layer_combo.setLayer(source_layer)
-check_true("the layer really is selected in the combo",
-           panel2.extent.layer_combo.currentLayer() is source_layer)
-check_true("the extent came from the feature",
-           panel2.extent.geometry() is not None)
-
-result2 = panel2.compute()
-check("picking a feature gives the same count as drawing", len(result2),
-      len(result))
-check("...and the same as the engine", len(result2),
-      engine_count(panel2.extent.geometry(), panel2.build_spec()))
-
-# Second polygon in the same layer: the whole layer means both, the
-# selection means one.
-second = QgsFeature(source_layer.fields())
-second.setGeometry(QgsGeometry.fromWkt(rect_wkt(OX + 400.0, OY, 100.0, 80.0)))
-source_layer.dataProvider().addFeatures([second])
-panel2.extent._from_layer()
-check("both features together give twice the nodes", len(panel2.compute()),
-      2 * len(result))
-
-source_layer.selectByIds([f for f in source_layer.allFeatureIds()][:1])
-panel2.extent.selected_only.setChecked(True)
-check("with 'only selected' the extent is the selected feature alone",
-      len(panel2.compute()), len(result))
-panel2.extent.selected_only.setChecked(False)
-
-# --------------------------------------------------------------------------
-# F3 - step from two clicks, numeric stays master
-# --------------------------------------------------------------------------
-print("\n== F3: step from two clicks, then typed ==")
-measured = {}
-
-
-def capture(length, azimuth):
-    measured["length"] = length
-    measured["azimuth"] = azimuth
-
-
-# start_measure hands a length to its callback; drive that contract directly
-# rather than faking a click sequence through the canvas.
-panel.extent.start_measure(capture)
-check_true("a measuring tool was activated",
-           panel.extent._draw_tool is not None)
-panel.extent._stop_drawing()
-
-capture(3.0, 47.5)
-panel.spacing_x.setValue(measured["length"])
-check("two clicks 3.000 m apart set dx", panel.spacing_x.value(), 3.0, 1e-9)
-check("the spec carries it", panel.build_spec().spacing_x, 3.0, 1e-9)
-
-panel.spacing_x.setValue(5.0)
-check("typing 5 overrides the measured 3 (numeric is master)",
-      panel.build_spec().spacing_x, 5.0, 1e-9)
-
-panel.azimuth.setValue(measured["azimuth"])
-check("azimuth from the same two clicks", panel.build_spec().azimuth_deg,
-      47.5, 1e-9)
-panel.azimuth.setValue(0.0)
-
-# azimuth parallel to the longest edge of the extent
-panel._azimuth_from_edge()
-ring = np.array([[p.x(), p.y()] for p in extent_geom.asPolygon()[0]],
-                dtype=float)
-check("azimuth parallel to the longest side", panel.azimuth.value(),
-      grid_mod.azimuth_of_longest_edge(ring) % 360.0, 1e-9)
-panel.azimuth.setValue(0.0)
-panel.spacing_x.setValue(5.0)
-panel.spacing_y.setValue(5.0)
 
 # --------------------------------------------------------------------------
 # F4 - forest scheme on the drawn extent
@@ -274,73 +169,27 @@ print("        {0:,.1f} plants/ha, fill {1:.1%}".format(kpi.density_per_ha,
                                                         kpi.fill_ratio))
 
 # --------------------------------------------------------------------------
-# F5 - preview writes nothing; confirm writes once
-# --------------------------------------------------------------------------
-print("\n== F5: 100 previews write nothing, one confirm writes once ==")
-before_layers = len(QgsProject.instance().mapLayers())
-baseline_refresh = canvas.refresh_calls
-for step in range(100):
-    panel.spacing_x.setValue(5.0 + (step % 3) * 0.001)
-    panel.refresh_preview()
-panel.spacing_x.setValue(5.0)
-preview = panel.refresh_preview()
-
-check("no layer created by 100 previews",
-      len(QgsProject.instance().mapLayers()), before_layers)
-check("no canvas.refresh() during previews",
-      canvas.refresh_calls - baseline_refresh, 0)
-check_true("a preview band exists", panel._band is not None)
-check("the band holds one point per node", panel._band.numberOfVertices(),
-      len(preview))
-
-created = panel.confirm()
-check_true("confirm created a layer", created is not None)
-check("the layer holds exactly the previewed nodes", created.featureCount(),
-      len(preview))
-check("exactly one new layer in the project",
-      len(QgsProject.instance().mapLayers()), before_layers + 1)
-
-print("\n-- one undo command covers the whole batch --")
-batch_layer = lf.memory_layer("Point", "batch", CRS.authid(), [("id", "int")])
-batch_layer.startEditing()          # so add_features leaves it in the buffer
-features = []
-for index in range(25):
-    f = QgsFeature(batch_layer.fields())
-    f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(OX + index, OY)))
-    f.setAttributes([index])
-    features.append(f)
-undo.add_features(batch_layer, features, "GeoCad: batch")
-check("25 features added", batch_layer.featureCount(), 25)
-stack = batch_layer.undoStack() if hasattr(batch_layer, "undoStack") else None
-if stack is None:
-    skip("one undo removes the whole batch",
-         "QgsVectorLayer.undoStack() unavailable on this build")
-else:
-    check("the batch is a single undo command", stack.count(), 1)
-    stack.undo()
-    check("one undo removes all 25", batch_layer.featureCount(), 0)
-batch_layer.rollBack()
-
-# --------------------------------------------------------------------------
 # R1 - the frozen behaviour is untouched
 # --------------------------------------------------------------------------
 print("\n== R1: extent picker reuses the existing CAD tools ==")
+# The Grid tab is gone; the picker it used to live in is not.
+panel = ExtentSourceHost(iface)
 from geocad_uav.cad import tools as cad_tools                   # noqa: E402
 from geocad_uav.cad.tools import base as tb                     # noqa: E402
 
-drawn = panel.extent.start_drawing("rectangle")
+drawn = panel.start_drawing("rectangle")
 check_true("drawing uses the existing RectangleTool, not a new map tool",
            isinstance(drawn, tb.CadMapTool))
 check_true("it is the registered rectangle tool",
            drawn.session.tool_id == "rectangle")
-panel.extent._stop_drawing()
+panel._stop_drawing()
 
-drawn_poly = panel.extent.start_drawing("polyline")
+drawn_poly = panel.start_drawing("polyline")
 check_true("polygon drawing uses the existing PolylineTool",
            isinstance(drawn_poly, tb.CadMapTool)
            and drawn_poly.session.multi_vertex)
 check_true("...asked to close its ring", drawn_poly.session.close)
-panel.extent._stop_drawing()
+panel._stop_drawing()
 
 closed_ring = QgsGeometry.fromWkt(
     "LINESTRING({0} {1},{2} {1},{2} {3},{0} {3},{0} {1})".format(
@@ -363,8 +212,64 @@ check_true("...and it still reuses the drawing tools that exist",
            {"rectangle", "polyline", "line"} <= set(cad_tools.TOOL_REGISTRY))
 
 panel.teardown()
-panel2.teardown()
 forest.teardown()
+
+# --------------------------------------------------------------------------
+# G1 (v1.4.5) - the Grid tab left, the lattice engine stayed
+# --------------------------------------------------------------------------
+print("\n== G1: no Grid tab, and no orphan imports ==")
+import importlib                                                # noqa: E402
+
+from geocad_uav.core import grid as grid_engine                 # noqa: E402
+from geocad_uav.gui import dock as dock_mod                     # noqa: E402
+
+check_true("gui.grid_panel is gone",
+           not os.path.isfile(os.path.join(
+               os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+               "gui", "grid_panel.py")))
+check_true("...and nothing imports it",
+           _refuses(lambda: importlib.import_module(
+               "geocad_uav.gui.grid_panel")))
+dock_source = open(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "gui", "dock.py"), encoding="utf-8").read()
+check_true("the dock does not mention it either",
+           "grid_panel" not in dock_source and "GridPanel" not in dock_source)
+check("the dock declares five tabs",
+      len([n for n in dir(dock_mod.GeoCadDock) if n.startswith("TAB_")]), 5)
+check_true("and none of them is a Grid tab",
+           not any("GRID" in n for n in dir(dock_mod.GeoCadDock)
+                   if n.startswith("TAB_")))
+
+check_true("core.grid is still here: the schemes need it",
+           hasattr(grid_engine, "generate_grid")
+           and hasattr(grid_engine, "GridSpec"))
+lattice = grid_engine.generate_grid(
+    (0.0, 0.0, 100.0, 80.0), grid_engine.GridSpec(spacing_x=5.0,
+                                                  spacing_y=5.0))
+check("the lattice engine still produces 21 x 17", len(lattice), 21 * 17)
+
+print("\n== E0: the ellipse tool left the toolbar ==")
+from geocad_uav import plugin as plugin_check                   # noqa: E402
+
+check_true("ellipse is out of the registry",
+           "ellipse" not in cad_tools.TOOL_REGISTRY)
+check_true("...out of the toolbar order",
+           "ellipse" not in plugin_check.CAD_TOOL_ORDER)
+check_true("...and out of TOOL_GEOMETRY",
+           "ellipse" not in plugin_check.TOOL_GEOMETRY)
+check_true("asking for it fails cleanly, without crossing into C++",
+           _refuses(lambda: cad_tools.create_tool("ellipse", None)))
+check_true("the module file is gone",
+           not os.path.isfile(os.path.join(
+               os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+               "cad", "tools", "ellipse.py")))
+for survivor in ("circle", "arc", "rectangle", "square", "regular_polygon"):
+    check_true("{0} is still registered".format(survivor),
+               survivor in cad_tools.TOOL_REGISTRY)
+check_true("the registry and the toolbar order still agree",
+           set(cad_tools.TOOL_REGISTRY) == set(plugin_check.CAD_TOOL_ORDER))
+check("ten tools remain", len(cad_tools.TOOL_REGISTRY), 10)
 
 print("\n" + "=" * 78)
 QgsProject.instance().removeAllMapLayers()

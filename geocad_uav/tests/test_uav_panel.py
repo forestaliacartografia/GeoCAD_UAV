@@ -35,7 +35,7 @@ from qgis.PyQt.QtWidgets import QMainWindow, QPushButton        # noqa: E402
 from geocad_uav.core.models import AltitudeMode                 # noqa: E402
 from geocad_uav.core.z import TerrainModel                      # noqa: E402
 from geocad_uav.gui import uav_panel as up                      # noqa: E402
-from geocad_uav.gui.grid_panel import ExtentSource              # noqa: E402
+from geocad_uav.gui.extent_source import ExtentSource           # noqa: E402
 from geocad_uav.gui.uav_panel import UavPanel                   # noqa: E402
 from geocad_uav.uav import mission as mi                        # noqa: E402
 from geocad_uav.uav import photogrammetry as pg                 # noqa: E402

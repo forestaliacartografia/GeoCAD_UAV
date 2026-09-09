@@ -1290,7 +1290,6 @@ check_true("plugin treats rotate as edit-in-place, never a scratch layer",
 # ==========================================================================
 # v1.4.0 - Square, Ellipse, RegularPolygon
 # ==========================================================================
-from geocad_uav.cad.tools import ellipse as ell_tool             # noqa: E402
 from geocad_uav.cad.tools import regular_polygon as rp_tool      # noqa: E402
 from geocad_uav.cad.tools import square as sq_tool               # noqa: E402
 from geocad_uav.core.errors import ConstraintError               # noqa: E402
@@ -1423,135 +1422,6 @@ check("the boundary reaches the click", pick.value(sq_tool.SIZE_SIDE), 10.0,
 # --------------------------------------------------------------------------
 # EL - Ellipse
 # --------------------------------------------------------------------------
-print("\n== EL1: a = 20, b = 10 ==")
-el_layer = scratch_layer("Polygon", "cad_ellipse")
-el_session = ell_tool.EllipseSession()
-el = tb.BaseCadTool(el_session)
-el_session.set_origin(OX, OY)
-el_session.submit("20")                          # semi-major
-el_session.submit("10")                          # semi-minor
-el_session.submit("0d")                          # rotation
-check_true("fully constrained -> PREVIEW",
-           el_session.state == tb.ToolState.PREVIEW)
-
-el_feature = el.commit(el_layer, WORK_CRS, el_layer.crs())
-check("one feature written", el_layer.featureCount(), 1)
-el_geom = el_feature.geometry()
-exact_area = math.pi * 20.0 * 10.0
-# An inscribed n-gon is always short of the true ellipse by exactly
-# 1 - (n / 2pi) sin(2pi / n): 0.127 % at the engine's segment count, the same
-# deficit the circle test above measures. Assert the closed form rather than a
-# loose percentage -- a tolerance would hide a wrong sampling, this cannot.
-n_seg = el_session.segments
-inscribed = exact_area * (n_seg / (2.0 * math.pi)) * math.sin(
-    2.0 * math.pi / n_seg)
-deficit = 100.0 * (1.0 - inscribed / exact_area)
-print("        area {0:.6f} m2 against pi*a*b = {1:.6f} ({2:.4f} % low, "
-      "{3} segments)".format(el_geom.area(), exact_area, deficit, n_seg))
-# 1e-6 m2 on 627 m2 is 1.6e-9 relative: as tight as a shoelace sum over 72
-# vertices can be held in double precision.
-check("area equals the inscribed n-gon", el_geom.area(), inscribed, 1e-6)
-check_true("...and that is within 0.5 % of pi*a*b, as for the circle",
-           abs(el_geom.area() - exact_area) / exact_area < 0.005)
-check("the segment count is the engine's",
-      len(vertices(el_geom)) - 1, el_session.segments)
-
-expected_el, _ = pr.build(pr.TOOL_ELLIPSE,
-                          {"x": OX, "y": OY, "semi_major_m": 20.0,
-                           "semi_minor_m": 10.0, "azimuth_deg": 0.0,
-                           "segments": el_session.segments},
-                          WORK_CRS.authid())
-check("WKT matches the engine", max_vertex_gap(el_geom, expected_el), 0.0, 1e-6)
-
-print("\n== EL2: azimuth 0 puts the major axis on the compass bearing ==")
-# The whole plugin reads azimuth as a compass bearing through
-# core.planar.along_track_unit: 0 is North (+Y), 90 is East (+X). The grid,
-# the rectangle and the flight strips all use it, so the ellipse does too.
-pts = vertices(el_geom)[:-1]
-span_x = float(pts[:, 0].max() - pts[:, 0].min())
-span_y = float(pts[:, 1].max() - pts[:, 1].min())
-print("        span north {0:.6f} m, span east {1:.6f} m".format(span_y, span_x))
-check("at azimuth 0 the major axis spans 2a northwards", span_y, 40.0, 1e-6)
-check("...and the minor axis spans 2b eastwards", span_x, 20.0, 1e-6)
-
-east_session = ell_tool.EllipseSession()
-east_session.set_origin(OX, OY)
-east_session.submit("20")
-east_session.submit("10")
-east_session.submit("90d")
-east_geom, _ = pr.build(pr.TOOL_ELLIPSE, east_session.build_params(),
-                        WORK_CRS.authid())
-east_pts = vertices(east_geom)[:-1]
-check("at azimuth 90 the major axis spans 2a eastwards",
-      float(east_pts[:, 0].max() - east_pts[:, 0].min()), 40.0, 1e-6)
-check("...and 2b northwards",
-      float(east_pts[:, 1].max() - east_pts[:, 1].min()), 20.0, 1e-6)
-
-print("\n== EL3: b > a is refused by the engine ==")
-bad = ell_tool.EllipseSession()
-bad.set_origin(OX, OY)
-bad.submit("10")                                 # semi-major
-bad.submit("20")                                 # semi-minor, larger
-bad.submit("0d")
-before_count = el_layer.featureCount()
-bad_tool = tb.BaseCadTool(bad)
-check_raises("commit raises ConstraintError", ConstraintError,
-             bad_tool.commit, el_layer, WORK_CRS, el_layer.crs())
-check("no feature was written", el_layer.featureCount(), before_count)
-try:
-    pr.build(pr.TOOL_ELLIPSE, bad.build_params(), WORK_CRS.authid())
-    raised_el = None
-except ConstraintError as exc:
-    raised_el = exc
-check_true("the engine's message is Italian and not empty",
-           raised_el is not None and bool(raised_el.user_message.strip()))
-check_true("it says which semi-axis is wrong",
-           "semiasse" in raised_el.user_message.lower())
-print("        {0}".format(raised_el.formatted()))
-check_true("nothing is previewed for a refused shape",
-           bad.preview_points() is None)
-check_true("no silent swap: the values are still as typed",
-           bad.value("semi_major_m") == 10.0
-           and bad.value("semi_minor_m") == 20.0)
-
-print("\n== EL4: the record round-trips ==")
-el_record = pa.read_record(el_feature)
-check_true("cad_params round-trips off the feature", el_record is not None)
-check("cad_params semi-major", el_record.params["semi_major_m"], 20.0)
-check("cad_params semi-minor", el_record.params["semi_minor_m"], 10.0)
-check_true("tool identifier stored", el_record.tool == pr.TOOL_ELLIPSE)
-el_rebuilt, _ = pr.rebuild(el_record)
-check("record rebuilds the identical geometry",
-      max_vertex_gap(el_rebuilt, el_geom), 0.0, 1e-9)
-
-print("\n== EL5: 100 hovers build nothing ==")
-el_hover_layer = scratch_layer("Polygon", "cad_ellipse_hover")
-el_map = ell_tool.create(canvas, iface=None,
-                         layer_provider=lambda: el_hover_layer)
-el_map.activate()
-el_map.session.set_origin(OX, OY)
-baseline = canvas.refresh_calls
-for step in range(100):
-    el_map.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.2))
-check("no feature added during 100 hovers", el_hover_layer.featureCount(), 0)
-check("no QgsGeometry built during 100 hovers", el_map.geometry_builds, 0)
-check("no canvas.refresh() during 100 hovers",
-      canvas.refresh_calls - baseline, 0)
-el_map.deactivate()
-
-print("\n-- ellipse major axis from a second click --")
-el_pick = ell_tool.EllipseSession()
-el_pick.set_origin(OX, OY)
-el_pick.set_second(OX + 0.0, OY + 15.0)
-check("the click sets the semi-major", el_pick.value("semi_major_m"), 15.0,
-      1e-9)
-check("...and the bearing, due North", el_pick.value("azimuth_deg"), 0.0, 1e-9)
-check_true("the minor axis is still missing, so it is not ready",
-           not el_pick.is_ready)
-
-# --------------------------------------------------------------------------
-# RP - Regular polygon
-# --------------------------------------------------------------------------
 print("\n== RP1: hexagon of circumradius 10 ==")
 rp_layer = scratch_layer("Polygon", "cad_polygon")
 rp_session = rp_tool.RegularPolygonSession(n_sides=6)
@@ -1673,9 +1543,8 @@ check("record rebuilds the identical geometry",
 print("\n== R2: the three tools are registered like the others ==")
 # v1.4.1: eight became ten when Move and Resize joined; v1.4.3 made
 # it eleven with the Arco: so TOOL_GEOMETRY is eight.
-check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
+check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
 for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
-                        ("ellipse", "Ellisse", ell_tool.EllipseSession),
                         ("regular_polygon", "Poligono regolare",
                          rp_tool.RegularPolygonSession)):
     check_true("{0} is in the registry".format(key),
@@ -1703,8 +1572,8 @@ check("every shortcut is distinct", len(set(shortcuts)), len(shortcuts))
 check_true("every creating tool has a geometry type",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
-check("eight tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
-check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
+check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
+check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
 
 
 # ==========================================================================
@@ -2157,9 +2026,9 @@ rs5_layer.rollBack()
 # R2 (1.4.1) - registration
 # --------------------------------------------------------------------------
 print("\n== R2: Move and Resize are registered as edit-in-place ==")
-check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
-check("eight tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
-check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
+check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
+check("seven tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
+check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
 check_true("the registry and the toolbar order agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 for key, label, cls in (("move", "Sposta", mv_tool.MoveTool),
@@ -2380,7 +2249,6 @@ baseline_refresh = canvas.refresh_calls
 expected_ids = []
 for index, (session, submissions) in enumerate((
         (sq_tool.SquareSession(), ("10", "0d")),
-        (ell_tool.EllipseSession(), ("20", "10", "0d")),
         (rp_tool.RegularPolygonSession(n_sides=6), ("10", "0d")))):
     tool = tb.BaseCadTool(session)
     session.set_origin(OX + index * 100, OY)
@@ -2394,8 +2262,8 @@ for index, (session, submissions) in enumerate((
     check("{0}: area_ha matches its own geometry".format(session.title),
           stored[lf.AREA_HA_FIELD],
           round(stored.geometry().area() / 10_000.0, 2), 1e-9)
-check_true("the ids are 1, 2, 3 in order", expected_ids == [1, 2, 3])
-check("three features", mixed.featureCount(), 3)
+check_true("the ids are 1 and 2 in order", expected_ids == [1, 2])
+check("two features", mixed.featureCount(), 2)
 check("no canvas.refresh() was added by the attribute work",
       canvas.refresh_calls - baseline_refresh, 0)
 
@@ -2413,51 +2281,6 @@ def spans(points):
             float(arr[:, 1].max() - arr[:, 1].min()))
 
 
-print("\n== CE1: an ellipse is not square ==")
-ce_ring = ge.ellipse_ring((OX, OY), 20.0, 10.0, 0.0)
-ce_east, ce_north = spans(ce_ring)
-print("        engine a=20 b=10 az=0 -> {0:.6f} east x {1:.6f} north".format(
-    ce_east, ce_north))
-check("the engine spans 2b eastwards", ce_east, 20.0, 1e-6)
-check("...and 2a northwards", ce_north, 40.0, 1e-6)
-check_true("so the engine is not drawing a square",
-           abs(ce_east - ce_north) > 1.0)
-
-ce_geom, _ce_record = pr.build(
-    pr.TOOL_ELLIPSE, {"x": OX, "y": OY, "semi_major_m": 20.0,
-                      "semi_minor_m": 10.0, "azimuth_deg": 0.0},
-    WORK_CRS.authid())
-ce_box = ce_geom.boundingBox()
-check("the built geometry has the same bbox width", ce_box.width(), 20.0, 1e-6)
-check("...and height", ce_box.height(), 40.0, 1e-6)
-
-# The bug was in the preview, and this is the assertion that pins it.
-ce_session = ell_tool.EllipseSession()
-ce_session.set_origin(OX, OY)
-ce_session.submit("20")
-partial = ce_session.preview_points()
-check_true("with only a typed, something is previewed", partial is not None)
-pe, pn = spans(partial)
-print("        preview with a only -> {0:.3f} east x {1:.3f} north".format(
-    pe, pn))
-check_true("...and it is NOT a circle", abs(pe - pn) > 1.0)
-check("the major axis alone is previewed: 2 points", len(partial), 2)
-check("it spans 2a", pn, 40.0, 1e-9)
-check("and nothing across", pe, 0.0, 1e-9)
-check_true("the HUD says the second axis is still missing",
-           any("b = ?" in line for line in ce_session.hud_lines()))
-
-ce_session.submit("10")
-full = ce_session.preview_points()
-fe, fn = spans(full)
-check("once b is typed the preview is the ellipse: 2b east", fe, 20.0, 1e-9)
-check("...and 2a north", fn, 40.0, 1e-9)
-major_axis, minor_axis = ce_session.axes_points()
-check("axes_points gives the major axis", len(major_axis), 2)
-check("...and the minor one", len(minor_axis), 2)
-check("the minor axis is 2b long",
-      float(np.hypot(*(minor_axis[1] - minor_axis[0]))), 20.0, 1e-9)
-
 print("\n== CE2: the circle stays a circle ==")
 ce2 = circle_tool.CircleSession()
 ce2.set_origin(OX, OY)
@@ -2468,28 +2291,17 @@ check("the circle preview spans 2r east", ce, 20.0, 1e-6)
 check("...and 2r north", cn, 20.0, 1e-6)
 check_true("the circle HUD leads with the radius",
            any(line.startswith("R ") for line in ce2.hud_lines()))
-check_true("the ellipse HUD leads with the semi-axis",
-           any(line.startswith("a ") for line in ce_session.hud_lines()))
 _c_geom, c_record = pr.build(pr.TOOL_CIRCLE, ce2.build_params(),
                              WORK_CRS.authid())
 check_true("the record says circle", c_record.tool == pr.TOOL_CIRCLE)
-check_true("the ellipse record says ellipse",
-           pr.build(pr.TOOL_ELLIPSE, ce_session.build_params(),
-                    WORK_CRS.authid())[1].tool == pr.TOOL_ELLIPSE)
-
-print("\n== CE3: hovering an ellipse is still free ==")
-ce3_layer = scratch_layer("Polygon", "cad_ce3")
-ce3 = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce3_layer)
-ce3.activate()
-ce3.session.set_origin(OX, OY)
-baseline = canvas.refresh_calls
-for step in range(100):
-    ce3.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.3))
-check("no feature added during 100 hovers", ce3_layer.featureCount(), 0)
-check("no QgsGeometry built during 100 hovers", ce3.geometry_builds, 0)
-check("no canvas.refresh() during 100 hovers",
-      canvas.refresh_calls - baseline, 0)
-ce3.deactivate()
+check_true("a circle is round: the two spans agree", abs(ce - cn) < 1e-6)
+# v1.4.5: this used to compare against the ellipse tool, now withdrawn. The
+# engine's ellipse_ring is still there and still not round; test_geometry
+# keeps that golden.
+check_true("the ellipse primitive is still in the engine, and still oval",
+           abs((lambda r: (r[:, 0].max() - r[:, 0].min())
+                - (r[:, 1].max() - r[:, 1].min()))(
+                   ge.ellipse_ring((OX, OY), 20.0, 10.0, 0.0))) > 1.0)
 
 # --------------------------------------------------------------------------
 # AR - the arc
@@ -2713,9 +2525,9 @@ check("the centre did not move",
       pv3_rotated.boundingBox().center().x(), OX, 1e-9)
 
 print("\n== R2 (1.4.3): the arc joins the registry ==")
-check("the registry holds eleven tools", len(tools_pkg.TOOL_REGISTRY), 11)
-check("eight tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 8)
-check("the dock mounts all eleven", len(plugin_mod.CAD_TOOL_ORDER), 11)
+check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
+check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
+check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
 check_true("the registry and the toolbar order still agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 check_true("the arc is registered", "arc" in tools_pkg.TOOL_REGISTRY)
@@ -2735,94 +2547,6 @@ check("every shortcut is still distinct", len(set(shortcuts)), len(shortcuts))
 # ==========================================================================
 # v1.4.4 - construction guides on a second rubber band
 # ==========================================================================
-print("\n== CE4: the ellipse draws its axes ==")
-ce4_layer = scratch_layer("Polygon", "cad_guides")
-ce4 = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce4_layer)
-ce4.activate()
-ce4.session.set_origin(OX, OY)
-ce4.session.submit("20")
-ce4.session.submit("10")
-ce4.session.submit("0d")
-ce4.update_band(canvas, None)
-
-guide = ce4._guide_band
-check_true("a second band exists for the guides", guide is not None)
-check("both axes are drawn", guide.size(), 2)
-check("each axis is a segment", guide.partSize(0), 2)
-check("...and so is the other", guide.partSize(1), 2)
-check("four guide vertices in all", guide.numberOfVertices(), 4)
-
-
-def part_span(band, index):
-    """(east, north) extent of one part of a rubber band."""
-    points = [band.getPoint(index, i) for i in range(band.partSize(index))]
-    xs = [p.x() for p in points]
-    ys = [p.y() for p in points]
-    return max(xs) - min(xs), max(ys) - min(ys)
-
-
-major_e, major_n = part_span(guide, 0)
-minor_e, minor_n = part_span(guide, 1)
-print("        major {0:.6f} E x {1:.6f} N, minor {2:.6f} E x {3:.6f} N".format(
-    major_e, major_n, minor_e, minor_n))
-check("the major axis runs 2a = 40 m north", major_n, 40.0, 1e-6)
-check("...and nothing east", major_e, 0.0, 1e-6)
-check("the minor axis runs 2b = 20 m east", minor_e, 20.0, 1e-6)
-check("...and nothing north", minor_n, 0.0, 1e-6)
-check_true("the shape band still holds the ellipse itself",
-           ce4._band.numberOfVertices() > 4)
-
-print("\n-- the guides follow the shape --")
-# Every slot is already filled, so submit() has nothing left to take:
-# change the value the panel's spin box would change.
-ce4.session.set_value("azimuth_deg", 90.0)
-ce4.update_band(canvas, None)
-major_e, major_n = part_span(ce4._guide_band, 0)
-check("at azimuth 90 the major axis runs east", major_e, 40.0, 1e-6)
-check("...and no longer north", major_n, 0.0, 1e-6)
-
-print("\n-- a tool that publishes no guides draws none --")
-rect_guides = rect_tool.create(canvas, iface=None,
-                               layer_provider=lambda: ce4_layer)
-rect_guides.activate()
-rect_guides.session.set_origin(OX, OY)
-rect_guides.session.submit("30")
-rect_guides.session.submit("20")
-rect_guides.session.submit("0d")
-rect_guides.update_band(canvas, None)
-check("a rectangle publishes no axes", rect_guides._guide_band.size(), 0)
-check_true("so the guide band stays hidden",
-           rect_guides._guide_band.isVisible() is False)
-check_true("its shape band is drawn as usual",
-           rect_guides._band.numberOfVertices() >= 4)
-rect_guides.deactivate()
-
-print("\n-- guides cost nothing on a hover and vanish on Escape --")
-ce4b_layer = scratch_layer("Polygon", "cad_guides_hover")
-ce4b = ell_tool.create(canvas, iface=None, layer_provider=lambda: ce4b_layer)
-ce4b.activate()
-ce4b.session.set_origin(OX, OY)
-ce4b.session.submit("15")
-baseline = canvas.refresh_calls
-builds = ce4b.geometry_builds
-for step in range(100):
-    ce4b.canvasMoveEvent(Move(OX + step * 0.5, OY + step * 0.2))
-check("no QgsGeometry built during 100 hovers with guides on",
-      ce4b.geometry_builds - builds, 0)
-check("no canvas.refresh() during 100 hovers",
-      canvas.refresh_calls - baseline, 0)
-check("no feature added", ce4b_layer.featureCount(), 0)
-ce4b.clear_band()
-check("Escape empties the guide band", ce4b._guide_band.numberOfVertices(), 0)
-check_true("...and hides it", ce4b._guide_band.isVisible() is False)
-ce4b.deactivate()
-ce4.deactivate()
-
-check_true("the circle publishes no axes yet, so it draws no diameters",
-           not hasattr(circle_tool.CircleSession(), "axes_points"))
-
-
-print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()
 if SKIPS:

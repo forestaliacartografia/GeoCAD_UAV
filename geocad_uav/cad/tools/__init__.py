@@ -19,7 +19,6 @@ TOOL_REGISTRY = {
     "circle": ("circle", "Cerchio", "Alt+Shift+C"),
     "arc": ("arc", "Arco", "Alt+Shift+A"),
     "square": ("square", "Quadrato", "Alt+Shift+S"),
-    "ellipse": ("ellipse", "Ellisse", "Alt+Shift+E"),
     "regular_polygon": ("regular_polygon", "Poligono regolare", "Alt+Shift+G"),
     "rotate": ("rotate", "Ruota", "Alt+Shift+T"),
     "move": ("move", "Sposta", "Alt+Shift+M"),

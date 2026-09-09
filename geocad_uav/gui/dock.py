@@ -25,7 +25,6 @@ from ..cad.tools.base import ToolState
 from ..settings import settings as app_settings
 from .export_panel import ExportPanel
 from .forest_panel import ForestPanel
-from .grid_panel import GridPanel
 from .mission_player import MissionPlayer, RATES as PLAYER_RATES
 from .uav_panel import UavPanel
 
@@ -43,8 +42,7 @@ class GeoCadDock(QDockWidget):
         self.iface = iface
         self._connections = []
         self._cad_tool = None
-        for panel in (getattr(self, "grid_panel", None),
-                      getattr(self, "forest_panel", None),
+        for panel in (getattr(self, "forest_panel", None),
                       getattr(self, "uav_panel", None),
                       getattr(self, "export_panel", None),
                       getattr(self, "player", None)):
@@ -61,7 +59,9 @@ class GeoCadDock(QDockWidget):
 
     # -- construction -----------------------------------------------------
 
-    TAB_CAD, TAB_GRID, TAB_FOREST, TAB_UAV, TAB_EXPORT, TAB_SETTINGS = range(6)
+    # v1.4.5: the Grid tab was withdrawn; the lattice engine (core.grid) is
+    # still there and still feeds the reforestation schemes.
+    TAB_CAD, TAB_FOREST, TAB_UAV, TAB_EXPORT, TAB_SETTINGS = range(5)
 
     def _scroll_page(self, widgets):
         """A scrollable tab page holding the given widgets, top-aligned."""
@@ -142,10 +142,6 @@ class GeoCadDock(QDockWidget):
 
         self.tabs.addTab(self._scroll_page([self.cad_toolbar, self.cad_box]),
                          tr("CAD"))
-
-        # ------------------------------------------------------------ GRIGLIE
-        self.grid_panel = GridPanel(self.iface)
-        self.tabs.addTab(self._scroll_page([self.grid_panel]), tr("Griglie"))
 
         # ------------------------------------------------------------ FORESTA
         self.forest_panel = ForestPanel(self.iface)
@@ -419,8 +415,7 @@ class GeoCadDock(QDockWidget):
                 pass
         self._connections = []
         self._cad_tool = None
-        for panel in (getattr(self, "grid_panel", None),
-                      getattr(self, "forest_panel", None),
+        for panel in (getattr(self, "forest_panel", None),
                       getattr(self, "uav_panel", None),
                       getattr(self, "export_panel", None),
                       getattr(self, "player", None)):

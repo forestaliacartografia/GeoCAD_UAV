@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.4
+version=1.4.5
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,16 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.4
+changelog=1.4.5
+    - Ritirata la scheda Griglie. Il motore del reticolo resta e continua a
+      generare i sesti d'impianto: e' la scheda a sparire, non la funzione.
+    - Il selettore dell'area vive ora per conto suo, in gui/extent_source.py,
+      e resta uno solo per tutto il plugin: Rimboschimento e UAV usano lo
+      stesso, come prima.
+    - Ritirato lo strumento Ellisse dalla barra CAD, che torna a dieci
+      strumenti. La primitiva ellisse resta nel motore, quindi le ellissi
+      gia' disegnate si aprono, si spostano e si ridimensionano come prima.
+    1.4.4
     - Mentre si disegna un'ellisse i due assi vengono tracciati sulla mappa
       con una linea punteggiata, oltre al contorno: si vede subito quale
       semiasse e' quale e come e' orientata la figura.

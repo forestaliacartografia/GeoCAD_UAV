@@ -17,8 +17,8 @@ Two rules are structural rather than cosmetic:
 * **The DEM comes from the project.** No download, no API key, no remote
   service. Remote elevation adapters are their own milestone.
 
-The AOI picker is :class:`~.grid_panel.ExtentSource`, shared with the Grid and
-Forest tabs, so "the area" means the same thing in all three.
+The AOI picker is :class:`~.extent_source.ExtentSource`, shared with the
+reforestation tab, so "the area" means the same thing in both.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from ..uav import drones as drone_lib
 from ..uav import mission as mission_mod
 from ..uav import photogrammetry as pg
 from ..uav import survey as sv
-from .grid_panel import ExtentSource
+from .extent_source import ExtentSource
 
 
 def tr(text):

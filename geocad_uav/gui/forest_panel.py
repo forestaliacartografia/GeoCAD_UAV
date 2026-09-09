@@ -6,7 +6,7 @@ are ``forest.stats.compute_stats``, both untouched. This panel supplies the
 extent, the ``GridSpec`` and the optional topographic filter, previews the
 result, and writes it through ``io.layer_factory.build_planting_layers``.
 
-The extent picker is :class:`~.grid_panel.ExtentSource`, shared with the Grid
+The extent picker is :class:`~.extent_source.ExtentSource`, shared with the UAV
 tab so the two cannot disagree about what "the area" means.
 """
 
@@ -32,7 +32,7 @@ from ..core.errors import GeoCadError
 from ..forest import planting as planting_mod
 from ..forest import stats as stats_mod
 from ..io import layer_factory as lf
-from .grid_panel import ExtentSource
+from .extent_source import ExtentSource
 
 
 def tr(text):

@@ -197,10 +197,14 @@ print("\n== U3: the dock has six tabs in a fixed order ==")
 tabs = dock.tabs
 titles = [tabs.tabText(i) for i in range(tabs.count())]
 print("        tabs: {0}".format(titles))
-check("tab count", tabs.count(), 6)
+# v1.4.5: the Griglie tab was withdrawn. core.grid stays -- the reforestation
+# schemes are built on it, they simply no longer have a tab of their own.
+check("tab count", tabs.count(), 5)
 check_true("titles and order match the contract",
-           titles == ["CAD", "Griglie", "Foresta", "UAV", "Layer/Export",
+           titles == ["CAD", "Foresta", "UAV", "Layer/Export",
                       "Impostazioni"])
+check_true("no Grid tab is left, not even an empty one",
+           not any("rigli" in t for t in titles))
 check_true("no MISSIONI tab was added",
            not any("ission" in t for t in titles))
 
@@ -218,10 +222,12 @@ check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
 # is asserted against the registry below, so it follows the shipped set; this
 # literal is the floor that says the toolbar was actually populated.
 # v1.4.3: ten became eleven when the Arco tool joined.
-check("the toolbar carries every shipped CAD tool", len(cad_mounted), 11)
+# v1.4.5: eleven back to ten -- the Ellisse tool was withdrawn.
+check("the toolbar carries every shipped CAD tool", len(cad_mounted), 10)
 labels = {a.text() for a in cad_mounted}
+check_true("Ellisse is not offered any more", "Ellisse" not in labels)
 for expected in ("Linea", "Polilinea", "Rettangolo", "Quadrato", "Cerchio",
-                 "Ellisse", "Arco", "Poligono regolare", "Ruota", "Sposta",
+                 "Arco", "Poligono regolare", "Ruota", "Sposta",
                  "Ridimensiona"):
     check_true("'{0}' is on the dock toolbar".format(expected),
                expected in labels)
