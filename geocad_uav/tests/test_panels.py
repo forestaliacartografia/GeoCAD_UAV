@@ -215,6 +215,239 @@ panel.teardown()
 forest.teardown()
 
 # --------------------------------------------------------------------------
+# P1 - the spacing an operator types is the spacing on the ground
+# --------------------------------------------------------------------------
+print("\n== P1: 200 x 100, square 5 x 5, margin 0, azimuth 0 ==")
+from geocad_uav.forest import planting as planting_mod          # noqa: E402
+
+P1_AOI = QgsGeometry.fromWkt(rect_wkt(OX, OY, 200.0, 100.0))
+p1_spec = grid_mod.GridSpec(spacing_x=5.0, spacing_y=5.0,
+                            pattern=grid_mod.PATTERN_SQUARE)
+p1 = planting_mod.plan_planting_for_geometry(P1_AOI, p1_spec,
+                                             compute_edge_distance=False)
+
+
+def spacing_measurements(result):
+    """(along a row, between rows) measured on the plants themselves."""
+    by_row = {}
+    by_col = {}
+    for plant in result.plants:
+        by_row.setdefault(plant.row_id, []).append(plant)
+        by_col.setdefault(plant.seq_in_row, []).append(plant)
+    along, across = [], []
+    for plants in by_row.values():
+        plants.sort(key=lambda p: p.seq_in_row)
+        along.extend(math.hypot(b.x - a.x, b.y - a.y)
+                     for a, b in zip(plants, plants[1:]))
+    for plants in by_col.values():
+        plants.sort(key=lambda p: p.row_id)
+        across.extend(math.hypot(b.x - a.x, b.y - a.y)
+                      for a, b in zip(plants, plants[1:]))
+    return along, across
+
+
+along, across = spacing_measurements(p1)
+print("        {0:,} plants, {1} rows".format(len(p1.plants), p1.n_rows))
+print("        along a row : mean {0:.6f}  min {1:.6f}  max {2:.6f}".format(
+    np.mean(along), np.min(along), np.max(along)))
+print("        between rows: mean {0:.6f}  min {1:.6f}  max {2:.6f}".format(
+    np.mean(across), np.min(across), np.max(across)))
+check("mean distance along a row", float(np.mean(along)), 5.0, 1e-6)
+check("...and every single one of them", float(np.max(np.abs(
+    np.asarray(along) - 5.0))), 0.0, 1e-6)
+check("mean distance between rows", float(np.mean(across)), 5.0, 1e-6)
+check("...and every single one of them", float(np.max(np.abs(
+    np.asarray(across) - 5.0))), 0.0, 1e-6)
+
+print("\n-- and the two are not interchangeable --")
+p1b_spec = grid_mod.GridSpec(spacing_x=3.0, spacing_y=2.0,
+                             pattern=grid_mod.PATTERN_RECT)
+p1b = planting_mod.plan_planting_for_geometry(P1_AOI, p1b_spec,
+                                              compute_edge_distance=False)
+along_b, across_b = spacing_measurements(p1b)
+check("spacing_x is the step along a row", float(np.mean(along_b)), 3.0, 1e-6)
+check("spacing_y is the step between rows", float(np.mean(across_b)), 2.0,
+      1e-6)
+
+# what the panel sends is what the operator typed, in that order
+p1_panel = ForestPanel(iface)
+p1_panel.extent.set_extent(P1_AOI, CRS)
+p1_panel.plant_spacing.setValue(3.0)
+p1_panel.row_spacing.setValue(2.0)
+p1_panel.margin.setValue(0.0)
+p1_panel.azimuth.setValue(0.0)
+panel_spec = p1_panel.build_spec()
+check("the panel maps 'distanza fra le piante' onto spacing_x",
+      panel_spec.spacing_x, 3.0)
+check("...and 'distanza fra le file' onto spacing_y", panel_spec.spacing_y,
+      2.0)
+panel_plan = p1_panel.compute()
+along_p, across_p = spacing_measurements(panel_plan)
+check("so the panel's plants sit 3 m apart along a row",
+      float(np.mean(along_p)), 3.0, 1e-6)
+check("...and its rows 2 m apart", float(np.mean(across_p)), 2.0, 1e-6)
+
+# the azimuth is across the rows, which is what the label now says
+first_row = sorted([p for p in p1.plants if p.row_id == 1],
+                   key=lambda p: p.seq_in_row)
+delta = (first_row[1].x - first_row[0].x, first_row[1].y - first_row[0].y)
+bearing = math.degrees(math.atan2(delta[0], delta[1])) % 360.0
+print("        at azimuth 0 a row runs at bearing {0:.3f} deg".format(bearing))
+check("at azimuth 0 the rows run due East", bearing, 90.0, 1e-6)
+
+# --------------------------------------------------------------------------
+# P2 - planimetric spacing, heights from the DEM
+# --------------------------------------------------------------------------
+print("\n== P2: with a DEM the schedule reports XY and 3D ==")
+import tempfile                                                 # noqa: E402
+
+from osgeo import gdal, osr                                     # noqa: E402
+from qgis.core import QgsRasterLayer                            # noqa: E402
+
+from geocad_uav.core.z import TerrainModel                      # noqa: E402
+
+P2_TMP = tempfile.mkdtemp(prefix="geocad_forest_dem_")
+CELL, NX, NY = 5.0, 60, 40
+SLOPE = 0.25                       # a 25 % ramp: 3D distance visibly longer
+xs = OX + (np.arange(NX) + 0.5) * CELL
+ys = OY + 100.0 - (np.arange(NY) + 0.5) * CELL
+XX, _YY = np.meshgrid(xs, ys)
+gdal.UseExceptions()
+dem_path = os.path.join(P2_TMP, "ramp.tif")
+_ds = gdal.GetDriverByName("GTiff").Create(dem_path, NX, NY, 1,
+                                           gdal.GDT_Float32)
+_ds.SetGeoTransform((OX, CELL, 0.0, OY + 100.0, 0.0, -CELL))
+_srs = osr.SpatialReference()
+_srs.ImportFromEPSG(32632)
+_ds.SetProjection(_srs.ExportToWkt())
+_ds.GetRasterBand(1).WriteArray(
+    (200.0 + SLOPE * (XX - OX)).astype(np.float32))
+_ds.FlushCache()
+_ds = None
+
+dem_layer = QgsRasterLayer(dem_path, "ramp 25%", "gdal")
+check_true("the DEM is valid", dem_layer.isValid())
+QgsProject.instance().addMapLayer(dem_layer)
+
+terrain, _warn = TerrainModel.from_layer(
+    dem_layer, CRS, (OX, OY, OX + 200.0, OY + 100.0), margin_m=10.0)
+p2_spec = grid_mod.GridSpec(spacing_x=5.0, spacing_y=5.0,
+                            pattern=grid_mod.PATTERN_SQUARE)
+p2 = planting_mod.plan_planting_for_geometry(
+    QgsGeometry.fromWkt(rect_wkt(OX + 10.0, OY + 10.0, 100.0, 50.0)),
+    p2_spec, terrain=terrain, compute_edge_distance=False)
+
+heights = [p.z for p in p2.plants if p.z is not None]
+check_true("every plant got a height from the DEM",
+           len(heights) == len(p2.plants) and len(heights) > 0)
+sampled = terrain.sample(
+    np.array([p.x for p in p2.plants]), np.array([p.y for p in p2.plants]))
+check("each height is the sampled one",
+      float(np.max(np.abs(np.asarray(heights) - sampled))), 0.0, 1e-9)
+
+along_p2, _ = spacing_measurements(p2)
+check("the planimetric step is still exactly 5 m on the slope",
+      float(np.mean(along_p2)), 5.0, 1e-6)
+mean_3d = ForestPanel.mean_3d_spacing(p2)
+expected_3d = math.hypot(5.0, 5.0 * SLOPE)
+print("        XY {0:.6f} m, 3D {1:.6f} m (expected {2:.6f})".format(
+    float(np.mean(along_p2)), mean_3d, expected_3d))
+check("the 3D step is the slope distance", mean_3d, expected_3d, 1e-6)
+check_true("...and it is longer than the planimetric one",
+           mean_3d > float(np.mean(along_p2)))
+
+p2_panel = ForestPanel(iface)
+p2_panel.extent.set_extent(
+    QgsGeometry.fromWkt(rect_wkt(OX + 10.0, OY + 10.0, 100.0, 50.0)), CRS)
+p2_panel.plant_spacing.setValue(5.0)
+p2_panel.row_spacing.setValue(5.0)
+p2_panel.margin.setValue(0.0)
+p2_panel.dem_combo.setLayer(dem_layer)
+p2_panel.use_slope.setChecked(True)
+p2_panel.refresh_preview()
+schedule = p2_panel.last_schedule or []
+check_true("the schedule reports the planimetric step",
+           any("Distanza piante (XY)" in line for line in schedule))
+check_true("...and the slope step next to it",
+           any("Distanza piante (3D)" in line for line in schedule))
+check_true("...and says which one the lattice used",
+           any("planimetrica" in line for line in schedule))
+check_true("the heights are reported", any("Quota min" in line
+                                           for line in schedule))
+check_true("so is the slope", any("Pendenza" in line for line in schedule))
+
+# --------------------------------------------------------------------------
+# P3 - the schedule is the engine's numbers, not the panel's
+# --------------------------------------------------------------------------
+print("\n== P3: every line of the schedule comes from the engine ==")
+p3_panel = ForestPanel(iface)
+p3_panel.extent.set_extent(QgsGeometry.fromWkt(rect_wkt(OX, OY, 200.0, 100.0)),
+                           CRS)
+p3_panel.plant_spacing.setValue(3.0)
+p3_panel.row_spacing.setValue(2.0)
+p3_panel.margin.setValue(2.0)
+p3_panel.azimuth.setValue(0.0)
+before_layers = len(QgsProject.instance().mapLayers())
+baseline_refresh = canvas.refresh_calls
+for _ in range(100):
+    p3_panel.refresh_preview()
+result3 = p3_panel.last_result
+stats3 = stats_mod.compute_stats(result3)
+schedule3 = p3_panel.last_schedule
+print("        {0}".format(" | ".join(schedule3[1:5])))
+
+check("no layer created by 100 previews",
+      len(QgsProject.instance().mapLayers()), before_layers)
+check("no canvas.refresh() during 100 previews",
+      canvas.refresh_calls - baseline_refresh, 0)
+for label, value in (
+        ("Piante effettive", "{0:,}".format(stats3.n_plants)),
+        ("Piante teoriche", "{0:,}".format(stats3.theoretical_count)),
+        ("File:", "{0:,}".format(stats3.n_rows)),
+        ("Densita' effettiva", "{0:,.1f}".format(stats3.density_per_ha)),
+        ("Densita' teorica", "{0:,.1f}".format(
+            stats3.theoretical_density_per_ha)),
+        ("Superficie utile", "{0:,.2f}".format(stats3.usable_area_ha)),
+        ("Superficie lorda", "{0:,.2f}".format(stats3.aoi_area_ha)),
+        ("Lunghezza totale file", "{0:,.1f}".format(
+            stats3.row_length_total_m))):
+    line = next((l for l in schedule3 if label in l), "")
+    check_true("{0} is on the schedule, with the engine's number".format(
+        label.rstrip(":")), value in line)
+check_true("the pattern is named", any("Sesto:" in l for l in schedule3))
+check_true("the spacings are stated to the millimetre",
+           any("3.000 m" in l for l in schedule3)
+           and any("2.000 m" in l for l in schedule3))
+
+print("\n-- the two-click button measures, and it says so --")
+check_true("the button is named after what it does",
+           p3_panel.step_from_map.text() == "Misura distanza in mappa")
+measured_value = {}
+
+
+def _capture(length, azimuth):
+    measured_value["length"] = length
+    p3_panel.plant_spacing.setValue(length)
+
+
+_capture(3.0, 0.0)
+check("two clicks 3.000 m apart set the plant spacing",
+      p3_panel.plant_spacing.value(), 3.0, 1e-9)
+check("...which is what reaches the engine",
+      p3_panel.build_spec().spacing_x, 3.0, 1e-9)
+panel_source = open(os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "gui", "forest_panel.py"), encoding="utf-8").read()
+check_true("the azimuth label no longer claims to follow the rows",
+           'tr("Orientamento file")' not in panel_source)
+check_true("...and the tooltip states the real relationship",
+           "perpendicolari" in panel_source)
+
+p1_panel.teardown()
+p2_panel.teardown()
+p3_panel.teardown()
+
+# --------------------------------------------------------------------------
 # G1 (v1.4.5) - the Grid tab left, the lattice engine stayed
 # --------------------------------------------------------------------------
 print("\n== G1: no Grid tab, and no orphan imports ==")

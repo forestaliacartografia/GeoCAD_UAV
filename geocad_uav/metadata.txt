@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.6
+version=1.4.7
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,28 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.6
+changelog=1.4.7
+    - Le due distanze del sesto ora si distinguono a colpo d'occhio:
+      «Distanza fra le piante (sulla fila)» e «Distanza fra le file». Il
+      motore le rispettava gia': misurate su un sesto 5x5 le piante cadono a
+      5.000000 m sia lungo la fila sia fra le file.
+    - Corretta l'etichetta dell'orientamento. L'azimut e' l'inclinazione del
+      reticolo misurata da Nord in senso orario, e le file corrono
+      perpendicolari: con azimut 0 le file vanno da Ovest a Est. Prima si
+      leggeva «Orientamento file», che diceva il contrario.
+    - Il tasto «Sesto da due click» si chiama ora «Misura distanza in mappa»:
+      misura una distanza sulla mappa e la scrive nella distanza fra le
+      piante, che e' quello che ha sempre fatto.
+    - Nuovo prospetto del sesto sotto l'anteprima: schema, distanze, margine,
+      azimut, superficie lorda e utile, piante effettive e teoriche,
+      riempimento, densita' teorica ed effettiva, numero e lunghezza totale
+      delle file. Con un DEM si aggiungono quota minima e massima,
+      dislivello, pendenza minima, media e massima e le piante escluse dai
+      filtri.
+    - Con un DEM il prospetto riporta la distanza fra le piante sia in
+      pianta sia sul terreno. La spaziatura resta planimetrica e il prospetto
+      lo dichiara: le quote vengono dal DEM, il reticolo no.
+    1.4.6
     - La tabella attributi di un layer CAD mostra ora tre sole colonne, in
       quest'ordine: cad_id, area_ha e perimeter_m. Sono quelle che si leggono
       e si ordinano davvero.
