@@ -20,6 +20,8 @@ TOOL_REGISTRY = {
     "arc": ("arc", "Arco", "Alt+Shift+A"),
     "square": ("square", "Quadrato", "Alt+Shift+S"),
     "regular_polygon": ("regular_polygon", "Poligono regolare", "Alt+Shift+G"),
+    "digitize": ("digitize", "Poligono digitalizzato", "Alt+Shift+D"),
+    "manual_input": ("manual_input", "Inserimento manuale", "Alt+Shift+I"),
     "rotate": ("rotate", "Ruota", "Alt+Shift+T"),
     "move": ("move", "Sposta", "Alt+Shift+M"),
     "resize": ("resize", "Ridimensiona", "Alt+Shift+Z"),

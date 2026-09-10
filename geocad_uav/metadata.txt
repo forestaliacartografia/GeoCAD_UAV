@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.9
+version=1.5.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,24 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.9
+changelog=1.5.0
+    - Nuovo strumento «Poligono digitalizzato»: si clicca vertice per
+      vertice e si chiude cliccando di nuovo il primo. La tolleranza di
+      chiusura e' in pixel, quindi vale a qualsiasi scala. Il tasto
+      destro annulla un vertice per volta (Ctrl+Z), Ctrl+Y lo rimette;
+      solo a costruzione vuota il tasto destro annulla tutto.
+    - Nuovo strumento «Inserimento manuale»: si clicca dove va la forma
+      e si scrivono le misure in una finestra. Rettangolo, quadrato,
+      cerchio e poligono regolare, ciascuno dimensionabile con la misura
+      che si ha davvero: lato, diagonale, area, perimetro, raggio,
+      apotema, diametro o circonferenza.
+    - Nessuna geometria nuova: entrambi gli strumenti passano dalle
+      primitive gia' presenti, cosi' un cerchio scritto come area e' lo
+      stesso cerchio dello strumento Cerchio, vertice per vertice.
+    - La lettura di area e perimetro del poligono digitalizzato e'
+      calcolata rispetto al primo vertice: sulle coordinate UTM il
+      calcolo diretto perdeva 6e-4 m2 su 1908 m2.
+    1.4.9
     - Il cerchio disegna i suoi due diametri come guide di costruzione:
       Nord-Sud ed Est-Ovest, punteggiati, mentre il raggio si digita o si
       insegue col mouse. Servono a centrare una piazzola o un impluvio

@@ -1542,8 +1542,10 @@ check("record rebuilds the identical geometry",
 # --------------------------------------------------------------------------
 print("\n== R2: the three tools are registered like the others ==")
 # v1.4.1: eight became ten when Move and Resize joined; v1.4.3 made
-# it eleven with the Arco: so TOOL_GEOMETRY is eight.
-check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
+# it eleven with the Arco; v1.5.0 adds the digitizer and the manual input,
+# both of which create polygons, so the registry is twelve and
+# TOOL_GEOMETRY is nine.
+check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
 for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
                         ("regular_polygon", "Poligono regolare",
                          rp_tool.RegularPolygonSession)):
@@ -1572,8 +1574,8 @@ check("every shortcut is distinct", len(set(shortcuts)), len(shortcuts))
 check_true("every creating tool has a geometry type",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
-check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check("nine tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
+check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
 
 
 # ==========================================================================
@@ -2026,9 +2028,9 @@ rs5_layer.rollBack()
 # R2 (1.4.1) - registration
 # --------------------------------------------------------------------------
 print("\n== R2: Move and Resize are registered as edit-in-place ==")
-check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
-check("seven tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
+check("nine tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
+check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
 check_true("the registry and the toolbar order agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 for key, label, cls in (("move", "Sposta", mv_tool.MoveTool),
@@ -2525,9 +2527,9 @@ check("the centre did not move",
       pv3_rotated.boundingBox().center().x(), OX, 1e-9)
 
 print("\n== R2 (1.4.3): the arc joins the registry ==")
-check("the registry holds ten tools", len(tools_pkg.TOOL_REGISTRY), 10)
-check("seven tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 7)
-check("the dock mounts all ten", len(plugin_mod.CAD_TOOL_ORDER), 10)
+check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
+check("nine tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
+check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
 check_true("the registry and the toolbar order still agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 check_true("the arc is registered", "arc" in tools_pkg.TOOL_REGISTRY)
@@ -2777,6 +2779,380 @@ check_true("...and invisible", not ce5_rect._guide_band.isVisible())
 check_true("but its own preview is still drawn",
            ce5_rect._band.numberOfVertices() > 0)
 ce5_rect.deactivate()
+
+
+# ==========================================================================
+# v1.5.0 (S2) - click-to-polygon and manual parametric input
+# ==========================================================================
+from geocad_uav.cad.tools import digitize as dg_tool             # noqa: E402
+from geocad_uav.cad.tools import manual_input as mi_tool         # noqa: E402
+
+
+class Click:
+    """Duck-typed stand-in for QgsMapMouseEvent in a release handler."""
+
+    def __init__(self, x, y, button=Qt.MouseButton.LeftButton):
+        self._point = QgsPointXY(float(x), float(y))
+        self._button = button
+
+    def mapPoint(self):                                         # noqa: N802
+        return self._point
+
+    def button(self):
+        return self._button
+
+
+RIGHT = Qt.MouseButton.RightButton
+DG_CORNERS = ((OX, OY), (OX + 40.0, OY), (OX + 40.0, OY + 30.0),
+              (OX, OY + 30.0))
+
+
+def digitize_tool(layer, corners=DG_CORNERS):
+    """A digitizer with the corners already clicked."""
+    tool = dg_tool.create(canvas, iface=None, layer_provider=lambda: layer)
+    tool.activate()
+    for x, y in corners:
+        tool.canvasReleaseEvent(Click(x, y))
+    return tool
+
+
+print("\n== DG1: four clicks are four corners, and nothing else ==")
+dg_layer = scratch_layer("Polygon", "cad_digitize")
+dg1 = digitize_tool(dg_layer)
+check("four clicks, four vertices", len(dg1.session.ring()), 4)
+check("the layer is still empty while digitizing", dg_layer.featureCount(), 0)
+dg1_params = dg1.session.build_params()
+print("        params: {0}".format(
+    [[round(x - OX, 3), round(y - OY, 3)] for x, y in dg1_params["points"]]))
+check("the parameters are the clicks themselves",
+      max(abs(a - b) for point, corner in zip(dg1_params["points"], DG_CORNERS)
+          for a, b in zip(point, corner)), 0.0, 1e-9)
+check_true("the ring is left open: the builder closes it",
+           len(dg1_params["points"]) == 4)
+dg1_hud = dg1.session.hud_lines()
+print("        hud: {0}".format(dg1_hud[-4:]))
+check_true("the HUD measures the ring as it stands",
+           any("Area 1200.000 m2" in line for line in dg1_hud)
+           and any("Perimetro 140.000 m" in line for line in dg1_hud))
+
+print("\n-- the readout is measured about the first vertex --")
+DG_IRREGULAR = ((OX, OY), (OX + 37.4, OY + 2.9), (OX + 51.2, OY + 28.6),
+                (OX + 22.7, OY + 44.1), (OX - 9.3, OY + 31.5),
+                (OX - 12.6, OY + 11.8), (OX - 8.4, OY + 17.9))
+dg1b_layer = scratch_layer("Polygon", "cad_digitize_irregular")
+dg1b = digitize_tool(dg1b_layer, corners=DG_IRREGULAR)
+dg1b_geos, _ = pr.build(pr.TOOL_DIGITIZED_POLYGON, dg1b.session.build_params(),
+                        WORK_CRS.authid())
+dg1b_local = ge.polygon_area(dg1b.session.local_ring())
+dg1b_absolute = ge.polygon_area(dg1b.session.ring())
+print("        GEOS {0:.9f}, about the first vertex {1:.9f}, "
+      "about the CRS origin {2:.9f}".format(
+          dg1b_geos.area(), dg1b_local, dg1b_absolute))
+# 1e-6, not 1e-9: GEOS itself lands 7e-9 away from the exact 1907.89 on
+# these coordinates, so a tighter bound would be measuring the noise.
+check("the HUD area is the geometry's area", dg1b_local, dg1b_geos.area(),
+      1e-6)
+print("        error about the first vertex {0:.3e} m2, about the CRS "
+      "origin {1:.3e} m2".format(abs(dg1b_local - dg1b_geos.area()),
+                                 abs(dg1b_absolute - dg1b_geos.area())))
+check_true("...which the same shoelace on raw UTM coordinates is not",
+           abs(dg1b_absolute - dg1b_geos.area()) > 1e-4)
+dg1b.session.cancel()
+dg1b.deactivate()
+
+print("\n== DG2: the closing click lands on the first vertex ==")
+dg_tolerance = dg1.close_tolerance()
+print("        {0:.3f} m at {1:.4f} map units per pixel, {2:.0f} px".format(
+    dg_tolerance, canvas.mapUnitsPerPixel(), dg1.close_pixels))
+check_true("the closing tolerance is a real distance", dg_tolerance > 0.0)
+check_true("a far click does not close the ring",
+           not dg1.session.closes_on_first(OX + 40.0, OY + 30.0, dg_tolerance))
+check_true("a click on the first vertex does",
+           dg1.session.closes_on_first(OX + 0.2, OY + 0.2, dg_tolerance))
+dg1.canvasReleaseEvent(Click(OX + 0.2, OY + 0.2))
+check("the closing click writes exactly one feature",
+      dg_layer.featureCount(), 1)
+dg1_written = newest(dg_layer)
+dg1_geom = dg1_written.geometry()
+print("        area {0:.6f} m2, perimeter {1:.6f} m, {2} vertices".format(
+    dg1_geom.area(), dg1_geom.length(), len(vertices(dg1_geom))))
+check("the polygon is 40 x 30", dg1_geom.area(), 1200.0, 1e-6)
+check("...with a 140 m perimeter", dg1_geom.length(), 140.0, 1e-9)
+check("the ring is closed once, not twice", len(vertices(dg1_geom)), 5)
+check_true("it really is a polygon",
+           dg1_geom.type() == QgsWkbTypes.PolygonGeometry)
+check("the session is empty again", len(dg1.session.vertices), 0)
+dg1.deactivate()
+
+print("\n== DG3: the record rebuilds the polygon that was clicked ==")
+dg1_record = pa.read_record(dg1_written)
+check_true("the record names the digitized polygon",
+           dg1_record.tool == pr.TOOL_DIGITIZED_POLYGON)
+dg1_rebuilt, _ = pr.rebuild(dg1_record)
+check("rebuild lands on the same vertices",
+      max_vertex_gap(dg1_rebuilt, dg1_geom), 0.0, 1e-9)
+check("...and the same area", dg1_rebuilt.area(), 1200.0, 1e-6)
+check("the measured area travelled with the record",
+      dg1_record.params["measured_area_m2"], 1200.0, 1e-6)
+check("area_ha is the measured area over 10 000",
+      dg1_written[lf.AREA_HA_FIELD], 0.12, 1e-9)
+check("perimeter_m too", dg1_written[lf.PERIMETER_FIELD], 140.0, 1e-6)
+check("three visible columns, as everywhere else",
+      len(visible_fields(dg_layer)), 3)
+
+print("\n== DG4: two vertices are a line drawn twice, not a polygon ==")
+dg4_layer = scratch_layer("Polygon", "cad_digitize_short")
+dg4 = digitize_tool(dg4_layer, corners=DG_CORNERS[:2])
+check_true("two vertices are not ready", not dg4.session.is_ready)
+check_raises("confirm refuses two vertices", InvalidInputError,
+             dg4.session.confirm)
+check_raises("...and so does build_params", InvalidInputError,
+             dg4.session.build_params)
+check_raises("the primitive refuses them too", InvalidInputError,
+             pr.build, pr.TOOL_DIGITIZED_POLYGON,
+             {"points": [[OX, OY], [OX + 10.0, OY]]}, WORK_CRS.authid())
+dg4.canvasReleaseEvent(Click(OX + 0.1, OY + 0.1))
+check("a closing click on an unfinished ring writes nothing",
+      dg4_layer.featureCount(), 0)
+check_raises("a ragged points array is refused as well", InvalidInputError,
+             pr.build, pr.TOOL_DIGITIZED_POLYGON,
+             {"points": [[OX, OY, 0.0]]}, WORK_CRS.authid())
+dg4.session.cancel()
+check("Escape leaves the layer empty", dg4_layer.featureCount(), 0)
+dg4.deactivate()
+
+print("\n== DG5: the right button takes a vertex back, Ctrl+Y returns it ==")
+dg5_layer = scratch_layer("Polygon", "cad_digitize_undo")
+dg5 = digitize_tool(dg5_layer)
+dg5_last = tuple(dg5.session.vertices[-1])
+dg5.canvasReleaseEvent(Click(0.0, 0.0, RIGHT))
+check("the right button drops one vertex", len(dg5.session.ring()), 3)
+check("...and writes nothing", dg5_layer.featureCount(), 0)
+check_true("the undone vertex is remembered", len(dg5._undone) == 1)
+dg5.redo_vertex()
+check("redo puts it back", len(dg5.session.ring()), 4)
+check("...at the same place",
+      max(abs(a - b) for a, b in zip(dg5.session.vertices[-1], dg5_last)),
+      0.0, 1e-9)
+for _ in range(4):
+    dg5.canvasReleaseEvent(Click(0.0, 0.0, RIGHT))
+check("undoing past the first vertex empties the construction",
+      len(dg5.session.vertices), 0)
+dg5.canvasReleaseEvent(Click(0.0, 0.0, RIGHT))
+check("...and one more right click is simply Escape",
+      dg5_layer.featureCount(), 0)
+check_true("the session is idle", dg5.session.state == tb.ToolState.IDLE)
+dg5.deactivate()
+
+print("\n-- 100 hovers on the digitizer --")
+dg6_layer = scratch_layer("Polygon", "cad_digitize_hover")
+dg6 = digitize_tool(dg6_layer, corners=DG_CORNERS[:3])
+dg6_baseline = canvas.refresh_calls
+for step in range(100):
+    dg6.canvasMoveEvent(Move(OX + step * 0.3, OY + step * 0.2))
+check("no feature added during 100 hovers", dg6_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", dg6.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - dg6_baseline, 0)
+check_true("the preview closes the ring for the eye",
+           len(dg6.session.preview_points()) == 5)
+dg6.session.cancel()
+check("Escape leaves the layer empty", dg6_layer.featureCount(), 0)
+dg6.deactivate()
+
+print("\n== DG7: the closing tolerance is pixels, so it follows the zoom ==")
+dg7_extent = canvas.extent()
+dg7 = dg_tool.create(canvas, iface=None, layer_provider=lambda: dg6_layer)
+dg7.activate()
+canvas.setExtent(QgsRectangle(OX - 200, OY - 200, OX + 200, OY + 200))
+wide = dg7.close_tolerance()
+canvas.setExtent(QgsRectangle(OX - 20, OY - 20, OX + 20, OY + 20))
+close = dg7.close_tolerance()
+print("        {0:.4f} m zoomed out, {1:.4f} m zoomed in".format(wide, close))
+check_true("both tolerances are real distances", wide > 0.0 and close > 0.0)
+check("ten times the scale, ten times the tolerance", wide / close, 10.0, 1e-9)
+check("...and it is the pixel count that sets it",
+      wide, canvas.mapUnitsPerPixel() * 10.0 * dg7.close_pixels, 1e-9)
+canvas.setExtent(dg7_extent)
+dg7.deactivate()
+
+# --------------------------------------------------------------------------
+# MI - manual parametric input
+# --------------------------------------------------------------------------
+print("\n== MI1: a circle typed as an area is the Circle tool's circle ==")
+mi_layer = scratch_layer("Polygon", "cad_manual")
+
+
+def mi_answer(shape, choice, **values):
+    """A dialog that never opens: it just fills the session in."""
+    def factory(session, _parent):
+        session.set_shape(shape)
+        if choice:
+            session.set_choice(choice)
+        for name, value in values.items():
+            session.set_field(name, value)
+        return True
+    return factory
+
+
+mi1 = mi_tool.create(canvas, iface=None, layer_provider=lambda: mi_layer,
+                     dialog_factory=mi_answer(pr.TOOL_CIRCLE, "area_m2",
+                                              area_m2=10_000.0))
+mi1.activate()
+mi1.canvasReleaseEvent(Click(OX, OY))
+check("one click and one dialog make one feature", mi_layer.featureCount(), 1)
+mi1_geom = newest(mi_layer).geometry()
+
+mi1_radius = ge.circle_radius_from_area(10_000.0)
+mi1_reference = circle_tool.CircleSession()
+mi1_reference.set_origin(OX, OY)
+mi1_reference.submit("{0:.12f}".format(mi1_radius))
+mi1_ring, _ = pr.build(pr.TOOL_CIRCLE, mi1_reference.build_params(),
+                       WORK_CRS.authid())
+print("        manual {0:.6f} m2, Cerchio {1:.6f} m2".format(
+    mi1_geom.area(), mi1_ring.area()))
+check("the two circles are the same circle",
+      max_vertex_gap(mi1_geom, mi1_ring), 0.0, 1e-9)
+check_true("and both are the inscribed polygon, not pi r squared",
+           mi1_geom.area() < 10_000.0)
+mi1_record = pa.read_record(newest(mi_layer))
+check_true("the record says circle, because a circle is what was built",
+           mi1_record.tool == pr.TOOL_CIRCLE)
+check("...and it rebuilds unchanged",
+      max_vertex_gap(pr.rebuild(mi1_record)[0], mi1_geom), 0.0, 1e-9)
+mi1.deactivate()
+
+print("\n== MI2: a square typed as a diagonal ==")
+mi2_layer = scratch_layer("Polygon", "cad_manual_square")
+mi2 = mi_tool.create(canvas, iface=None, layer_provider=lambda: mi2_layer,
+                     dialog_factory=mi_answer(pr.TOOL_SQUARE, "diagonal_m",
+                                              diagonal_m=20.0,
+                                              azimuth_deg=0.0))
+mi2.activate()
+mi2.canvasReleaseEvent(Click(OX, OY))
+mi2_geom = newest(mi2_layer).geometry()
+print("        area {0:.6f} m2, expected {1:.6f}".format(
+    mi2_geom.area(), 20.0 * 20.0 / 2.0))
+check("a 20 m diagonal is a 200 m2 square", mi2_geom.area(), 200.0, 1e-6)
+check("...with four corners", len(vertices(mi2_geom)), 5)
+mi2.deactivate()
+
+print("\n== MI3: the shape list only names primitives that exist ==")
+for spec in mi_tool.SHAPES:
+    check_true("{0} is a real primitive".format(spec.label),
+               spec.tool in pr.TOOL_LABELS)
+    probe = mi_tool.ManualInputSession(shape=spec.tool)
+    probe.set_origin(OX, OY)
+    check_true("{0} has a default for every field".format(spec.label),
+               probe.is_ready)
+    ring = probe.preview_points()
+    check_true("{0} previews a closed ring".format(spec.label),
+               ring is not None and len(ring) >= 3)
+    built, _ = pr.build(spec.tool, probe.build_params(), WORK_CRS.authid())
+    # Measured about the first vertex: the shoelace loses a millimetre per
+    # product at UTM magnitudes, which on a 10 m circle is 1e-2 m2. GEOS
+    # centres internally, the pure-numpy helper does not.
+    local = np.asarray(ring, dtype=float) - np.asarray(ring, dtype=float)[0]
+    check("{0} builds the same ring it previews".format(spec.label),
+          built.area(), ge.polygon_area(local), 1e-6)
+    for field in spec.choices:
+        probe.set_choice(field.name)
+        probe.load_defaults()
+        check_true("{0} can also be sized by its {1}".format(
+            spec.label, field.label.lower()), probe.is_ready)
+
+check_raises("an unknown shape is refused", InvalidInputError,
+             mi_tool.shape_spec, "ellipse")
+mi3 = mi_tool.ManualInputSession(shape=pr.TOOL_CIRCLE)
+check_raises("...an unknown measure too", InvalidInputError,
+             mi3.set_choice, "side_m")
+check_raises("...and an unknown field", InvalidInputError,
+             mi3.set_field, "n_sides", 6)
+check_raises("a session with no insertion point cannot build",
+             InvalidInputError, mi3.build_params)
+check_true("...and previews nothing", mi3.preview_points() is None)
+
+print("\n== MI4: cancelling the dialog writes nothing ==")
+mi4_layer = scratch_layer("Polygon", "cad_manual_cancel")
+mi4 = mi_tool.create(canvas, iface=None, layer_provider=lambda: mi4_layer,
+                     dialog_factory=lambda session, parent: False)
+mi4.activate()
+mi4.canvasReleaseEvent(Click(OX, OY))
+check("Annulla leaves the layer empty", mi4_layer.featureCount(), 0)
+check_true("...and the session idle",
+           mi4.session.state == tb.ToolState.IDLE)
+check("no geometry was built", mi4.geometry_builds, 0)
+
+print("\n-- 100 hovers on the manual input --")
+mi4_baseline = canvas.refresh_calls
+for step in range(100):
+    mi4.canvasMoveEvent(Move(OX + step * 0.4, OY + step * 0.4))
+check("no feature added during 100 hovers", mi4_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", mi4.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - mi4_baseline, 0)
+mi4.deactivate()
+
+print("\n== MI5: the dialog shows the fields the shape needs ==")
+mi5_session = mi_tool.ManualInputSession(shape=pr.TOOL_RECTANGLE)
+mi5_dialog = mi_tool.ManualInputDialog(mi5_session, None)
+print("        rettangolo: {0}".format(list(mi5_dialog._editors)))
+check_true("a rectangle asks for base, height and azimuth",
+           list(mi5_dialog._editors) == ["width_m", "height_m",
+                                         "azimuth_deg"])
+check("...and offers no alternative measure", mi5_dialog.choice_box.count(), 0)
+mi5_dialog.shape_box.setCurrentIndex(
+    mi_tool.SHAPE_KEYS.index(pr.TOOL_POLYGON))
+print("        poligono regolare: {0}, misure {1}".format(
+    list(mi5_dialog._editors),
+    [mi5_dialog.choice_box.itemData(i)
+     for i in range(mi5_dialog.choice_box.count())]))
+check_true("switching shape switches the session too",
+           mi5_session.spec.tool == pr.TOOL_POLYGON)
+check_true("a regular polygon asks for a side count",
+           "n_sides" in mi5_dialog._editors)
+check("...and offers its four ways of being sized",
+      mi5_dialog.choice_box.count(), 4)
+mi5_dialog._editors["n_sides"].setValue(8)
+mi5_dialog.harvest()
+check("what is on screen is what the session gets",
+      mi5_session.values["n_sides"], 8)
+mi5_session.set_origin(OX, OY)
+mi5_octagon, _ = pr.build(pr.TOOL_POLYGON, mi5_session.build_params(),
+                          WORK_CRS.authid())
+check("an eight-sided polygon has eight sides",
+      len(vertices(mi5_octagon)), 9)
+mi5_dialog.dialog.deleteLater()
+
+print("\n== R2 (1.5.0): both tools are registered like the others ==")
+for key, label, cls in (("digitize", "Poligono digitalizzato",
+                         dg_tool.DigitizeSession),
+                        ("manual_input", "Inserimento manuale",
+                         mi_tool.ManualInputSession)):
+    check_true("{0} is in the registry".format(key),
+               key in tools_pkg.TOOL_REGISTRY)
+    check_true("{0} keeps its Italian label".format(key),
+               tools_pkg.tool_label(key) == label)
+    check_true("{0} has a shortcut".format(key),
+               bool(tools_pkg.tool_shortcut(key)))
+    made = tools_pkg.create_tool(key, canvas, layer_provider=lambda: None)
+    check_true("{0} instantiates through the registry".format(key),
+               isinstance(made, tb.CadMapTool)
+               and isinstance(made.session, cls))
+    check_true("{0} writes polygons".format(key),
+               made.session.geometry_type == "Polygon")
+    made.deactivate()
+    check_true("{0} creates geometry, so it has a layer type".format(key),
+               plugin_mod.TOOL_GEOMETRY.get(key) == "Polygon")
+    check_true("{0} is not edit-in-place".format(key),
+               key not in plugin_mod.EDIT_IN_PLACE_TOOLS)
+    check_true("{0} is on the dock toolbar order".format(key),
+               key in plugin_mod.CAD_TOOL_ORDER)
+check_true("the registry and the toolbar order still agree",
+           set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
+r2_shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
+check("every shortcut is still distinct", len(set(r2_shortcuts)),
+      len(r2_shortcuts))
 
 
 print("\n" + "=" * 80)

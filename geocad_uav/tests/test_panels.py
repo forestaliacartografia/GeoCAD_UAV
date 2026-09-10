@@ -648,7 +648,9 @@ for survivor in ("circle", "arc", "rectangle", "square", "regular_polygon"):
                survivor in cad_tools.TOOL_REGISTRY)
 check_true("the registry and the toolbar order still agree",
            set(cad_tools.TOOL_REGISTRY) == set(plugin_check.CAD_TOOL_ORDER))
-check("ten tools remain", len(cad_tools.TOOL_REGISTRY), 10)
+# v1.5.0: ten survivors of the ellipse cut plus the digitizer and the
+# manual input.
+check("twelve tools remain", len(cad_tools.TOOL_REGISTRY), 12)
 
 print("\n" + "=" * 78)
 QgsProject.instance().removeAllMapLayers()

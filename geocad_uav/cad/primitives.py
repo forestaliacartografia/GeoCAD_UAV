@@ -19,7 +19,7 @@ from typing import Optional
 import numpy as np
 
 from ..core import geometry_engine as ge
-from ..core.constants import CIRCLE_SEGMENTS
+from ..core.constants import CIRCLE_SEGMENTS, GEOM_EPS_M
 from ..core.errors import InvalidInputError
 from ..core.models import ParametricRecord
 
@@ -33,16 +33,21 @@ TOOL_CIRCLE = "circle"
 TOOL_POLYGON = "polygon"
 TOOL_ELLIPSE = "ellipse"
 TOOL_ARC = "arc"
+#: A polygon whose parameters *are* its vertices: what the operator
+#: clicked. TOOL_POLYGON is the regular one, built from a radius and a
+#: side count, and the two are not interchangeable.
+TOOL_DIGITIZED_POLYGON = "digitized_polygon"
 
 TOOL_LABELS = {
     TOOL_POINT: "Punto", TOOL_LINE: "Linea", TOOL_POLYLINE: "Polilinea",
     TOOL_RECTANGLE: "Rettangolo", TOOL_SQUARE: "Quadrato",
     TOOL_CIRCLE: "Cerchio", TOOL_POLYGON: "Poligono regolare",
     TOOL_ELLIPSE: "Ellisse", TOOL_ARC: "Arco",
+    TOOL_DIGITIZED_POLYGON: "Poligono digitalizzato",
 }
 
 _CLOSED_TOOLS = (TOOL_RECTANGLE, TOOL_SQUARE, TOOL_CIRCLE, TOOL_POLYGON,
-                 TOOL_ELLIPSE)
+                 TOOL_ELLIPSE, TOOL_DIGITIZED_POLYGON)
 
 
 # --------------------------------------------------------------------------
@@ -187,6 +192,30 @@ def _ring_for(tool: str, params: dict):
             radius_m=params.get("radius_m"), apothem_m=params.get("apothem_m"),
             side_m=params.get("side_m"), area_m2=params.get("area_m2")), True
 
+    if tool == TOOL_DIGITIZED_POLYGON:
+        ring = np.asarray(params["points"], dtype=float)
+        if ring.ndim != 2 or ring.shape[1] != 2:
+            raise InvalidInputError(
+                "digitized polygon needs an (N, 2) ring, got {0}".format(
+                    ring.shape),
+                user_message="I vertici del poligono non sono coppie X, Y.")
+        # close_ring() would happily accept a repeated last vertex, so the
+        # count is taken on the open ring: three clicks, three corners.
+        # The comparison is absolute, in metres: np.allclose() is relative,
+        # and at UTM magnitudes its default rtol makes two corners 50 m apart
+        # compare equal, which silently eats the last vertex.
+        opened = ring
+        if len(ring) > 1 and math.hypot(ring[-1][0] - ring[0][0],
+                                        ring[-1][1] - ring[0][1]) <= GEOM_EPS_M:
+            opened = ring[:-1]
+        if len(opened) < 3:
+            raise InvalidInputError(
+                "digitized polygon needs three vertices, has {0}".format(
+                    len(opened)),
+                user_message="Servono almeno tre vertici per chiudere "
+                             "il poligono.")
+        return opened, True
+
     if tool == TOOL_ELLIPSE:
         return ge.ellipse_ring(
             (params["x"], params["y"]), params["semi_major_m"],
@@ -204,6 +233,17 @@ def _ring_for(tool: str, params: dict):
     raise InvalidInputError(
         "unknown tool {0!r}".format(tool),
         user_message="Strumento non riconosciuto: '{0}'.".format(tool))
+
+
+def ring_for(tool: str, params: dict):
+    """Public face of the ring dispatch: ``(coords, is_closed)``, no QGIS.
+
+    :func:`build` needs QGIS to make a ``QgsGeometry``; a map tool drawing a
+    rubber band does not, and must not (a preview runs on every mouse move).
+    Exposing the dispatch keeps that path on the same builders instead of a
+    second copy of them.
+    """
+    return _ring_for(tool, params)
 
 
 def build(tool: str, params: dict, crs_authid: str = "",

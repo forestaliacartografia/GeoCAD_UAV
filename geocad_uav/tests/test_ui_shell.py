@@ -225,7 +225,8 @@ check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
 # literal is the floor that says the toolbar was actually populated.
 # v1.4.3: ten became eleven when the Arco tool joined.
 # v1.4.5: eleven back to ten -- the Ellisse tool was withdrawn.
-check("the toolbar carries every shipped CAD tool", len(cad_mounted), 10)
+# v1.5.0: ten became twelve with the digitizer and the manual input.
+check("the toolbar carries every shipped CAD tool", len(cad_mounted), 12)
 labels = {a.text() for a in cad_mounted}
 check_true("Ellisse is not offered any more", "Ellisse" not in labels)
 for expected in ("Linea", "Polilinea", "Rettangolo", "Quadrato", "Cerchio",
