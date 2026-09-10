@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.5.0
+version=1.6.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.5.0
+changelog=1.6.0
+    - Nuovo modulo di progettazione del rimboschimento: l'area di
+      progetto con le sue tre superfici (lorda, esclusa, utile), la
+      morfologia letta dal DEM e le fasce di rispetto parametriche.
+    - Superficie utile = lorda meno esclusa, calcolata da GEOS sul
+      poligono vero: i buchi interni sono gia' fuori dalla lorda, due
+      esclusioni sovrapposte si sottraggono una volta sola e cio' che
+      sporge dal confine conta solo per la parte che cade dentro.
+    - Le fasce di rispetto sono un dizionario, non un numero scritto
+      nel codice: strada 5 m, fosso 10 m, elettrodotto 3 m si
+      cambiano dal progetto. Una fascia di 0 m tiene l'elemento
+      stesso; un vincolo mai dichiarato viene rifiutato con un
+      messaggio invece di essere ignorato.
+    - La maschera di idoneita' usa gli stessi criteri di pendenza,
+      quota ed esposizione che poi accettano o scartano la singola
+      pianta, cosi' la mappa e il risultato non possono discordare.
+      Le celle dove la pendenza non e' calcolabile (bordo di un buco
+      del DEM) sono escluse come non misurate, non date per buone.
+    1.5.0
     - Nuovo strumento «Poligono digitalizzato»: si clicca vertice per
       vertice e si chiude cliccando di nuovo il primo. La tolleranza di
       chiusura e' in pixel, quindi vale a qualsiasi scala. Il tasto
