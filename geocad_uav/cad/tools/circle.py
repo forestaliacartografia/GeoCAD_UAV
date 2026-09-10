@@ -66,6 +66,34 @@ class CircleSession(CadToolSession):
             return None
         return ge.circle_ring(self.origin, radius, self.segments)
 
+    # -- construction guides -----------------------------------------------
+
+    def axes_points(self):
+        """The two diameters, in the work CRS, for whoever draws guides.
+
+        A circle carries no azimuth, so every diameter is as good as any
+        other: the pair published is the cardinal one, North-South first and
+        then East-West. Each part is exactly two points, which is what
+        ``BaseCadTool.update_guides`` turns into one part of the guide band;
+        the base class is never told any of this is a circle.
+
+        The radius follows the preview, cursor included, so the guides appear
+        with the ring instead of waiting for the radius to be typed.
+        """
+        if self.origin is None:
+            return (None, None)
+        radius = self.value("radius_m")
+        if radius is None and self.cursor is not None:
+            radius = math.hypot(self.cursor[0] - self.origin[0],
+                                self.cursor[1] - self.origin[1])
+        if not radius or radius <= 0.0:
+            return (None, None)
+        x, y = float(self.origin[0]), float(self.origin[1])
+        r = float(radius)
+        north_south = np.array([[x, y + r], [x, y - r]], dtype=float)
+        east_west = np.array([[x + r, y], [x - r, y]], dtype=float)
+        return (north_south, east_west)
+
     # -- readout -----------------------------------------------------------
 
     def hud_lines(self):

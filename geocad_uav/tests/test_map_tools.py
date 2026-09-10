@@ -2675,6 +2675,110 @@ check("three columns are still the visible ones",
 mv_atv.deactivate()
 
 
+# --------------------------------------------------------------------------
+# CE5 (v1.4.9) - the circle publishes its own diameters, the base class draws
+# whatever it is given and knows nothing about circles
+# --------------------------------------------------------------------------
+print("\n== CE5: two diameters, r = 10, published by the session ==")
+ce5 = circle_tool.CircleSession()
+ce5.set_origin(OX, OY)
+ce5.submit("10")
+ce5_parts = [part for part in ce5.axes_points() if part is not None]
+check("the circle publishes two parts", len(ce5_parts), 2)
+check_true("...each of exactly two points",
+           all(np.asarray(part, dtype=float).shape == (2, 2)
+               for part in ce5_parts))
+
+ce5_vectors = []
+for label, part in zip(("N-S", "E-W"), ce5_parts):
+    arr = np.asarray(part, dtype=float)
+    vector = arr[1] - arr[0]
+    ce5_vectors.append(vector)
+    length = float(math.hypot(vector[0], vector[1]))
+    print("        {0}: ({1:+.3f},{2:+.3f}) -> ({3:+.3f},{4:+.3f}), "
+          "{5:.6f} m".format(label, arr[0][0] - OX, arr[0][1] - OY,
+                             arr[1][0] - OX, arr[1][1] - OY, length))
+    check("{0} is a full diameter, 2r long".format(label), length, 20.0, 1e-9)
+    check("{0} is centred on the circle".format(label),
+          float((arr[0][0] + arr[1][0]) / 2.0), OX, 1e-9)
+    check("...on both axes", float((arr[0][1] + arr[1][1]) / 2.0), OY, 1e-9)
+
+ce5_dot = float(ce5_vectors[0][0] * ce5_vectors[1][0]
+                + ce5_vectors[0][1] * ce5_vectors[1][1])
+print("        dot product: {0:.12f}".format(ce5_dot))
+check("the two diameters are orthogonal", ce5_dot, 0.0, 1e-9)
+
+ce5_ns = np.asarray(ce5_parts[0], dtype=float)
+ce5_ew = np.asarray(ce5_parts[1], dtype=float)
+check("the first diameter runs North-South: dE = 0",
+      float(ce5_ns[1][0] - ce5_ns[0][0]), 0.0, 1e-9)
+check("...and dN = -20 from the North end to the South one",
+      float(ce5_ns[1][1] - ce5_ns[0][1]), -20.0, 1e-9)
+check("its North end sits at +r", float(ce5_ns[0][1] - OY), 10.0, 1e-9)
+check("the second runs East-West: dN = 0",
+      float(ce5_ew[1][1] - ce5_ew[0][1]), 0.0, 1e-9)
+check("...and dE = -20 from the East end to the West one",
+      float(ce5_ew[1][0] - ce5_ew[0][0]), -20.0, 1e-9)
+check("its East end sits at +r", float(ce5_ew[0][0] - OX), 10.0, 1e-9)
+
+print("\n-- 100 hovers with the guides on --")
+ce5_layer = scratch_layer("Polygon", "cad_circle_guides")
+ce5_map = circle_tool.create(canvas, iface=None,
+                             layer_provider=lambda: ce5_layer)
+ce5_map.activate()
+ce5_map.session.set_origin(OX, OY)
+ce5_map.session.submit("10")
+ce5_baseline = canvas.refresh_calls
+for step in range(100):
+    ce5_map.canvasMoveEvent(Move(OX + step * 0.3, OY + step * 0.2))
+check("no feature added during 100 hovers", ce5_layer.featureCount(), 0)
+check("no QgsGeometry built during 100 hovers", ce5_map.geometry_builds, 0)
+check("no canvas.refresh() during 100 hovers",
+      canvas.refresh_calls - ce5_baseline, 0)
+
+check("the base class drew both parts", ce5_map.update_guides(), 2)
+ce5_band = ce5_map._guide_band
+print("        band: {0} part(s), {1} vertices".format(
+    ce5_band.size(), ce5_band.numberOfVertices()))
+check("the guide band carries two parts", ce5_band.size(), 2)
+check("...four vertices in all", ce5_band.numberOfVertices(), 4)
+check("...two in the first part", ce5_band.partSize(0), 2)
+check("...two in the second", ce5_band.partSize(1), 2)
+check_true("the guides are shown", ce5_band.isVisible())
+ce5_geom = ce5_band.asGeometry()
+check_true("one multi-part band, not two bands", ce5_geom.isMultipart())
+for index, part in enumerate(ce5_geom.asMultiPolyline()):
+    check("band part {0} measures 20 m on the map".format(index),
+          float(math.hypot(part[1].x() - part[0].x(),
+                           part[1].y() - part[0].y())), 20.0, 1e-6)
+
+ce5_map.clear_band()
+check("the guides go away with the preview",
+      ce5_band.numberOfVertices(), 0)
+check_true("...and are hidden", not ce5_band.isVisible())
+ce5_map.deactivate()
+
+print("\n-- a rectangle publishes nothing, so nothing is drawn --")
+check_true("RectangleSession does not publish axes",
+           not hasattr(rect_tool.RectangleSession, "axes_points"))
+ce5_rect_layer = scratch_layer("Polygon", "cad_rect_guides")
+ce5_rect = rect_tool.create(canvas, iface=None,
+                            layer_provider=lambda: ce5_rect_layer)
+ce5_rect.activate()
+ce5_rect.session.set_origin(OX, OY)
+ce5_rect.session.submit("30")
+ce5_rect.session.submit("20")
+ce5_rect.session.submit("0d")
+ce5_rect.canvasMoveEvent(Move(OX + 5.0, OY + 5.0))
+check("the base class draws no guide for it", ce5_rect.update_guides(), 0)
+check("...the guide band stays empty",
+      ce5_rect._guide_band.numberOfVertices(), 0)
+check_true("...and invisible", not ce5_rect._guide_band.isVisible())
+check_true("but its own preview is still drawn",
+           ce5_rect._band.numberOfVertices() > 0)
+ce5_rect.deactivate()
+
+
 print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()

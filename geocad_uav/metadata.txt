@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.4.8
+version=1.4.9
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,14 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.4.8
+changelog=1.4.9
+    - Il cerchio disegna i suoi due diametri come guide di costruzione:
+      Nord-Sud ed Est-Ovest, punteggiati, mentre il raggio si digita o si
+      insegue col mouse. Servono a centrare una piazzola o un impluvio
+      senza misurare a occhio.
+    - Le guide restano guide: non entrano nella geometria salvata, non
+      creano un secondo oggetto e spariscono con l'anteprima.
+    1.4.8
     - La scheda si chiama «Rimboschimento», non piu' «Foresta»: e' il lavoro
       che si fa, non l'argomento. Anche il suggerimento dell'icona in barra
       elenca ora solo le schede che esistono davvero.
