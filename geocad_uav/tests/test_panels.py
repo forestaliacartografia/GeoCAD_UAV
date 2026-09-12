@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 
 from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem,  # noqa: E402
                        QgsFeature, QgsGeometry, QgsPoint, QgsPointXY,
-                       QgsProject, QgsRectangle)
+                       QgsProject, QgsRectangle, QgsWkbTypes)
 
 QGS = QgsApplication([], False)
 QGS.initQgis()
@@ -184,11 +184,19 @@ check_true("it is the registered rectangle tool",
            drawn.session.tool_id == "rectangle")
 panel._stop_drawing()
 
-drawn_poly = panel.start_drawing("polyline")
-check_true("polygon drawing uses the existing PolylineTool",
+# v1.7.0: the free-form AOI is digitised with the polygon tool, which
+# commits an actual polygon instead of a closed LineString to be converted.
+drawn_poly = panel.start_drawing("digitize")
+check_true("free-form drawing uses the existing polygon digitizer",
            isinstance(drawn_poly, tb.CadMapTool)
            and drawn_poly.session.multi_vertex)
-check_true("...asked to close its ring", drawn_poly.session.close)
+check_true("...and it writes polygons",
+           drawn_poly.session.geometry_type == "Polygon")
+check_true("...so there is no ring left to close by hand",
+           not hasattr(drawn_poly.session, "close"))
+check_true("its scratch layer is polygonal too",
+           panel._draw_layer.geometryType()
+           == QgsWkbTypes.PolygonGeometry)
 panel._stop_drawing()
 
 closed_ring = QgsGeometry.fromWkt(
@@ -209,7 +217,7 @@ from geocad_uav import plugin as plugin_mod                     # noqa: E402
 check_true("the extent picker registered no digitizer of its own",
            set(cad_tools.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 check_true("...and it still reuses the drawing tools that exist",
-           {"rectangle", "polyline", "line"} <= set(cad_tools.TOOL_REGISTRY))
+           {"rectangle", "square", "digitize"} <= set(cad_tools.TOOL_REGISTRY))
 
 panel.teardown()
 forest.teardown()
@@ -643,14 +651,13 @@ check_true("the module file is gone",
            not os.path.isfile(os.path.join(
                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                "cad", "tools", "ellipse.py")))
-for survivor in ("circle", "arc", "rectangle", "square", "regular_polygon"):
+for survivor in ("rectangle", "square", "digitize"):
     check_true("{0} is still registered".format(survivor),
                survivor in cad_tools.TOOL_REGISTRY)
 check_true("the registry and the toolbar order still agree",
            set(cad_tools.TOOL_REGISTRY) == set(plugin_check.CAD_TOOL_ORDER))
-# v1.5.0: ten survivors of the ellipse cut plus the digitizer and the
-# manual input.
-check("twelve tools remain", len(cad_tools.TOOL_REGISTRY), 12)
+# v1.7.0: three primitives x two input modes, plus the three modifiers.
+check("nine tools remain", len(cad_tools.TOOL_REGISTRY), 9)
 
 print("\n" + "=" * 78)
 QgsProject.instance().removeAllMapLayers()

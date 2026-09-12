@@ -30,6 +30,18 @@ def tr(text):
     return QCoreApplication.translate("GeoCadUav", text)
 
 
+def plugin_geometry_for(tool_key: str) -> str:
+    """Which scratch layer a CAD tool needs, per the plugin's own table.
+
+    The mapping already exists in ``plugin.TOOL_GEOMETRY``; reading it here
+    means the extent picker cannot drift away from what the tool actually
+    writes.
+    """
+    from ..plugin import TOOL_GEOMETRY                          # noqa: PLC0415
+
+    return TOOL_GEOMETRY.get(tool_key, "Polygon")
+
+
 class ExtentSource(QGroupBox):
     """Pick an existing polygon, or draw one now with the existing CAD tools.
 
@@ -86,7 +98,7 @@ class ExtentSource(QGroupBox):
         self.draw_rect_button.clicked.connect(
             lambda: self.start_drawing("rectangle"))
         self.draw_poly_button.clicked.connect(
-            lambda: self.start_drawing("polyline"))
+            lambda: self.start_drawing("digitize"))
 
         # The combo pre-selects the first matching layer on its own, and that
         # assignment emits nothing: without this the panel would claim "no
@@ -165,22 +177,23 @@ class ExtentSource(QGroupBox):
     def start_drawing(self, tool_key):
         """Hand control to an existing CAD tool and take back what it commits.
 
-        ``polyline`` is asked to close its ring, and the closed LineString is
-        converted to a polygon *for the extent only* -- the extent is an area
-        of interest, not a stored CAD feature, so no new primitive is involved.
+        v1.7.0: both keys an operator can press here -- the rectangle and the
+        polygon digitizer -- commit a real polygon, so the extent arrives as
+        an area and nothing has to be converted. ``as_polygon`` still repairs
+        a closed ring, because a project saved before this version can hand
+        one back.
         """
         canvas = self.iface.mapCanvas() if self.iface else None
         if canvas is None:
             return None
         crs = canvas.mapSettings().destinationCrs()
-        geometry_type = "Polygon" if tool_key == "rectangle" else "LineString"
+        geometry_type = plugin_geometry_for(tool_key)
         layer = self._scratch_layer(self.DRAW_LAYER + " " + geometry_type,
                                     geometry_type, crs)
         self._draw_layer = layer
 
-        options = {"close": True} if tool_key == "polyline" else {}
         tool = cad_tools.create_tool(tool_key, canvas, iface=self.iface,
-                                     layer_provider=lambda: layer, **options)
+                                     layer_provider=lambda: layer)
         self._previous_tool = canvas.mapTool()
         self._draw_tool = tool
         try:
@@ -253,8 +266,14 @@ class ExtentSource(QGroupBox):
         layer = self._scratch_layer(self.MEASURE_LAYER, "LineString", crs)
         self._measure_layer = layer
         self._measure_callback = callback
-        tool = cad_tools.create_tool("line", canvas, iface=self.iface,
-                                     layer_provider=lambda: layer)
+        # v1.7.0: the line tool is no longer a CAD primitive on the toolbar,
+        # but it is still the cheapest way to measure one segment on the map.
+        # Imported directly rather than through the registry, which now lists
+        # only what an operator may draw.
+        from ..cad.tools import line as line_tool               # noqa: PLC0415
+
+        tool = line_tool.create(canvas, iface=self.iface,
+                                layer_provider=lambda: layer)
         self._previous_tool = canvas.mapTool()
         self._draw_tool = tool
         try:

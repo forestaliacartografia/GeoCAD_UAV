@@ -462,15 +462,19 @@ class GeoCadDock(QDockWidget):
             if index >= 0:
                 self.cad_pivot.setCurrentIndex(index)
 
-        is_polyline = bool(getattr(tool.session, "multi_vertex", False))
-        self.cad_close_ring.setVisible(is_polyline)
-        if is_polyline:
+        # v1.7.0: the checkbox belongs to a session that can be told to close
+        # its ring. The polygon tool closes on its own first vertex, so it has
+        # no such switch and the control stays hidden for it.
+        multi_vertex = bool(getattr(tool.session, "multi_vertex", False))
+        self.cad_close_ring.setVisible(multi_vertex
+                                       and hasattr(tool.session, "close"))
+        if multi_vertex:
             self.cad_close_ring.setChecked(bool(
                 getattr(tool.session, "close", False)))
             self.cad_hint.setText(tr(
-                "Clicca i vertici. Backspace toglie l'ultimo, Invio o doppio "
-                "click chiude, Esc annulla tutto. @25<37 e' relativo al "
-                "segmento precedente."))
+                "Clicca i vertici. Richiudi sul primo vertice o premi Invio; "
+                "il tasto destro toglie l'ultimo (Ctrl+Z), Ctrl+Y lo rimette, "
+                "Esc annulla tutto."))
         else:
             self.cad_hint.setText(tr(
                 "Clicca l'origine sulla mappa, poi digita i valori (Invio) "

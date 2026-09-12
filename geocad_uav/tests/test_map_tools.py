@@ -585,9 +585,13 @@ for path in ("Key.Key_Escape", "Key.Key_Return", "Key.Key_Enter",
 print("\n== tool registry ==")
 from geocad_uav.cad import tools as tools_pkg                   # noqa: E402
 
-check_true("line, rectangle and circle are registered",
-           {"line", "rectangle", "circle"} <= set(tools_pkg.TOOL_REGISTRY))
-for key in ("line", "rectangle", "circle"):
+# v1.7.0: the toolset is three primitives, each offered twice -- drawn on
+# the map and typed into a dialog. The sessions of the withdrawn tools are
+# still exercised below; what changed is that none of them is reachable as a
+# CAD tool any more.
+check_true("square, rectangle and the polygon digitizer are registered",
+           {"square", "rectangle", "digitize"} <= set(tools_pkg.TOOL_REGISTRY))
+for key in ("square", "rectangle", "digitize"):
     check_true("{0} is registered with a label and a shortcut".format(key),
                bool(tools_pkg.tool_label(key))
                and bool(tools_pkg.tool_shortcut(key)))
@@ -605,10 +609,8 @@ check_true("every tool that CREATES geometry has a layer mapping "
            "(edit-in-place tools such as rotate deliberately have none)",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
-check_true("line writes LineString, rectangle and circle write Polygon",
-           plugin_mod.TOOL_GEOMETRY["line"] == "LineString"
-           and plugin_mod.TOOL_GEOMETRY["rectangle"] == "Polygon"
-           and plugin_mod.TOOL_GEOMETRY["circle"] == "Polygon")
+check_true("every admitted tool writes a Polygon, drawn or typed",
+           set(plugin_mod.TOOL_GEOMETRY.values()) == {"Polygon"})
 check_true("every tool that CREATES geometry has a layer mapping "
            "(edit-in-place tools such as rotate deliberately have none)",
            set(plugin_mod.TOOL_GEOMETRY)
@@ -1052,22 +1054,21 @@ check("T7 rectangle: no canvas refresh while hovering",
       canvas.refresh_calls - base8, 0)
 h8.deactivate()
 
-print("\n== registry now carries four tools ==")
-check_true("line, polyline, rectangle and circle are all registered",
-           {"line", "polyline", "rectangle", "circle"}
-           <= set(tools_pkg.TOOL_REGISTRY))
-check_true("polyline is registered with a label and a shortcut",
-           tools_pkg.tool_label("polyline") == "Polilinea"
-           and tools_pkg.tool_shortcut("polyline") == "Alt+Shift+P")
-built_poly = tools_pkg.create_tool("polyline", canvas,
-                                   layer_provider=lambda: None)
-check_true("polyline instantiates through the registry",
-           isinstance(built_poly, tb.CadMapTool))
-check_true("...and is a multi-vertex session",
-           built_poly.session.multi_vertex)
-built_poly.deactivate()
-check_true("plugin maps polyline to a LineString layer",
-           plugin_mod.TOOL_GEOMETRY["polyline"] == "LineString")
+print("\n== the polyline session outlived the polyline tool ==")
+# v1.7.0: the chain is still built and still tested -- above, on the session
+# itself -- but a polyline is not a closed figure, so it is not one of the
+# three primitives the operator may draw.
+check_true("polyline is not a CAD tool any more",
+           "polyline" not in tools_pkg.TOOL_REGISTRY)
+check_true("...and asking for it fails loudly",
+           "polyline" in tools_pkg.WITHDRAWN_TOOLS)
+check_raises("the registry refuses it by name", KeyError,
+             tools_pkg.create_tool, "polyline", canvas)
+check_true("the multi-vertex session is still constructible directly",
+           poly_tool.PolylineSession().multi_vertex)
+check_true("...and no withdrawn tool kept a layer type",
+           not (set(tools_pkg.WITHDRAWN_TOOLS)
+                & set(plugin_mod.TOOL_GEOMETRY)))
 check_true("every tool that CREATES geometry has a layer mapping "
            "(edit-in-place tools such as rotate deliberately have none)",
            set(plugin_mod.TOOL_GEOMETRY)
@@ -1541,14 +1542,14 @@ check("record rebuilds the identical geometry",
 # R2 - registration
 # --------------------------------------------------------------------------
 print("\n== R2: the three tools are registered like the others ==")
-# v1.4.1: eight became ten when Move and Resize joined; v1.4.3 made
-# it eleven with the Arco; v1.5.0 adds the digitizer and the manual input,
-# both of which create polygons, so the registry is twelve and
-# TOOL_GEOMETRY is nine.
-check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
+# v1.4.1: eight became ten when Move and Resize joined; v1.4.3 made it
+# eleven with the Arco; v1.5.0 twelve with the digitizer and the manual
+# input; v1.7.0 cuts the toolset to three primitives offered in two input
+# modes each, plus the three modifiers: nine, and TOOL_GEOMETRY is six.
+check("the registry holds nine tools", len(tools_pkg.TOOL_REGISTRY), 9)
 for key, label, cls in (("square", "Quadrato", sq_tool.SquareSession),
-                        ("regular_polygon", "Poligono regolare",
-                         rp_tool.RegularPolygonSession)):
+                        ("rectangle", "Rettangolo",
+                         rect_tool.RectangleSession)):
     check_true("{0} is in the registry".format(key),
                key in tools_pkg.TOOL_REGISTRY)
     check_true("{0} has the right label".format(key),
@@ -1574,8 +1575,8 @@ check("every shortcut is distinct", len(set(shortcuts)), len(shortcuts))
 check_true("every creating tool has a geometry type",
            set(plugin_mod.TOOL_GEOMETRY)
            == set(tools_pkg.TOOL_REGISTRY) - set(plugin_mod.EDIT_IN_PLACE_TOOLS))
-check("nine tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
-check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
+check("six tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 6)
+check("the dock mounts all nine", len(plugin_mod.CAD_TOOL_ORDER), 9)
 
 
 # ==========================================================================
@@ -2028,9 +2029,9 @@ rs5_layer.rollBack()
 # R2 (1.4.1) - registration
 # --------------------------------------------------------------------------
 print("\n== R2: Move and Resize are registered as edit-in-place ==")
-check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
-check("nine tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
-check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
+check("the registry holds nine tools", len(tools_pkg.TOOL_REGISTRY), 9)
+check("six tools still create geometry", len(plugin_mod.TOOL_GEOMETRY), 6)
+check("the dock mounts all nine", len(plugin_mod.CAD_TOOL_ORDER), 9)
 check_true("the registry and the toolbar order agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
 for key, label, cls in (("move", "Sposta", mv_tool.MoveTool),
@@ -2526,20 +2527,22 @@ check("rotating about the centre still preserves the area",
 check("the centre did not move",
       pv3_rotated.boundingBox().center().x(), OX, 1e-9)
 
-print("\n== R2 (1.4.3): the arc joins the registry ==")
-check("the registry holds twelve tools", len(tools_pkg.TOOL_REGISTRY), 12)
-check("nine tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 9)
-check("the dock mounts all twelve", len(plugin_mod.CAD_TOOL_ORDER), 12)
+print("\n== R2 (1.7.0): the arc left the registry, its session did not ==")
+check("the registry holds nine tools", len(tools_pkg.TOOL_REGISTRY), 9)
+check("six tools create geometry", len(plugin_mod.TOOL_GEOMETRY), 6)
+check("the dock mounts all nine", len(plugin_mod.CAD_TOOL_ORDER), 9)
 check_true("the registry and the toolbar order still agree",
            set(tools_pkg.TOOL_REGISTRY) == set(plugin_mod.CAD_TOOL_ORDER))
-check_true("the arc is registered", "arc" in tools_pkg.TOOL_REGISTRY)
-check_true("with an Italian label", tools_pkg.tool_label("arc") == "Arco")
-check_true("the arc writes lines, not polygons",
-           plugin_mod.TOOL_GEOMETRY["arc"] == "LineString")
-check_true("it is not edit-in-place",
-           "arc" not in plugin_mod.EDIT_IN_PLACE_TOOLS)
-built_arc = tools_pkg.create_tool("arc", canvas, layer_provider=lambda: None)
-check_true("it instantiates through the registry",
+check_true("the arc is no longer a CAD tool",
+           "arc" not in tools_pkg.TOOL_REGISTRY)
+check_true("...and is listed among the withdrawn ones",
+           "arc" in tools_pkg.WITHDRAWN_TOOLS)
+check_true("...with no layer type left behind",
+           "arc" not in plugin_mod.TOOL_GEOMETRY)
+check_raises("asking for it fails loudly", KeyError,
+             tools_pkg.create_tool, "arc", canvas)
+built_arc = arc_tool.create(canvas, layer_provider=lambda: None)
+check_true("the session is still constructible directly, and still an arc",
            isinstance(built_arc, arc_tool.ArcTool))
 built_arc.deactivate()
 shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
@@ -2979,7 +2982,7 @@ dg7.deactivate()
 # --------------------------------------------------------------------------
 # MI - manual parametric input
 # --------------------------------------------------------------------------
-print("\n== MI1: a circle typed as an area is the Circle tool's circle ==")
+print("\n== MI1: a square typed as an area is the Square tool's square ==")
 mi_layer = scratch_layer("Polygon", "cad_manual")
 
 
@@ -2996,28 +2999,30 @@ def mi_answer(shape, choice, **values):
 
 
 mi1 = mi_tool.create(canvas, iface=None, layer_provider=lambda: mi_layer,
-                     dialog_factory=mi_answer(pr.TOOL_CIRCLE, "area_m2",
-                                              area_m2=10_000.0))
+                     dialog_factory=mi_answer(pr.TOOL_SQUARE, "area_m2",
+                                              area_m2=10_000.0,
+                                              azimuth_deg=0.0))
 mi1.activate()
 mi1.canvasReleaseEvent(Click(OX, OY))
 check("one click and one dialog make one feature", mi_layer.featureCount(), 1)
 mi1_geom = newest(mi_layer).geometry()
 
-mi1_radius = ge.circle_radius_from_area(10_000.0)
-mi1_reference = circle_tool.CircleSession()
+mi1_side = math.sqrt(10_000.0)
+mi1_reference = sq_tool.SquareSession()
 mi1_reference.set_origin(OX, OY)
-mi1_reference.submit("{0:.12f}".format(mi1_radius))
-mi1_ring, _ = pr.build(pr.TOOL_CIRCLE, mi1_reference.build_params(),
+mi1_reference.submit("{0:.12f}".format(mi1_side))
+mi1_reference.submit("0d")
+mi1_ring, _ = pr.build(pr.TOOL_SQUARE, mi1_reference.build_params(),
                        WORK_CRS.authid())
-print("        manual {0:.6f} m2, Cerchio {1:.6f} m2".format(
+print("        manuale {0:.6f} m2, Quadrato {1:.6f} m2".format(
     mi1_geom.area(), mi1_ring.area()))
-check("the two circles are the same circle",
+check("the two squares are the same square",
       max_vertex_gap(mi1_geom, mi1_ring), 0.0, 1e-9)
-check_true("and both are the inscribed polygon, not pi r squared",
-           mi1_geom.area() < 10_000.0)
+check("a square typed as 10 000 m2 measures 10 000 m2",
+      mi1_geom.area(), 10_000.0, 1e-6)
 mi1_record = pa.read_record(newest(mi_layer))
-check_true("the record says circle, because a circle is what was built",
-           mi1_record.tool == pr.TOOL_CIRCLE)
+check_true("the record says square, because a square is what was built",
+           mi1_record.tool == pr.TOOL_SQUARE)
 check("...and it rebuilds unchanged",
       max_vertex_gap(pr.rebuild(mi1_record)[0], mi1_geom), 0.0, 1e-9)
 mi1.deactivate()
@@ -3063,9 +3068,19 @@ for spec in mi_tool.SHAPES:
 
 check_raises("an unknown shape is refused", InvalidInputError,
              mi_tool.shape_spec, "ellipse")
-mi3 = mi_tool.ManualInputSession(shape=pr.TOOL_CIRCLE)
+# v1.7.0: a circle is not one of the three admitted primitives, so it is not
+# in the shape list either -- the dialog cannot build what the toolbar does
+# not offer.
+check_raises("a circle is no longer an admitted shape", InvalidInputError,
+             mi_tool.shape_spec, pr.TOOL_CIRCLE)
+check("the dialog offers exactly the three admitted primitives",
+      len(mi_tool.SHAPES), 3)
+check_true("...and they are square, rectangle and regular polygon",
+           set(mi_tool.SHAPE_KEYS) == {pr.TOOL_SQUARE, pr.TOOL_RECTANGLE,
+                                       pr.TOOL_POLYGON})
+mi3 = mi_tool.ManualInputSession(shape=pr.TOOL_SQUARE)
 check_raises("...an unknown measure too", InvalidInputError,
-             mi3.set_choice, "side_m")
+             mi3.set_choice, "radius_m")
 check_raises("...and an unknown field", InvalidInputError,
              mi3.set_field, "n_sides", 6)
 check_raises("a session with no insertion point cannot build",
@@ -3125,9 +3140,9 @@ check("an eight-sided polygon has eight sides",
 mi5_dialog.dialog.deleteLater()
 
 print("\n== R2 (1.5.0): both tools are registered like the others ==")
-for key, label, cls in (("digitize", "Poligono digitalizzato",
+for key, label, cls in (("digitize", "Poligono",
                          dg_tool.DigitizeSession),
-                        ("manual_input", "Inserimento manuale",
+                        ("polygon_params", "Poligono parametrico",
                          mi_tool.ManualInputSession)):
     check_true("{0} is in the registry".format(key),
                key in tools_pkg.TOOL_REGISTRY)
@@ -3153,6 +3168,175 @@ check_true("the registry and the toolbar order still agree",
 r2_shortcuts = [tools_pkg.tool_shortcut(k) for k in tools_pkg.TOOL_REGISTRY]
 check("every shortcut is still distinct", len(set(r2_shortcuts)),
       len(r2_shortcuts))
+
+
+# ==========================================================================
+# v1.7.0 - the CAD toolset is three primitives, each in two input modes
+# ==========================================================================
+from geocad_uav.gui import extent_source as es_mod               # noqa: E402
+
+print("\n== CT1: exactly three primitives are offered, and nothing else ==")
+ADMITTED = tools_pkg.ADMITTED_SHAPES
+check("three shapes are admitted", len(ADMITTED), 3)
+check_true("...and they are the square, the rectangle and the polygon",
+           set(ADMITTED) == {"Quadrato", "Rettangolo", "Poligono"})
+check("every shape is offered in two input modes",
+      len({key for pair in ADMITTED.values() for key in pair}), 6)
+check("...which with the three modifiers is the whole registry",
+      len(tools_pkg.TOOL_REGISTRY), 9)
+check_true("the registry is exactly the admitted keys plus the modifiers",
+           set(tools_pkg.TOOL_REGISTRY)
+           == {key for pair in ADMITTED.values() for key in pair}
+           | set(plugin_mod.EDIT_IN_PLACE_TOOLS))
+check_true("the modifiers are not primitives, so they stay",
+           set(plugin_mod.EDIT_IN_PLACE_TOOLS)
+           == {"rotate", "move", "resize"})
+
+print("\n-- every withdrawn primitive is unreachable --")
+for withdrawn in tools_pkg.WITHDRAWN_TOOLS:
+    check_true("{0} is out of the registry".format(withdrawn),
+               withdrawn not in tools_pkg.TOOL_REGISTRY)
+    check_true("{0} is out of the toolbar order".format(withdrawn),
+               withdrawn not in plugin_mod.CAD_TOOL_ORDER)
+    check_true("{0} has no layer type left behind".format(withdrawn),
+               withdrawn not in plugin_mod.TOOL_GEOMETRY)
+    check_raises("asking for {0} fails loudly".format(withdrawn), KeyError,
+                 tools_pkg.create_tool, withdrawn, canvas)
+check_true("no circle, arc or line can be drawn any more",
+           not ({"circle", "arc", "line", "polyline", "ellipse"}
+                & set(tools_pkg.TOOL_REGISTRY)))
+
+print("\n== CT2: each shape draws and types to the same builder ==")
+for shape, (drawn_key, typed_key) in sorted(ADMITTED.items()):
+    drawn = tools_pkg.create_tool(drawn_key, canvas,
+                                  layer_provider=lambda: None)
+    typed = tools_pkg.create_tool(typed_key, canvas,
+                                  layer_provider=lambda: None)
+    print("        {0:<12} disegno={1:<16} parametrico={2}".format(
+        shape, drawn_key, typed_key))
+    check_true("{0}: both modes are CAD map tools".format(shape),
+               isinstance(drawn, tb.CadMapTool)
+               and isinstance(typed, tb.CadMapTool))
+    check_true("{0}: both write polygons".format(shape),
+               drawn.session.geometry_type == "Polygon"
+               and typed.session.geometry_type == "Polygon")
+    check_true("{0}: both are on the dock toolbar".format(shape),
+               drawn_key in plugin_mod.CAD_TOOL_ORDER
+               and typed_key in plugin_mod.CAD_TOOL_ORDER)
+    check_true("{0}: the drawn mode snaps to the project".format(shape),
+               drawn.snap_enabled)
+    check_true("{0}: the typed mode is the manual input".format(shape),
+               isinstance(typed.session, mi_tool.ManualInputSession))
+    drawn.deactivate()
+    typed.deactivate()
+
+print("\n-- the registry, not the plugin, says which shape a mode builds --")
+check_true("the parametric square is pointed at the square",
+           tools_pkg.tool_options("square_params") == {"shape": pr.TOOL_SQUARE})
+check_true("...the parametric rectangle at the rectangle",
+           tools_pkg.tool_options("rectangle_params")
+           == {"shape": pr.TOOL_RECTANGLE})
+check_true("...and the parametric polygon at the regular polygon",
+           tools_pkg.tool_options("polygon_params")
+           == {"shape": pr.TOOL_POLYGON})
+check_true("a drawing tool carries no options",
+           tools_pkg.tool_options("digitize") == {})
+override = tools_pkg.create_tool("square_params", canvas,
+                                 layer_provider=lambda: None,
+                                 shape=pr.TOOL_RECTANGLE)
+check_true("a caller may still override what the registry defaults to",
+           override.session.spec.tool == pr.TOOL_RECTANGLE)
+override.deactivate()
+
+print("\n== CT3: drawn and typed give the same square, to 1e-9 ==")
+ct3_layer = scratch_layer("Polygon", "cad_dual_square")
+SIDE = 40.0
+ct3_drawn = sq_tool.SquareSession()
+ct3_drawn.set_origin(OX, OY)
+ct3_drawn.submit("{0:.9f}".format(SIDE))
+ct3_drawn.submit("0d")
+ct3_drawn_geom, _ = pr.build(pr.TOOL_SQUARE, ct3_drawn.build_params(),
+                             WORK_CRS.authid())
+
+ct3_typed = tools_pkg.create_tool(
+    "square_params", canvas, layer_provider=lambda: ct3_layer,
+    dialog_factory=mi_answer(pr.TOOL_SQUARE, "side_m", side_m=SIDE,
+                             azimuth_deg=0.0))
+ct3_typed.activate()
+ct3_typed.canvasReleaseEvent(Click(OX, OY))
+ct3_typed_geom = newest(ct3_layer).geometry()
+print("        disegnato {0:.6f} m2, digitato {1:.6f} m2".format(
+    ct3_drawn_geom.area(), ct3_typed_geom.area()))
+check("both squares measure side squared", ct3_typed_geom.area(),
+      SIDE * SIDE, 1e-6)
+check("the two modes land on the same vertices",
+      max_vertex_gap(ct3_drawn_geom, ct3_typed_geom), 0.0, 1e-9)
+ct3_typed.deactivate()
+
+print("\n-- and the same rectangle --")
+ct3b_layer = scratch_layer("Polygon", "cad_dual_rect")
+ct3b_drawn = rect_tool.RectangleSession(
+    reference=rect_tool.REFERENCE_CENTER)
+ct3b_drawn.set_origin(OX, OY)
+ct3b_drawn.submit("30")
+ct3b_drawn.submit("20")
+ct3b_drawn.submit("0d")
+ct3b_drawn_geom, _ = pr.build(pr.TOOL_RECTANGLE, ct3b_drawn.build_params(),
+                              WORK_CRS.authid())
+ct3b_typed = tools_pkg.create_tool(
+    "rectangle_params", canvas, layer_provider=lambda: ct3b_layer,
+    dialog_factory=mi_answer(pr.TOOL_RECTANGLE, "", width_m=30.0,
+                             height_m=20.0, azimuth_deg=0.0))
+ct3b_typed.activate()
+ct3b_typed.canvasReleaseEvent(Click(OX, OY))
+ct3b_typed_geom = newest(ct3b_layer).geometry()
+check("a 30 x 20 rectangle measures 600 m2", ct3b_typed_geom.area(), 600.0,
+      1e-6)
+check("drawn and typed are the same rectangle",
+      max_vertex_gap(ct3b_drawn_geom, ct3b_typed_geom), 0.0, 1e-9)
+ct3b_typed.deactivate()
+
+print("\n-- the polygon: free vertices drawn, regular typed --")
+ct3c_layer = scratch_layer("Polygon", "cad_dual_polygon")
+ct3c_drawn = tools_pkg.create_tool("digitize", canvas,
+                                   layer_provider=lambda: ct3c_layer)
+ct3c_drawn.activate()
+for x, y in ((OX, OY), (OX + 30.0, OY), (OX + 30.0, OY + 20.0),
+             (OX + 12.0, OY + 34.0), (OX, OY + 20.0)):
+    ct3c_drawn.canvasReleaseEvent(Click(x, y))
+ct3c_drawn.session.confirm()
+ct3c_free = ct3c_drawn.session.build_params()
+check("the drawn polygon keeps the five clicked vertices",
+      len(ct3c_free["points"]), 5)
+ct3c_drawn.session.cancel()
+ct3c_drawn.deactivate()
+
+ct3c_typed = tools_pkg.create_tool(
+    "polygon_params", canvas, layer_provider=lambda: ct3c_layer,
+    dialog_factory=mi_answer(pr.TOOL_POLYGON, "radius_m", n_sides=6,
+                             radius_m=10.0, azimuth_deg=0.0))
+ct3c_typed.activate()
+ct3c_typed.canvasReleaseEvent(Click(OX, OY))
+ct3c_hexagon = newest(ct3c_layer).geometry()
+ct3c_reference = pr.build(pr.TOOL_POLYGON,
+                          {"x": OX, "y": OY, "n_sides": 6, "radius_m": 10.0,
+                           "azimuth_deg": 0.0}, WORK_CRS.authid())[0]
+print("        esagono r=10: {0:.6f} m2".format(ct3c_hexagon.area()))
+check("the typed polygon is the engine's regular polygon",
+      max_vertex_gap(ct3c_hexagon, ct3c_reference), 0.0, 1e-9)
+check("...with six sides", len(vertices(ct3c_hexagon)), 7)
+check("...and the area of a regular hexagon of radius 10",
+      ct3c_hexagon.area(), 6.0 * 0.5 * 100.0 * math.sin(math.pi / 3.0), 1e-6)
+ct3c_typed.deactivate()
+
+print("\n== CT4: the AOI picker draws polygons, not rings to be repaired ==")
+check_true("the free-form AOI button now points at the polygon digitizer",
+           plugin_mod.TOOL_GEOMETRY.get("digitize") == "Polygon")
+check_true("the extent picker asks the plugin which layer a tool needs",
+           es_mod.plugin_geometry_for("digitize") == "Polygon"
+           and es_mod.plugin_geometry_for("rectangle") == "Polygon")
+check_true("...and falls back to a polygon for anything it does not know",
+           es_mod.plugin_geometry_for("trapezoid") == "Polygon")
 
 
 print("\n" + "=" * 80)

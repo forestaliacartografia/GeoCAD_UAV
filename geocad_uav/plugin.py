@@ -28,19 +28,21 @@ MENU_TITLE = "GeoCad UAV Toolkit"
 
 #: Geometry type each CAD tool writes, and therefore which scratch layer it
 #: needs. Keys match ``cad.tools.TOOL_REGISTRY``.
-TOOL_GEOMETRY = {"line": "LineString", "polyline": "LineString",
-                 "rectangle": "Polygon", "circle": "Polygon",
-                 "square": "Polygon", "regular_polygon": "Polygon",
-                 "arc": "LineString", "digitize": "Polygon",
-                 "manual_input": "Polygon"}
+# v1.7.0: the toolset is three primitives, so every creating tool writes a
+# polygon and the scratch layer is always polygonal.
+TOOL_GEOMETRY = {"square": "Polygon", "square_params": "Polygon",
+                 "rectangle": "Polygon", "rectangle_params": "Polygon",
+                 "digitize": "Polygon", "polygon_params": "Polygon"}
 
 #: Tools that edit an existing feature instead of creating one. They must
 #: never be handed a scratch layer: they rotate what the operator selected.
 EDIT_IN_PLACE_TOOLS = ("rotate", "move", "resize")
 
 #: CAD tools mounted on the dock's toolbar, in display order.
-CAD_TOOL_ORDER = ("line", "polyline", "rectangle", "square", "circle",
-                  "arc", "regular_polygon", "digitize", "manual_input",
+#: Each shape twice: drawn on the map, then typed into a dialog.
+CAD_TOOL_ORDER = ("square", "square_params",
+                  "rectangle", "rectangle_params",
+                  "digitize", "polygon_params",
                   "rotate", "move", "resize")
 
 # Where an action is mounted.
@@ -300,12 +302,11 @@ class GeoCadUavPlugin:
         if tool is None:
             from .cad import tools as cad_tools                 # noqa: PLC0415
 
-            options = {}
-            if key == "polyline" and self.dock is not None:
-                options["close"] = self.dock.polyline_close_requested()
+            # Whatever this entry needs is in the registry next to it; the
+            # plugin does not special-case any tool here.
             tool = cad_tools.create_tool(
                 key, canvas, iface=self.iface,
-                layer_provider=lambda k=key: self._target_layer(k), **options)
+                layer_provider=lambda k=key: self._target_layer(k))
             self.map_tools[key] = tool
         canvas.setMapTool(tool)
         if self.dock is not None:

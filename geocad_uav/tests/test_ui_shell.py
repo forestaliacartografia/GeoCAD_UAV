@@ -226,14 +226,24 @@ check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
 # v1.4.3: ten became eleven when the Arco tool joined.
 # v1.4.5: eleven back to ten -- the Ellisse tool was withdrawn.
 # v1.5.0: ten became twelve with the digitizer and the manual input.
-check("the toolbar carries every shipped CAD tool", len(cad_mounted), 12)
+# v1.7.0: twelve became nine -- three primitives, each drawn and each typed,
+# plus the three modifiers.
+check("the toolbar carries every shipped CAD tool", len(cad_mounted), 9)
 labels = {a.text() for a in cad_mounted}
-check_true("Ellisse is not offered any more", "Ellisse" not in labels)
-for expected in ("Linea", "Polilinea", "Rettangolo", "Quadrato", "Cerchio",
-                 "Arco", "Poligono regolare", "Ruota", "Sposta",
-                 "Ridimensiona"):
+for expected in ("Quadrato", "Quadrato parametrico",
+                 "Rettangolo", "Rettangolo parametrico",
+                 "Poligono", "Poligono parametrico",
+                 "Ruota", "Sposta", "Ridimensiona"):
     check_true("'{0}' is on the dock toolbar".format(expected),
                expected in labels)
+for withdrawn in ("Linea", "Polilinea", "Cerchio", "Arco", "Ellisse",
+                  "Poligono regolare", "Inserimento manuale"):
+    check_true("'{0}' is not offered any more".format(withdrawn),
+               withdrawn not in labels)
+check_true("each admitted shape is on the toolbar twice, drawn and typed",
+           all(cad_tools.tool_label(drawn) in labels
+               and cad_tools.tool_label(typed) in labels
+               for drawn, typed in cad_tools.ADMITTED_SHAPES.values()))
 check_true("every registered CAD tool is mounted",
            len(cad_mounted) == len(cad_tools.TOOL_REGISTRY))
 check_true("all CAD actions are checkable",
@@ -254,22 +264,31 @@ cad_mounted[1].setChecked(False)
 # --------------------------------------------------------------------------
 print("\n== U5: CAD actions drive the canvas map tool ==")
 canvas = iface.mapCanvas()
-line_action = plugin.tool_actions["line"]
+square_action = plugin.tool_actions["square"]
 rect_action = plugin.tool_actions["rectangle"]
 
-line_action.trigger()
-line_tool = plugin.map_tools.get("line")
-check_true("triggering Linea created a map tool", line_tool is not None)
+square_action.trigger()
+square_tool = plugin.map_tools.get("square")
+check_true("triggering Quadrato created a map tool", square_tool is not None)
 check_true("...and it is a CAD map tool",
-           isinstance(line_tool, tb.CadMapTool))
-check_true("the canvas is using it", canvas.mapTool() is line_tool)
+           isinstance(square_tool, tb.CadMapTool))
+check_true("the canvas is using it", canvas.mapTool() is square_tool)
 
 rect_action.trigger()
 rect_tool = plugin.map_tools.get("rectangle")
 check_true("triggering Rettangolo swaps the map tool",
-           canvas.mapTool() is rect_tool and rect_tool is not line_tool)
-check_true("the line action was un-checked by the group",
-           not line_action.isChecked())
+           canvas.mapTool() is rect_tool and rect_tool is not square_tool)
+check_true("the square action was un-checked by the group",
+           not square_action.isChecked())
+
+params_action = plugin.tool_actions["square_params"]
+params_action.trigger()
+params_tool = plugin.map_tools.get("square_params")
+check_true("the parametric mode is a tool of its own",
+           params_tool is not None and params_tool is not square_tool)
+check_true("...pointed at the square by the registry, not by the plugin",
+           params_tool.session.spec.tool == "square")
+check_true("the canvas is using it", canvas.mapTool() is params_tool)
 
 # --------------------------------------------------------------------------
 # U6 - unload is symmetric and re-init does not duplicate

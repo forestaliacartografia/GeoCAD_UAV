@@ -16,9 +16,10 @@ the square the Square tool draws from the same area. The table below is the
 whole of this module's knowledge: which parameters each existing primitive
 accepts, and what to call them in Italian.
 
-Closed shapes only. A line or an arc would need a LineString layer, and one
-tool that silently changes the geometry type of its destination is a worse
-answer than two tools that do not.
+v1.7.0 -- the table holds exactly the three admitted primitives: rectangle,
+square and regular polygon. This module *is* the parametric input mode of
+each of them: the registry points three entries at it, one per shape, and the
+dialog's shape list lets the operator move between them without leaving it.
 """
 
 from __future__ import annotations
@@ -91,14 +92,6 @@ SHAPES = (
                  Field("diagonal_m", "Diagonale", KIND_LENGTH, 14.142136),
                  Field("area_m2", "Area", KIND_AREA, 100.0),
                  Field("perimeter_m", "Perimetro", KIND_LENGTH, 40.0))),
-    ShapeSpec(
-        pr.TOOL_CIRCLE, "Cerchio",
-        choices=(Field("radius_m", "Raggio", KIND_LENGTH, 10.0),
-                 Field("diameter_m", "Diametro", KIND_LENGTH, 20.0),
-                 Field("area_m2", "Area", KIND_AREA, 314.159265),
-                 Field("circumference_m", "Circonferenza", KIND_LENGTH,
-                       62.831853)),
-        params={"mode": "center_radius"}),
     ShapeSpec(
         pr.TOOL_POLYGON, "Poligono regolare",
         required=(Field("n_sides", "Numero di lati", KIND_COUNT, 6),
