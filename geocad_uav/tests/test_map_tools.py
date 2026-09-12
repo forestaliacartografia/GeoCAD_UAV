@@ -3339,6 +3339,148 @@ check_true("...and falls back to a polygon for anything it does not know",
            es_mod.plugin_geometry_for("trapezoid") == "Polygon")
 
 
+# ==========================================================================
+# v1.11.0 - the parametric shape rides the cursor before it is placed
+# ==========================================================================
+print("\n== PL1: prima le misure, poi la forma sul cursore ==")
+
+
+def counting_answer(shape, choice, **values):
+    """A dialog that never opens, and counts how often it was asked."""
+    calls = []
+
+    def factory(session, _parent):
+        calls.append(True)
+        session.set_shape(shape)
+        if choice:
+            session.set_choice(choice)
+        for name, value in values.items():
+            session.set_field(name, value)
+        return True
+    factory.calls = calls
+    return factory
+
+
+SIDE = 12.0
+pv_layer = scratch_layer("Polygon", "cad_placement")
+pv_dialog = counting_answer(pr.TOOL_SQUARE, "side_m", side_m=SIDE,
+                            azimuth_deg=0.0)
+pv = mi_tool.create(canvas, iface=None, layer_provider=lambda: pv_layer,
+                    dialog_factory=pv_dialog)
+pv.activate()
+check("il dialogo e' stato chiesto all'attivazione", len(pv_dialog.calls), 1)
+check_true("le misure ci sono", pv.session.has_values)
+check_true("...e la forma sta aspettando dove metterla",
+           pv.session.is_placing)
+check_true("senza cursore non c'e' ancora nulla da disegnare",
+           pv.session.preview_points() is None)
+check("e il layer e' intatto", pv_layer.featureCount(), 0)
+
+print("\n== PL2: l'anteprima segue il cursore, a grandezza vera ==")
+for cx, cy in ((OX + 30.0, OY + 20.0), (OX - 45.0, OY + 60.0)):
+    pv.canvasMoveEvent(Move(cx, cy))
+    points = pv.session.preview_points()
+    check_true("l'anteprima esiste sotto il cursore", points is not None)
+    ring = np.asarray(points, dtype=float)
+    east, north = spans(ring)
+    centre_x = float((ring[:, 0].max() + ring[:, 0].min()) / 2.0)
+    centre_y = float((ring[:, 1].max() + ring[:, 1].min()) / 2.0)
+    print("        cursore ({0:+.1f},{1:+.1f}) -> centro ({2:+.1f},{3:+.1f}), "
+          "{4:.3f} x {5:.3f} m".format(cx - OX, cy - OY, centre_x - OX,
+                                       centre_y - OY, east, north))
+    check("l'anteprima e' centrata sul cursore, in X", centre_x, cx, 1e-9)
+    check("...e in Y", centre_y, cy, 1e-9)
+    check("ed e' larga quanto il lato chiesto", east, SIDE, 1e-9)
+    check("...e alta altrettanto", north, SIDE, 1e-9)
+check_true("la banda elastica la sta disegnando",
+           pv._band is not None and pv._band.numberOfVertices() >= 4)
+check_true("il promemoria dice cosa manca",
+           any("Click per posizionare" in line
+               for line in pv.session.hud_lines()))
+
+print("\n-- 100 spostamenti con la forma appesa al cursore --")
+pv_baseline = canvas.refresh_calls
+for step in range(100):
+    pv.canvasMoveEvent(Move(OX + step * 0.7, OY + step * 0.5))
+check("nessuna feature durante 100 spostamenti", pv_layer.featureCount(), 0)
+check("nessuna QgsGeometry costruita", pv.geometry_builds, 0)
+check("nessun canvas.refresh()", canvas.refresh_calls - pv_baseline, 0)
+check("il dialogo non e' stato riaperto", len(pv_dialog.calls), 1)
+
+print("\n== PL3: un click la posa, e le misure restano ==")
+PLACE_X, PLACE_Y = OX + 25.0, OY - 15.0
+pv.canvasMoveEvent(Move(PLACE_X, PLACE_Y))
+previewed = np.asarray(pv.session.preview_points(), dtype=float)
+pv.canvasReleaseEvent(Click(PLACE_X, PLACE_Y))
+check("un click, una geometria", pv_layer.featureCount(), 1)
+placed = newest(pv_layer).geometry()
+print("        posata: area {0:.6f} m2, centro ({1:+.1f},{2:+.1f})".format(
+    placed.area(), placed.centroid().constGet().x() - OX,
+    placed.centroid().constGet().y() - OY))
+check("l'area e' il lato al quadrato", placed.area(), SIDE * SIDE, 1e-6)
+check("il centro e' il punto cliccato, in X",
+      placed.centroid().constGet().x(), PLACE_X, 1e-9)
+check("...e in Y", placed.centroid().constGet().y(), PLACE_Y, 1e-9)
+placed_ring, _ = pr.build(pr.TOOL_SQUARE,
+                          {"x": PLACE_X, "y": PLACE_Y, "side_m": SIDE,
+                           "azimuth_deg": 0.0}, WORK_CRS.authid())
+check("cio' che era in anteprima e' cio' che e' stato scritto",
+      max_vertex_gap(placed, placed_ring), 0.0, 1e-9)
+check("...vertice per vertice, anche rispetto all'anteprima stessa",
+      float(np.max(np.abs(previewed[:4]
+                          - np.asarray(ge.square_from(
+                              (PLACE_X, PLACE_Y), 0.0,
+                              side_m=SIDE), dtype=float)[:4]))), 0.0, 1e-9)
+check_true("l'anteprima e' stata tolta dopo la posa",
+           pv.session.preview_points() is None)
+check("le misure sono rimaste: il dialogo non torna", len(pv_dialog.calls), 1)
+check_true("...e la forma e' pronta per la prossima",
+           pv.session.has_values and pv.session.is_placing)
+
+pv.canvasMoveEvent(Move(OX + 80.0, OY + 80.0))
+pv.canvasReleaseEvent(Click(OX + 80.0, OY + 80.0))
+check("un secondo click posa un secondo quadrato uguale",
+      pv_layer.featureCount(), 2)
+check("...della stessa area", newest(pv_layer).geometry().area(),
+      SIDE * SIDE, 1e-6)
+check("e il dialogo non e' mai stato riaperto", len(pv_dialog.calls), 1)
+
+print("\n== PL4: il tasto destro cambia le misure ==")
+pv.canvasReleaseEvent(Click(OX, OY, RIGHT))
+check("il tasto destro riapre il dialogo", len(pv_dialog.calls), 2)
+check("...senza scrivere nulla", pv_layer.featureCount(), 2)
+check_true("l'anteprima riparte da capo, senza cursore",
+           pv.session.preview_points() is None)
+pv.deactivate()
+
+print("\n-- annullare il dialogo non lascia nulla a mezzo --")
+pv_cancel_layer = scratch_layer("Polygon", "cad_placement_cancel")
+cancel_calls = []
+
+
+def refuse(session, _parent):
+    cancel_calls.append(True)
+    return False
+
+
+pv_cancel = mi_tool.create(canvas, iface=None,
+                           layer_provider=lambda: pv_cancel_layer,
+                           dialog_factory=refuse)
+pv_cancel.activate()
+check("il dialogo e' stato chiesto", len(cancel_calls), 1)
+check_true("annullato, non ci sono misure", not pv_cancel.session.has_values)
+check_true("...ne' un'anteprima",
+           pv_cancel.session.preview_points() is None)
+pv_cancel.canvasMoveEvent(Move(OX + 5.0, OY + 5.0))
+check("nessuna geometria costruita", pv_cancel.geometry_builds, 0)
+pv_cancel.canvasReleaseEvent(Click(OX + 5.0, OY + 5.0))
+check("un click chiede di nuovo le misure", len(cancel_calls), 2)
+check("...e senza misure non scrive niente", pv_cancel_layer.featureCount(), 0)
+check_true("la sessione resta ferma",
+           pv_cancel.session.state == tb.ToolState.IDLE)
+pv_cancel.deactivate()
+
+
 print("\n" + "=" * 80)
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()

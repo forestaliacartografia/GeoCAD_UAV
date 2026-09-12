@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.10.0
+version=1.11.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,19 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.10.0
+changelog=1.11.0
+    - L'inserimento parametrico ha invertito l'ordine: prima le misure,
+      poi la posizione. Si sceglie la forma e si scrivono i numeri, la
+      geometria esatta compare agganciata al cursore a grandezza vera,
+      e un solo click la posa dove serve. Lo snap del progetto vale
+      durante il posizionamento come per ogni altro strumento.
+    - Quello che si vede appeso al cursore E' la geometria che viene
+      scritta: stesso costruttore, stessi vertici, nessun ingombro
+      approssimato.
+    - Le misure restano fra una posa e l'altra: venti piazzole da 4x4 m
+      si scrivono una volta e si posano con venti click. Il tasto
+      destro riapre la finestra per cambiarle.
+    1.10.0
     - Ogni poligono CAD puo' portarsi dietro i dati catastali della
       particella su cui ricade: comune, foglio e particella, letti dal
       servizio WFS INSPIRE dell'Agenzia delle Entrate (licenza CC BY

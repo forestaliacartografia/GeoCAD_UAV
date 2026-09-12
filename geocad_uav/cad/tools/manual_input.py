@@ -1,7 +1,7 @@
 """
-Manual parametric input: click where it goes, type what it is.
+Manual parametric input: type what it is, then say where it goes.
 
-    click on the map  ->  dialog: shape + one measure  ->  Enter  ->  commit
+    dialog: shape + measures  ->  the exact shape rides the cursor  ->  click
 
 Every other CAD tool asks for its numbers through the dock's dynamic input,
 which is fast once the token syntax is in the fingers and opaque before that.
@@ -20,6 +20,12 @@ v1.7.0 -- the table holds exactly the three admitted primitives: rectangle,
 square and regular polygon. This module *is* the parametric input mode of
 each of them: the registry points three entries at it, one per shape, and the
 dialog's shape list lets the operator move between them without leaving it.
+
+v1.11.0 -- the numbers come first. The dialog opens when the tool is picked;
+once the measures are confirmed the finished geometry follows the cursor at
+full size, snapping like any other tool, and a single click puts it down.
+Asking for the point first, as this module used to, made the operator commit
+to a position before knowing how big the thing was.
 """
 
 from __future__ import annotations
@@ -192,11 +198,27 @@ class ManualInputSession(CadToolSession):
     # -- completion --------------------------------------------------------
 
     @property
+    def has_values(self) -> bool:
+        """Every measure the shape needs has been typed.
+
+        Separate from :attr:`is_ready`, which also wants an insertion point:
+        between the dialog closing and the click landing the shape is fully
+        defined and has nowhere to be yet, and that is precisely the state in
+        which it rides the cursor.
+        """
+        return all(self.values.get(field.name) is not None
+                   for field in self.fields())
+
+    @property
     def is_ready(self) -> bool:
         if self.origin is None:
             return False
-        return all(self.values.get(field.name) is not None
-                   for field in self.fields())
+        return self.has_values
+
+    @property
+    def is_placing(self) -> bool:
+        """Measures in hand, insertion point still to come."""
+        return self.has_values and self.origin is None
 
     def confirm(self) -> str:
         if self.origin is None:
@@ -212,14 +234,24 @@ class ManualInputSession(CadToolSession):
 
     # -- parameters --------------------------------------------------------
 
-    def build_params(self) -> dict:
-        if self.origin is None:
+    def anchor(self):
+        """Where the shape is drawn: the point clicked, or the cursor.
+
+        The preview and the commit go through the same builder with the same
+        numbers; the only difference between the shape following the mouse
+        and the shape written to the layer is which point was handed in.
+        """
+        return self.origin if self.origin is not None else self.cursor
+
+    def build_params(self, anchor=None) -> dict:
+        anchor = anchor if anchor is not None else self.origin
+        if anchor is None:
             raise InvalidInputError(
                 "manual input needs an insertion point",
                 user_message="Indica prima il punto di inserimento.")
         params = dict(self.spec.params)
-        params["x"] = float(self.origin[0])
-        params["y"] = float(self.origin[1])
+        params["x"] = float(anchor[0])
+        params["y"] = float(anchor[1])
         for field in self.fields():
             value = self.values.get(field.name)
             if value is None:
@@ -229,11 +261,18 @@ class ManualInputSession(CadToolSession):
         return params
 
     def preview_points(self) -> Optional[np.ndarray]:
-        """The shape as typed, drawn by the same dispatch that commits it."""
-        if not self.is_ready:
+        """The shape as typed, drawn by the same dispatch that commits it.
+
+        Anchored on the cursor while it is being placed, so what the operator
+        drags around the map is the exact geometry -- not a bounding box, not
+        a marker -- and what lands on the click is the same ring.
+        """
+        anchor = self.anchor()
+        if anchor is None or not self.has_values:
             return None
         try:
-            coords, _closed = pr.ring_for(self.spec.tool, self.build_params())
+            coords, _closed = pr.ring_for(self.spec.tool,
+                                          self.build_params(anchor))
         except InvalidInputError:
             return None            # half-typed numbers are not an error yet
         return np.asarray(coords, dtype=float)
@@ -243,6 +282,8 @@ class ManualInputSession(CadToolSession):
     def hud_lines(self):
         lines = super().hud_lines()
         lines.append("Forma {0}".format(self.spec.label))
+        if self.is_placing:
+            lines.append("Click per posizionare (tasto destro: cambia misure)")
         for field in self.fields():
             value = self.values.get(field.name)
             if value is None:
@@ -361,7 +402,13 @@ class ManualInputDialog:
 
 
 class ManualInputMapTool(CadMapTool):
-    """One click for the insertion point, then the dialog, then the commit."""
+    """Measures first, then the exact shape rides the cursor until it is put.
+
+    The order matters. Asking for the point first and the numbers afterwards
+    means the operator commits to a position before knowing how big the thing
+    is; this way the geometry is complete before it is placed, it is drawn at
+    the cursor at full size, and the click only decides where.
+    """
 
     def __init__(self, canvas, session, iface=None, layer_provider=None,
                  dialog_factory=None):
@@ -370,38 +417,90 @@ class ManualInputMapTool(CadMapTool):
         #: Anything callable ``(session, parent) -> bool``. The default opens
         #: the real dialog; a test passes its own and never shows a window.
         self.dialog_factory = dialog_factory or self._default_dialog
+        #: True while a dialog is up: the canvas events that arrive meanwhile
+        #: must not open a second one.
+        self._asking = False
 
     @staticmethod
     def _default_dialog(session, parent) -> bool:
         return ManualInputDialog(session, parent).exec_accepted()
 
-    def ask_and_commit(self) -> bool:
-        """Dialog, then commit. False when the operator cancelled."""
+    # -- lifecycle ---------------------------------------------------------
+
+    def activate(self):
+        """Take the measures, then hand the shape to the cursor.
+
+        Asked on every activation, not only the first: an operator who picks
+        this tool has picked it in order to place something particular, and
+        the defaults sitting in the fields are a starting point for the
+        dialog, not an answer to it.
+        """
+        super().activate()
+        self.ask_measures()
+
+    def ask_measures(self) -> bool:
+        """Open the dialog. True when the operator confirmed the numbers.
+
+        The values survive a placement, so one dialog serves a whole run of
+        identical shapes: an operator laying out twenty 4 x 4 m plots types
+        the numbers once and clicks twenty times.
+        """
+        if self._asking:
+            return False
         parent = None
         if self.iface is not None:
             try:
                 parent = self.iface.mainWindow()
             except AttributeError:
                 parent = None
-        if not self.dialog_factory(self.session, parent):
+        self._asking = True
+        try:
+            accepted = bool(self.dialog_factory(self.session, parent))
+        finally:
+            self._asking = False
+        if not accepted:
+            self.session.values = {}
             self._escape()
             return False
-        self._do_commit()
+        self.session.cursor = None
+        self.clear_band()
+        self._paint_hud()
         return True
 
+    # -- mouse -------------------------------------------------------------
+
+    def canvasMoveEvent(self, event):                           # noqa: N802
+        """Carry the shape under the cursor while it is waiting to be placed.
+
+        The base class only redraws once a construction has started; here
+        there is nothing to start -- the shape is already whole -- so the
+        band is refreshed on every move. Still no QgsGeometry and still no
+        canvas refresh: the preview is points, as everywhere else.
+        """
+        super().canvasMoveEvent(event)
+        if self._work_decision is not None and self.session.is_placing:
+            self.update_band(self.canvas(), self._to_canvas)
+
     def canvasReleaseEvent(self, event):                        # noqa: N802
-        """A left click places the shape; the right button still cancels."""
+        """Left click puts the shape down; right click changes the measures."""
         from qgis.PyQt.QtCore import Qt                         # noqa: PLC0415
 
+        if event.button() == Qt.MouseButton.RightButton:
+            self.ask_measures()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             super().canvasReleaseEvent(event)
             return
         if self._work_decision is None:
             super().canvasReleaseEvent(event)
             return
+        if not self.session.has_values and not self.ask_measures():
+            return
         x, y = self._map_to_work(self.picked_point(event))
         self.session.set_origin(x, y)
-        self.ask_and_commit()
+        self._do_commit()
+        # The numbers stay: the next click puts down another one just like it.
+        self.session.cursor = None
 
 
 def create(canvas, iface=None, layer_provider=None,
