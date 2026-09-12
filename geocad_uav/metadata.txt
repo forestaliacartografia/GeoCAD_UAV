@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.8.0
+version=1.9.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,24 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.8.0
+changelog=1.9.0
+    - Densita' e distanze si convertono l'una nell'altra, in entrambi
+      i versi e per ogni schema: 1 200 piante per ettaro diventano il
+      sesto che le produce, e il sesto torna a dare quella densita'
+      senza perdere una cifra.
+    - Su un pendio il programma dice su quale ettaro sta contando:
+      quello di carta o quello di terreno. Su 30 gradi la correzione
+      isotropa pianta il 15.47 % in piu' di quanto la superficie
+      richiederebbe, e adesso quel numero si legge invece di
+      scoprirlo alla consegna del vivaio.
+    - Catalogo delle specie in GeoPackage: si apre in QGIS come una
+      normale tabella e si modifica li'. Nasce VUOTO: nessun elenco di
+      specie e' scritto nel plugin, perche' sarebbe sbagliato in una
+      stagione e in una valle.
+    - I limiti ecologici di una specie (quota, pendenza, esposizione)
+      diventano lo stesso filtro che accetta o scarta la singola
+      pianta e che disegna la maschera di idoneita'.
+    1.8.0
     - Il sesto si indica in distanze REALI sul terreno, non sulla
       carta. Il generatore chiede al DEM la pendenza nel punto in cui
       si trova e accorcia il passo planimetrico del suo coseno:
