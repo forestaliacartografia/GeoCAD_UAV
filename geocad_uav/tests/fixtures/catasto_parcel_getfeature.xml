@@ -1,0 +1,66 @@
+<?xml version='1.0' encoding="UTF-8" ?>
+<wfs:FeatureCollection
+   xmlns:CP="http://mapserver.gis.umn.edu/mapserver"
+   xmlns:gml="http://www.opengis.net/gml/3.2"
+   xmlns:wfs="http://www.opengis.net/wfs/2.0"
+   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://mapserver.gis.umn.edu/mapserver https://wfs.cartografia.agenziaentrate.gov.it/inspire/wfs/owfs01.php?SERVICE=WFS&amp;VERSION=2.0.0&amp;REQUEST=DescribeFeatureType&amp;TYPENAME=CP:CadastralParcel&amp;OUTPUTFORMAT=application%2Fgml%2Bxml%3B%20version%3D3.2 http://www.opengis.net/wfs/2.0 http://schemas.opengis.net/wfs/2.0/wfs.xsd http://www.opengis.net/gml/3.2 http://schemas.opengis.net/gml/3.2.1/gml.xsd"
+   timeStamp="2026-09-12T17:06:20" numberMatched="unknown" numberReturned="2"
+   next="https://wfs.cartografia.agenziaentrate.gov.it/inspire/wfs/owfs01.php?service=WFS&amp;version=2.0.0&amp;request=GetFeature&amp;typeNames=CP%3ACadastralParcel&amp;count=2&amp;bbox=43.1000%2C12.3800%2C43.1020%2C12.3820%2Curn%3Aogc%3Adef%3Acrs%3AEPSG%3A%3A6706&amp;STARTINDEX=2">
+      <wfs:boundedBy>
+      	<gml:Envelope srsName="urn:ogc:def:crs:EPSG::6706">
+      		<gml:lowerCorner>43.101279 12.379152</gml:lowerCorner>
+      		<gml:upperCorner>43.102847 12.382073</gml:upperCorner>
+      	</gml:Envelope>
+      </wfs:boundedBy>
+    <wfs:member>
+      <CP:CadastralParcel gml:id="CadastralParcel.IT.AGE.PLA.G478_025200.1016">
+        <gml:boundedBy>
+        	<gml:Envelope srsName="urn:ogc:def:crs:EPSG::6706">
+        		<gml:lowerCorner>43.101672 12.381390</gml:lowerCorner>
+        		<gml:upperCorner>43.102293 12.382073</gml:upperCorner>
+        	</gml:Envelope>
+        </gml:boundedBy>
+        <CP:msGeometry>
+          <gml:Polygon gml:id="CadastralParcel.IT.AGE.PLA.G478_025200.1016.1" srsName="urn:ogc:def:crs:EPSG::6706">
+            <gml:exterior>
+              <gml:LinearRing>
+                <gml:posList srsDimension="2">43.10175461 12.38196823 43.10167400 12.38205734 43.10167227 12.38207333 43.10188184 12.38183574 43.10196179 12.38173889 43.10208266 12.38159564 43.10222406 12.38143108 43.10223204 12.38144465 43.10227235 12.38142208 43.10229314 12.38142203 43.10225430 12.38139042 43.10222683 12.38140797 43.10214769 12.38150382 43.10204518 12.38162727 43.10194372 12.38174481 43.10185238 12.38185109 43.10175461 12.38196823 </gml:posList>
+              </gml:LinearRing>
+            </gml:exterior>
+          </gml:Polygon>
+        </CP:msGeometry>
+        <CP:INSPIREID_LOCALID>IT.AGE.PLA.G478_025200.1016</CP:INSPIREID_LOCALID>
+        <CP:INSPIREID_NAMESPACE>IT.AGE.PLA.</CP:INSPIREID_NAMESPACE>
+        <CP:LABEL>1016</CP:LABEL>
+        <CP:NATIONALCADASTRALREFERENCE>G478_025200.1016</CP:NATIONALCADASTRALREFERENCE>
+        <CP:ADMINISTRATIVEUNIT>G478</CP:ADMINISTRATIVEUNIT>
+      </CP:CadastralParcel>
+    </wfs:member>
+    <wfs:member>
+      <CP:CadastralParcel gml:id="CadastralParcel.IT.AGE.PLA.G478_025200.1189">
+        <gml:boundedBy>
+        	<gml:Envelope srsName="urn:ogc:def:crs:EPSG::6706">
+        		<gml:lowerCorner>43.101279 12.379152</gml:lowerCorner>
+        		<gml:upperCorner>43.102847 12.380471</gml:upperCorner>
+        	</gml:Envelope>
+        </gml:boundedBy>
+        <CP:msGeometry>
+          <gml:Polygon gml:id="CadastralParcel.IT.AGE.PLA.G478_025200.1189.1" srsName="urn:ogc:def:crs:EPSG::6706">
+            <gml:exterior>
+              <gml:LinearRing>
+                <gml:posList srsDimension="2">43.10257107 12.37968614 43.10254237 12.37960005 43.10267086 12.37948928 43.10284734 12.37934138 43.10283902 12.37931200 43.10213185 12.37987352 43.10209870 12.37987242 43.10207542 12.37985243 43.10202771 12.37978282 43.10176532 12.37940002 43.10175482 12.37938610 43.10164540 12.37921651 43.10160345 12.37915150 43.10155478 12.37925005 43.10201157 12.37994537 43.10196722 12.37996672 43.10189259 12.38000493 43.10189659 12.38001374 43.10161271 12.38017739 43.10129364 12.38036185 43.10127866 12.38037405 43.10131140 12.38047078 43.10136975 12.38043468 43.10138950 12.38042223 43.10141882 12.38040277 43.10151756 12.38033726 43.10153504 12.38036206 43.10169151 12.38025768 43.10171625 12.38024117 43.10182052 12.38017161 43.10209682 12.37998272 43.10212815 12.38003227 43.10213123 12.38003714 43.10216162 12.38001288 43.10229874 12.37990345 43.10257107 12.37968614 </gml:posList>
+              </gml:LinearRing>
+            </gml:exterior>
+          </gml:Polygon>
+        </CP:msGeometry>
+        <CP:INSPIREID_LOCALID>IT.AGE.PLA.G478_025200.1189</CP:INSPIREID_LOCALID>
+        <CP:INSPIREID_NAMESPACE>IT.AGE.PLA.</CP:INSPIREID_NAMESPACE>
+        <CP:LABEL>1189</CP:LABEL>
+        <CP:NATIONALCADASTRALREFERENCE>G478_025200.1189</CP:NATIONALCADASTRALREFERENCE>
+        <CP:ADMINISTRATIVEUNIT>G478</CP:ADMINISTRATIVEUNIT>
+      </CP:CadastralParcel>
+    </wfs:member>
+</wfs:FeatureCollection>
+
+

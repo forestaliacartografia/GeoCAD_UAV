@@ -450,6 +450,10 @@ class BaseCadTool:
         #: Diagnostics the tests assert on: neither may move during a hover.
         self.geometry_builds = 0
         self.canvas_refreshes = 0
+        #: Last cadastral lookup, and whatever it had to say. The lookup is
+        #: a background task: by the time it answers the commit is long over.
+        self.cadastre_task = None
+        self.cadastre_warning = ""
 
     # -- CRS ---------------------------------------------------------------
 
@@ -526,8 +530,64 @@ class BaseCadTool:
                     user_message="Inserimento della geometria non riuscito sul "
                                  "layer '{0}'.".format(layer.name()))
         layer.updateExtents()
+        self.request_cadastre(layer, geometry, attributes)
         self.session.reset()
         return feature
+
+    # -- cadastral parcel --------------------------------------------------
+
+    def request_cadastre(self, layer, geometry, attributes):
+        """Ask the Agenzia delle Entrate which parcel this shape sits on.
+
+        Off unless the operator turned it on, and never on the commit's own
+        thread: a government WFS answering in two seconds would be two
+        seconds of frozen canvas per polygon. The task writes the three
+        columns onto the feature when it comes back, and says nothing at all
+        when the point is in no parcel -- Trento and Bolzano keep their own
+        cadastre, and "not in this service" is an answer, not a failure.
+
+        Returns the task, or None when nothing was asked.
+        """
+        self.cadastre_warning = ""
+        self.cadastre_task = None
+        try:
+            from ...settings import settings as _settings      # noqa: PLC0415
+
+            if not bool(_settings.get("cadastre/enabled")):
+                return None
+        except Exception:                                       # noqa: BLE001
+            return None
+
+        cad_id = (attributes or {}).get(lf.CAD_ID_FIELD)
+        if cad_id is None or layer is None or geometry is None:
+            return None
+        try:
+            centroid = geometry.centroid()
+            point = centroid.constGet()
+            x, y = float(point.x()), float(point.y())
+            crs = layer.crs()
+        except (AttributeError, RuntimeError):
+            return None
+
+        from ...io import cadastre as cad_svc                   # noqa: PLC0415
+
+        def _apply(parcel, error):
+            if error:
+                self.cadastre_warning = error
+                return
+            if parcel is None:
+                return
+            feature_id = lf.feature_id_by_cad_id(layer, cad_id)
+            if feature_id is None:
+                return
+            lf.write_cadastre(layer, feature_id, parcel)
+
+        try:
+            self.cadastre_task = cad_svc.lookup_task(x, y, crs, _apply)
+        except Exception as exc:                                # noqa: BLE001
+            self.cadastre_warning = str(exc)
+            self.cadastre_task = None
+        return self.cadastre_task
 
     # -- rubber band -------------------------------------------------------
 

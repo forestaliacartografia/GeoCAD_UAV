@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.9.0
+version=1.10.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,24 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.9.0
+changelog=1.10.0
+    - Ogni poligono CAD puo' portarsi dietro i dati catastali della
+      particella su cui ricade: comune, foglio e particella, letti dal
+      servizio WFS INSPIRE dell'Agenzia delle Entrate (licenza CC BY
+      4.0). L'interrogazione parte in secondo piano dopo il commit: la
+      geometria e' scritta subito e non aspetta la rete.
+    - Il servizio parla un solo sistema di riferimento, EPSG:6706
+      (RDN2008 geografiche, latitudine per prima). La trasformazione
+      dal sistema del progetto la fa QGIS, col contesto del progetto.
+    - Il comune e' il codice Belfiore: il servizio non pubblica il
+      nome del comune, e un elenco codice-nome scritto nel plugin
+      sarebbe un dato cablato. Il foglio viene dal livello Mappe.
+    - La funzione e' SPENTA finche' non la si accende nelle
+      impostazioni: nessuno strumento di disegno contatta un servizio
+      esterno senza che sia stato chiesto.
+    - Le tre colonne catastali compaiono solo sui layer per cui
+      l'interrogazione e' stata fatta davvero.
+    1.9.0
     - Densita' e distanze si convertono l'una nell'altra, in entrambi
       i versi e per ogni schema: 1 200 piante per ettaro diventano il
       sesto che le produce, e il sesto torna a dare quella densita'

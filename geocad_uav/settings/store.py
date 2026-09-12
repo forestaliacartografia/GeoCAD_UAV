@@ -66,6 +66,11 @@ KEYS = {s.key: s for s in (
 
     # -- snapping (mirrors the project's QgsSnappingConfig) -----------------
     _s("snap/enabled", BOOL, True, "Aggancio attivo per gli strumenti CAD"),
+    # Off by default: a CAD tool that called a government service on every
+    # commit without being asked would be a surprise, and every other network
+    # path in this plugin is opt-in too.
+    _s("cadastre/enabled", BOOL, False,
+       "Interroga il catasto (Agenzia delle Entrate) a ogni geometria CAD"),
     _s("snap/tolerance_px", INT, K.SNAP_TOLERANCE_PX,
        "Tolleranza di aggancio in pixel (core.constants.SNAP_TOLERANCE_PX)"),
     _s("snap/types", STR, "vertex,segment",

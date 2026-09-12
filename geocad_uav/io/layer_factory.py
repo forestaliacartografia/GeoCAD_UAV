@@ -119,8 +119,30 @@ CAD_ATTRIBUTE_FIELDS = [
 ]
 
 
-#: The only columns an operator should meet in the attribute table.
+#: Cadastral columns, filled from the Agenzia delle Entrate WFS. Kept out
+#: of CAD_ATTRIBUTE_FIELDS on purpose: a layer only grows them once a
+#: cadastral lookup actually runs, so a project that never turns the service
+#: on never sees three empty columns.
+CAT_COMUNE_FIELD = "cat_comune"
+CAT_FOGLIO_FIELD = "cat_foglio"
+CAT_PARTICELLA_FIELD = "cat_particella"
+
+CADASTRE_FIELDS = [
+    (CAT_COMUNE_FIELD, "string"),
+    (CAT_FOGLIO_FIELD, "string"),
+    (CAT_PARTICELLA_FIELD, "string"),
+]
+
+CADASTRE_FIELD_NAMES = tuple(name for name, _kind in CADASTRE_FIELDS)
+
+#: The only columns an operator should meet in the attribute table. The three
+#: CAD ones: this tuple is what a caller means by "the CAD columns", and it
+#: stays three whether or not a layer ever met the cadastral service.
 VISIBLE_CAD_FIELDS = (CAD_ID_FIELD, AREA_HA_FIELD, PERIMETER_FIELD)
+
+#: What the visibility pass leaves showing: the CAD columns plus the
+#: cadastral ones, which are only ever present on a layer that asked for them.
+ALWAYS_VISIBLE_FIELDS = VISIBLE_CAD_FIELDS + CADASTRE_FIELD_NAMES
 
 
 def apply_cad_field_visibility(layer) -> int:
@@ -148,7 +170,7 @@ def apply_cad_field_visibility(layer) -> int:
         return 0
     count = 0
     for index, field in enumerate(fields):
-        if field.name() in VISIBLE_CAD_FIELDS:
+        if field.name() in ALWAYS_VISIBLE_FIELDS:
             continue
         try:
             layer.setEditorWidgetSetup(index, hidden)
@@ -199,6 +221,97 @@ def ensure_cad_fields(layer):
         return None
     apply_cad_field_visibility(layer)
     return [name for name, _kind in missing]
+
+
+def ensure_cadastre_fields(layer):
+    """Add the cadastral columns, the same way and with the same contract.
+
+    Separate from :func:`ensure_cad_fields` because these three are only
+    meaningful once the parcel service has been asked: adding them to every
+    layer would put three columns that will stay empty in front of every
+    operator who never turns the lookup on.
+    """
+    return _ensure(layer, CADASTRE_FIELDS)
+
+
+def _ensure(layer, specs):
+    if layer is None:
+        return None
+    try:
+        existing = {field.name() for field in layer.fields()}
+    except (AttributeError, RuntimeError):
+        return None
+    missing = [spec for spec in specs if spec[0] not in existing]
+    if not missing:
+        apply_cad_field_visibility(layer)
+        return []
+    provider = layer.dataProvider()
+    try:
+        from qgis.core import QgsVectorDataProvider              # noqa: PLC0415
+
+        add_attributes = QgsVectorDataProvider.Capability.AddAttributes
+        if not provider.capabilities() & add_attributes:
+            return None
+    except (AttributeError, RuntimeError, ImportError):
+        pass
+    try:
+        if not provider.addAttributes(list(make_fields(missing))):
+            return None
+        layer.updateFields()
+    except (AttributeError, RuntimeError):
+        return None
+    apply_cad_field_visibility(layer)
+    return [name for name, _kind in missing]
+
+
+def feature_id_by_cad_id(layer, cad_id):
+    """The feature carrying this ``cad_id``, or None.
+
+    The id a provider hands back at commit time is provisional until it is
+    written; ``cad_id`` is assigned by this module and unique within the
+    layer, so it is what a callback arriving later can still find the
+    feature by.
+    """
+    if layer is None or cad_id is None:
+        return None
+    try:
+        index = layer.fields().indexOf(CAD_ID_FIELD)
+        if index < 0:
+            return None
+        for feature in layer.getFeatures():
+            if feature[index] == cad_id:
+                return feature.id()
+    except (AttributeError, RuntimeError):
+        return None
+    return None
+
+
+def write_cadastre(layer, feature_id, parcel) -> bool:
+    """Put a parcel's three values on one already-committed feature.
+
+    Called from the background task, long after the commit: the feature is
+    found by id, the columns are created if they are not there yet, and a
+    layer that refuses them keeps its geometry. Returns False rather than
+    raising -- nothing downstream of a finished commit should be able to
+    fail it retroactively.
+    """
+    if layer is None or parcel is None:
+        return False
+    if ensure_cadastre_fields(layer) is None:
+        return False
+    try:
+        fields = layer.fields()
+        changes = {}
+        for name, value in parcel.as_attributes().items():
+            index = fields.indexOf(name)
+            if index >= 0:
+                changes[index] = value
+        if not changes:
+            return False
+        return bool(layer.dataProvider().changeAttributeValues(
+            {int(feature_id): changes}))
+    except (AttributeError, RuntimeError):
+        return False
 
 
 def next_cad_id(layer) -> int:
