@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -83,6 +83,16 @@ QUERY_HALF_SPAN_DEG = 1e-4
 #: bigger answer means the window was wrong, not that the data is richer.
 MAX_FEATURES = 10
 
+#: A project area can genuinely touch many parcels, so the area query has a
+#: far larger ceiling -- but still a ceiling, because an operator who drew a
+#: box round a province should get a refusal, not a download.
+MAX_AREA_FEATURES = 2000
+
+#: Coverage below which the answer is called PARTIAL: the project reaches
+#: ground the service has no parcel for (Trento and Bolzano, the sea, a gap
+#: in the map).
+FULL_COVERAGE = 0.999
+
 DEFAULT_TIMEOUT_S = 20.0
 
 
@@ -105,6 +115,18 @@ class CadastralParcel:
     @property
     def is_empty(self) -> bool:
         return not (self.comune_code or self.foglio or self.particella)
+
+    def comune(self):
+        """The comune behind the Belfiore code, resolved locally.
+
+        The service publishes the code and nothing else; the name comes from
+        the table shipped in ``data/``. An unknown code comes back as a
+        comune that says so rather than as an exception: this runs inside a
+        background task.
+        """
+        from . import belfiore                                 # noqa: PLC0415
+
+        return belfiore.resolve(self.comune_code)
 
     def label(self) -> str:
         """``G478 / 252 / 1016``, the way a surveyor writes it."""
@@ -188,6 +210,52 @@ def build_query(latitude: float, longitude: float,
     return SERVICE_URL + "?" + urlencode(params)
 
 
+def build_area_query(south: float, west: float, north: float, east: float,
+                     type_name: str = TYPE_PARCEL,
+                     count: int = MAX_AREA_FEATURES) -> str:
+    """GetFeature over a whole bounding box, in the service's axis order."""
+    for value in (south, west, north, east):
+        if not math.isfinite(value):
+            raise CadastreError(
+                "cadastral query over a non-finite box",
+                user_message="Area non valida per l'interrogazione catastale.")
+    bbox = "{0:.8f},{1:.8f},{2:.8f},{3:.8f},{4}".format(
+        south, west, north, east, SERVICE_CRS_URN)
+    params = [
+        ("service", "WFS"),
+        ("version", SERVICE_VERSION),
+        ("request", "GetFeature"),
+        ("typeNames", type_name),
+        ("count", str(max(1, min(int(count), MAX_AREA_FEATURES)))),
+        ("bbox", bbox),
+    ]
+    return SERVICE_URL + "?" + urlencode(params)
+
+
+def service_bbox(geometry, source_crs, margin_deg: float = 0.0):
+    """``(south, west, north, east)`` of a geometry, in EPSG:6706."""
+    from qgis.core import (QgsCoordinateReferenceSystem,        # noqa: PLC0415
+                           QgsCoordinateTransform, QgsProject)
+
+    if geometry is None or geometry.isEmpty():
+        raise CadastreError(
+            "cadastral query on an empty geometry",
+            user_message="Nessuna area su cui interrogare il catasto.")
+    target = QgsCoordinateReferenceSystem(SERVICE_CRS)
+    if source_crs is None or not source_crs.isValid():
+        raise CadastreError(
+            "cadastral query from an unknown CRS",
+            user_message="Sistema di riferimento del progetto non definito.")
+    box = geometry.boundingBox()
+    if source_crs != target:
+        transform = QgsCoordinateTransform(source_crs, target,
+                                           QgsProject.instance())
+        box = transform.transformBoundingBox(box)
+    margin = abs(float(margin_deg))
+    return (box.yMinimum() - margin, box.xMinimum() - margin,
+            box.yMaximum() + margin, box.xMaximum() + margin)
+
+
 def _service_exception(text: str) -> Optional[str]:
     match = re.search(r"<ServiceException[^>]*>(.*?)</ServiceException>",
                       text, re.S)
@@ -227,6 +295,88 @@ def parse_parcels(xml_text: str) -> "list[CadastralParcel]":
         if not parcel.is_empty:
             parcels.append(parcel)
     return parcels
+
+
+def _rings(block: str) -> "list[list]":
+    """Every ``posList`` in one Polygon block, exterior first.
+
+    The coordinates arrive **latitude first** -- EPSG:6706 axis order, the
+    same order the bbox is written in -- so each pair is swapped on the way
+    into a ``QgsPointXY``, which is (x, y) and therefore (lon, lat). Getting
+    this backwards puts Italian parcels in the Indian Ocean, and does it
+    quietly.
+    """
+    from qgis.core import QgsPointXY                           # noqa: PLC0415
+
+    rings = []
+    for raw in re.findall(r"<gml:posList[^>]*>(.*?)</gml:posList>", block,
+                          re.S):
+        numbers = raw.split()
+        if len(numbers) < 8 or len(numbers) % 2:
+            continue
+        points = []
+        for index in range(0, len(numbers), 2):
+            try:
+                latitude = float(numbers[index])
+                longitude = float(numbers[index + 1])
+            except ValueError:
+                points = []
+                break
+            points.append(QgsPointXY(longitude, latitude))
+        if len(points) >= 4:
+            rings.append(points)
+    return rings
+
+
+def parse_parcel_geometries(xml_text: str) -> "list[tuple]":
+    """``[(CadastralParcel, QgsGeometry), ...]`` in the service CRS.
+
+    One geometry per feature, multipart when the feature has several
+    polygons -- a parcel really can be in two pieces, and collapsing it to
+    the first one would lose half its surface.
+    """
+    from qgis.core import QgsGeometry                          # noqa: PLC0415
+
+    message = _service_exception(xml_text or "")
+    if message:
+        raise CadastreError(
+            "WFS service exception: {0}".format(message),
+            user_message="Il servizio catastale ha rifiutato la richiesta.",
+            hint=message)
+
+    out = []
+    for block in re.findall(r"<CP:CadastralParcel\b.*?</CP:CadastralParcel>",
+                            xml_text or "", re.S):
+        values = {}
+        for name in PARCEL_ATTRIBUTES:
+            found = re.search(r"<CP:{0}>(.*?)</CP:{0}>".format(name), block,
+                              re.S)
+            values[name] = found.group(1).strip() if found else ""
+        parcel = CadastralParcel.from_attributes(values)
+        if parcel.is_empty:
+            continue
+
+        parts = []
+        for polygon in re.findall(r"<gml:Polygon\b.*?</gml:Polygon>", block,
+                                  re.S):
+            rings = _rings(polygon)
+            if not rings:
+                continue
+            piece = QgsGeometry.fromPolygonXY(rings)
+            if piece is not None and not piece.isEmpty():
+                parts.append(piece)
+        if not parts:
+            continue
+        geometry = parts[0] if len(parts) == 1 else QgsGeometry.collectGeometry(
+            parts)
+        if geometry is None or geometry.isEmpty():
+            continue
+        if not geometry.isGeosValid():
+            repaired = geometry.makeValid()
+            if repaired is not None and not repaired.isEmpty():
+                geometry = repaired
+        out.append((parcel, geometry))
+    return out
 
 
 def parse_zoning_labels(xml_text: str) -> "dict[str, str]":
@@ -387,6 +537,406 @@ def lookup_task(x: float, y: float, source_crs, on_result,
                 pass            # a callback that throws must not kill QGIS
 
     task = _CadastreTask()
+    QgsApplication.taskManager().addTask(task)
+    return task
+
+
+# --------------------------------------------------------------------------
+# The project's cadastral situation
+# --------------------------------------------------------------------------
+
+#: Every parcel the service knows was found, and they cover the project.
+STATUS_OK = "OK"
+#: Parcels were found, but part of the project is on ground the service has
+#: no parcel for. Both provinces of Trento and Bolzano keep their own
+#: cadastre and are not in this service at all.
+STATUS_PARTIAL = "PARZIALE"
+#: The service answered, and there is no parcel here.
+STATUS_UNAVAILABLE = "NON DISPONIBILE"
+#: The service could not be asked, or could not be understood.
+STATUS_ERROR = "ERRORE"
+
+STATUS_LABELS = {
+    STATUS_OK: "Dati catastali completi",
+    STATUS_PARTIAL: "Dati catastali parziali",
+    STATUS_UNAVAILABLE: "Nessuna particella catastale sull'area",
+    STATUS_ERROR: "Interrogazione catastale non riuscita",
+}
+
+M2_PER_HA = 10_000.0
+
+
+@dataclass
+class ParcelShare:
+    """One parcel, and how much of it the project takes."""
+
+    parcel: CadastralParcel
+    comune: object = None                       # belfiore.Comune
+    parcel_area_m2: float = 0.0
+    intersection_area_m2: float = 0.0
+
+    @property
+    def percent_of_parcel(self) -> float:
+        """How much of the parcel the project covers, as a percentage.
+
+        ``area(intersection) / area(parcel) * 100``, both measured in the
+        metric CRS the interpolation resolved -- never in degrees, where a
+        hectare in Sicily and a hectare in Sudtirol are different numbers.
+        """
+        if self.parcel_area_m2 <= 0.0:
+            return 0.0
+        return 100.0 * self.intersection_area_m2 / self.parcel_area_m2
+
+    @property
+    def comune_name(self) -> str:
+        return self.comune.label() if self.comune is not None else ""
+
+    def as_row(self) -> dict:
+        return {
+            "comune": self.comune_name,
+            "belfiore": self.parcel.comune_code,
+            "foglio": self.parcel.foglio,
+            "particella": self.parcel.particella,
+            "riferimento": self.parcel.national_reference,
+            "superficie_catastale_m2": round(self.parcel_area_m2, 2),
+            "superficie_interessata_m2": round(self.intersection_area_m2, 2),
+            "percentuale": round(self.percent_of_parcel, 3),
+        }
+
+
+@dataclass
+class CadastralResult:
+    """What the cadastre says about one project area."""
+
+    shares: list = field(default_factory=list)
+    project_area_m2: float = 0.0
+    covered_area_m2: float = 0.0
+    status: str = STATUS_UNAVAILABLE
+    message: str = ""
+    work_crs_authid: str = ""
+    warnings: list = field(default_factory=list)
+
+    # -- what it contains --------------------------------------------------
+
+    @property
+    def n_parcels(self) -> int:
+        return len(self.shares)
+
+    @property
+    def cadastral_area_m2(self) -> float:
+        """Total surface of every parcel touched, whole parcels."""
+        return sum(share.parcel_area_m2 for share in self.shares)
+
+    @property
+    def covered_fraction(self) -> float:
+        if self.project_area_m2 <= 0.0:
+            return 0.0
+        return self.covered_area_m2 / self.project_area_m2
+
+    @property
+    def is_usable(self) -> bool:
+        return self.status in (STATUS_OK, STATUS_PARTIAL)
+
+    def belfiore_codes(self) -> list:
+        seen = []
+        for share in self.shares:
+            code = share.parcel.comune_code
+            if code and code not in seen:
+                seen.append(code)
+        return seen
+
+    def comuni(self) -> list:
+        """One entry per comune, in order of surface taken."""
+        by_code = {}
+        for share in self.shares:
+            code = share.parcel.comune_code
+            by_code.setdefault(code, []).append(share)
+        ordered = sorted(
+            by_code.items(),
+            key=lambda item: -sum(s.intersection_area_m2 for s in item[1]))
+        return [(code, group[0].comune, group) for code, group in ordered]
+
+    def by_comune(self) -> dict:
+        """``{belfiore: [ParcelShare, ...]}`` -- every parcel kept.
+
+        A project across two comuni keeps both, and every parcel of each:
+        overwriting with the last feature found is exactly the bug this
+        structure exists to prevent.
+        """
+        out = {}
+        for share in self.shares:
+            out.setdefault(share.parcel.comune_code, []).append(share)
+        return out
+
+    # -- what the project stores -------------------------------------------
+
+    def as_attributes(self) -> dict:
+        """One row summarising the project, for the panel and the report."""
+        comuni = self.comuni()
+        first = comuni[0] if comuni else None
+        return {
+            "comune": (first[1].label() if first and first[1] is not None
+                       else ""),
+            "belfiore": first[0] if first else "",
+            "comuni": len(comuni),
+            "particelle": self.n_parcels,
+            "superficie_catastale_ha": round(
+                self.cadastral_area_m2 / M2_PER_HA, 4),
+            "superficie_interessata_ha": round(
+                self.covered_area_m2 / M2_PER_HA, 4),
+            "percentuale_coperta": round(100.0 * self.covered_fraction, 3),
+            "stato": self.status,
+        }
+
+    def rows(self) -> list:
+        return [share.as_row() for share in self.shares]
+
+    def describe(self) -> "list[str]":
+        lines = ["DATI CATASTALI",
+                 "  Stato:      {0}".format(
+                     STATUS_LABELS.get(self.status, self.status))]
+        if self.message:
+            lines.append("  {0}".format(self.message))
+        if self.work_crs_authid:
+            lines.append("  Calcoli in: {0}".format(self.work_crs_authid))
+        lines.append("  Particelle: {0}".format(self.n_parcels))
+        lines.append("  Superficie catastale:   {0:,.4f} ha".format(
+            self.cadastral_area_m2 / M2_PER_HA))
+        lines.append("  Superficie interessata: {0:,.4f} ha ({1:.2f} %)".format(
+            self.covered_area_m2 / M2_PER_HA, 100.0 * self.covered_fraction))
+        for code, comune, group in self.comuni():
+            name = comune.label() if comune is not None else code
+            taken = sum(share.intersection_area_m2 for share in group)
+            lines.append("  {0} [{1}]: {2} particelle, {3:,.4f} ha".format(
+                name, code, len(group), taken / M2_PER_HA))
+            for share in sorted(group,
+                                key=lambda s: -s.intersection_area_m2):
+                lines.append(
+                    "      foglio {0:<6} particella {1:<8} "
+                    "{2:>10,.2f} m2  {3:>6.2f} %".format(
+                        share.parcel.foglio or "-",
+                        share.parcel.particella or "-",
+                        share.intersection_area_m2, share.percent_of_parcel))
+        lines.extend("  " + text for text in self.warnings)
+        return lines
+
+
+def interpolate_cadastral_data(project_geometry, project_crs, parcels,
+                               work_crs=None):
+    """Which parcels the project really touches, and by how much.
+
+    ``parcels`` is what :func:`parse_parcel_geometries` returns: pairs of
+    parcel and geometry in the service CRS. The bounding-box query that
+    produced them is deliberately generous, so most of them do not touch the
+    project at all -- this is where that is decided, with GEOS on the real
+    polygons and not on a centroid: a centroid test says a project is in one
+    parcel when it straddles four, and says it is in none when the parcel is
+    an L and the centroid falls in the notch.
+
+    Areas are measured in a metric CRS resolved by ``core.crs`` from the
+    project's own, because an area in degrees is not an area.
+    """
+    from qgis.core import (QgsCoordinateReferenceSystem,        # noqa: PLC0415
+                           QgsCoordinateTransform, QgsGeometry, QgsProject)
+
+    from ..core import crs as crs_svc                           # noqa: PLC0415
+
+    if project_geometry is None or project_geometry.isEmpty():
+        raise CadastreError(
+            "cadastral interpolation on an empty project geometry",
+            user_message="Nessuna area di progetto da confrontare col "
+                         "catasto.")
+    if project_crs is None or not project_crs.isValid():
+        raise CadastreError(
+            "cadastral interpolation from an unknown CRS",
+            user_message="Sistema di riferimento del progetto non definito.")
+
+    warnings = []
+    decision = crs_svc.resolve_work_crs(project_crs, project_geometry)
+    metric = work_crs if work_crs is not None else decision.work_crs
+    if decision.transform_required and work_crs is None:
+        warnings.append(decision.reason)
+
+    project = QgsGeometry(project_geometry)
+    if project_crs != metric:
+        project = crs_svc.transform_geometry(project, project_crs, metric)
+    if not project.isGeosValid():
+        repaired = project.makeValid()
+        if repaired is not None and not repaired.isEmpty():
+            project = repaired
+            warnings.append("La geometria di progetto e' stata corretta "
+                            "prima del confronto catastale.")
+    project_area = float(project.area())
+
+    service_crs = QgsCoordinateReferenceSystem(SERVICE_CRS)
+    to_metric = None
+    if service_crs != metric:
+        to_metric = QgsCoordinateTransform(service_crs, metric,
+                                           QgsProject.instance())
+
+    from . import belfiore                                      # noqa: PLC0415
+
+    register = belfiore.registry()
+    shares = []
+    pieces = []
+    for parcel, geometry in parcels:
+        if geometry is None or geometry.isEmpty():
+            continue
+        shape = QgsGeometry(geometry)
+        if to_metric is not None:
+            shape = QgsGeometry(geometry)
+            if shape.transform(to_metric) != 0:
+                warnings.append(
+                    "Particella {0}: trasformazione di coordinate non "
+                    "riuscita.".format(parcel.label()))
+                continue
+        if not shape.isGeosValid():
+            repaired = shape.makeValid()
+            if repaired is None or repaired.isEmpty():
+                warnings.append(
+                    "Particella {0}: geometria non valida, esclusa.".format(
+                        parcel.label()))
+                continue
+            shape = repaired
+        if not shape.intersects(project):
+            continue
+        overlap = shape.intersection(project)
+        if overlap is None or overlap.isEmpty():
+            continue
+        area = float(overlap.area())
+        if area <= 0.0:
+            continue
+        pieces.append(overlap)
+        shares.append(ParcelShare(parcel=parcel,
+                                  comune=register.resolve(parcel.comune_code),
+                                  parcel_area_m2=float(shape.area()),
+                                  intersection_area_m2=area))
+
+    shares.sort(key=lambda share: -share.intersection_area_m2)
+    covered = 0.0
+    if pieces:
+        # Union, not sum: two parcels that overlap by a sliver would
+        # otherwise cover more of the project than the project has.
+        merged = pieces[0] if len(pieces) == 1 else QgsGeometry.unaryUnion(
+            pieces)
+        if merged is not None and not merged.isEmpty():
+            covered = float(merged.area())
+
+    if not shares:
+        status = STATUS_UNAVAILABLE
+        message = ("Il servizio non riporta particelle sull'area indicata.")
+    elif project_area > 0.0 and covered / project_area < FULL_COVERAGE:
+        status = STATUS_PARTIAL
+        message = ("Il catasto copre il {0:.1f} % dell'area: il resto non e' "
+                   "in questo servizio.".format(100.0 * covered
+                                                / project_area))
+    else:
+        status = STATUS_OK
+        message = ""
+
+    if not register.available:
+        warnings.append(register.error or
+                        "Tabella dei comuni non disponibile: i codici "
+                        "Belfiore restano senza nome.")
+
+    return CadastralResult(shares=shares, project_area_m2=project_area,
+                           covered_area_m2=covered, status=status,
+                           message=message,
+                           work_crs_authid=metric.authid(),
+                           warnings=warnings)
+
+
+def query_area(project_geometry, project_crs, transport=None,
+               timeout: float = DEFAULT_TIMEOUT_S, work_crs=None,
+               progress=None):
+    """The whole workflow for one area: ask, parse, intersect, aggregate.
+
+    ``progress`` is any callable taking a percentage, so a task can report
+    without this function knowing what a task is.
+    """
+    fetch = transport or urllib_transport
+
+    def step(value):
+        if progress is not None:
+            try:
+                progress(value)
+            except Exception:                                   # noqa: BLE001
+                pass
+
+    step(5.0)
+    south, west, north, east = service_bbox(project_geometry, project_crs)
+    step(15.0)
+    body = fetch(build_area_query(south, west, north, east), timeout)
+    step(55.0)
+    parcels = parse_parcel_geometries(body)
+    step(70.0)
+    result = interpolate_cadastral_data(project_geometry, project_crs,
+                                        parcels, work_crs)
+    step(90.0)
+
+    # The sheet numbers the zoning layer publishes beat the ones derived from
+    # the parcel reference; one extra request covers every parcel at once.
+    if result.shares:
+        try:
+            labels = parse_zoning_labels(
+                fetch(build_area_query(south, west, north, east, TYPE_ZONING),
+                      timeout))
+        except CadastreError:
+            labels = {}
+        for share in result.shares:
+            published = labels.get(zoning_key(share.parcel.national_reference))
+            if published:
+                share.parcel.foglio = published
+    step(100.0)
+    return result
+
+
+def area_task(project_geometry, project_crs, on_result, transport=None,
+              timeout: float = DEFAULT_TIMEOUT_S, work_crs=None):
+    """Run :func:`query_area` on QGIS's task manager. Returns the task.
+
+    The interface stays live while a government server thinks about it, the
+    operator can cancel, and a cadastral failure returns a result with status
+    ERRORE instead of an exception: the reforestation project does not depend
+    on the cadastre and must not be lost with it.
+    """
+    from qgis.core import QgsApplication, QgsTask               # noqa: PLC0415
+
+    class _AreaTask(QgsTask):
+        def __init__(self):
+            super().__init__("GeoCad UAV: dati catastali",
+                             QgsTask.Flag.CanCancel)
+            self.result = None
+
+        def run(self):
+            def progress(value):
+                if self.isCanceled():
+                    raise CadastreError(
+                        "cancelled",
+                        user_message="Interrogazione catastale annullata.")
+                self.setProgress(float(value))
+
+            try:
+                self.result = query_area(project_geometry, project_crs,
+                                         transport, timeout, work_crs,
+                                         progress)
+            except CadastreError as exc:
+                self.result = CadastralResult(
+                    status=STATUS_ERROR, message=exc.formatted())
+                return not self.isCanceled()
+            except Exception as exc:                            # noqa: BLE001
+                self.result = CadastralResult(status=STATUS_ERROR,
+                                              message=str(exc))
+                return False
+            return True
+
+        def finished(self, ok):
+            try:
+                on_result(self.result)
+            except Exception:                                   # noqa: BLE001
+                pass
+
+    task = _AreaTask()
     QgsApplication.taskManager().addTask(task)
     return task
 

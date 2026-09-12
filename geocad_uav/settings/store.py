@@ -71,6 +71,10 @@ KEYS = {s.key: s for s in (
     # path in this plugin is opt-in too.
     _s("cadastre/enabled", BOOL, False,
        "Interroga il catasto (Agenzia delle Entrate) a ogni geometria CAD"),
+    # Empty means the table shipped in data/belfiore.csv. An operator with a
+    # more recent or a locally corrected register points this at their file.
+    _s("cadastre/belfiore_path", STR, "",
+       "Tabella codici Belfiore alternativa (vuoto: quella del plugin)"),
     _s("snap/tolerance_px", INT, K.SNAP_TOLERANCE_PX,
        "Tolleranza di aggancio in pixel (core.constants.SNAP_TOLERANCE_PX)"),
     _s("snap/types", STR, "vertex,segment",

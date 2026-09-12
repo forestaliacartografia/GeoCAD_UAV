@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.12.0
+version=1.13.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.12.0
+changelog=1.13.0
+    - Il catasto non e' piu' un dato sul singolo poligono ma un
+      servizio sull'area di progetto: si interroga il WFS sul contorno
+      dell'area, si intersecano le particelle vere con la geometria
+      vera, e si ottiene l'elenco completo di comuni, fogli e
+      particelle interessate con la superficie di ciascuna e la
+      percentuale di particella coinvolta.
+    - Il codice Belfiore diventa il nome del comune grazie alla
+      tabella distribuita col plugin (data/belfiore.csv, 7.896 comuni,
+      fonte ISTAT). Ricerca senza distinzione di maiuscole, codice
+      sconosciuto o nullo che diventa "Non disponibile" invece di un
+      errore, e possibilita' di indicare una propria tabella.
+    - L'intersezione non passa dal centroide: usa GEOS sui poligoni
+      reali, in un CRS metrico scelto dal progetto, perche' un'area in
+      gradi non e' un'area. Geometrie multiparte e non valide gestite.
+    - Tutto in secondo piano, con avanzamento e annullamento: un
+      catasto che non risponde diventa uno stato del risultato, non un
+      progetto di rimboschimento perduto.
+    1.12.0
     - Piu' specie nella stessa area, nelle percentuali chieste. I
       conteggi sono esatti e sommano sempre al numero di piante
       generate: 40/35/25 su mille piante fa 400, 350 e 250, non
