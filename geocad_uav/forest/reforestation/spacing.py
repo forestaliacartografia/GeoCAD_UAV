@@ -546,9 +546,26 @@ def point_geometry(record: PlantingRecord):
                                 float(record.z)))
 
 
-def point_features(result: SlopeGridResult, fields=None):
+#: Columns of a plants layer. ``specie`` and ``zona`` are Italian because an
+#: operator reads them in the attribute table; the record's own attributes are
+#: English because the code is.
+PLANT_FIELDS = (
+    ("plant_id", "int"),
+    ("row_id", "int"),
+    ("seq_in_row", "int"),
+    ("zona", "string"),
+    ("specie", "string"),
+    ("z", "double"),
+    ("slope_deg", "double"),
+    ("aspect_deg", "double"),
+)
+
+
+def point_features(result: SlopeGridResult, fields=None, zone: str = ""):
     """The plants as ``QgsFeature``, ready for a PointZ layer."""
     from qgis.core import QgsFeature                            # noqa: PLC0415
+
+    from .composition import species_of                        # noqa: PLC0415
 
     out = []
     for record in result.plants:
@@ -558,10 +575,44 @@ def point_features(result: SlopeGridResult, fields=None):
             for name, value in (("plant_id", record.plant_id),
                                 ("row_id", record.row_id),
                                 ("seq_in_row", record.seq_in_row),
+                                ("zona", zone),
+                                ("specie", species_of(record)),
                                 ("z", record.z),
-                                ("slope_deg", record.slope_deg)):
+                                ("slope_deg", record.slope_deg),
+                                ("aspect_deg", record.aspect_deg)):
                 index = fields.indexOf(name)
                 if index >= 0:
                     feature.setAttribute(index, value)
         out.append(feature)
     return out
+
+
+def plants_layer(result: SlopeGridResult, crs_authid: str,
+                 name: str = "Piante", zone: str = "",
+                 apply_symbology: bool = True):
+    """A PointZ memory layer holding the plants, coloured by species.
+
+    The geometry type is PointZ because the elevation is part of the answer,
+    not decoration: a plant at 640 m on a slope is a different plant from one
+    at 320 m, and an export that drops Z loses the only thing the DEM was
+    read for.
+    """
+    from qgis.core import QgsVectorLayer                        # noqa: PLC0415
+
+    from ...io.layer_factory import make_fields                # noqa: PLC0415
+    from . import symbology as symbology_mod                   # noqa: PLC0415
+
+    layer = QgsVectorLayer("PointZ?crs={0}".format(crs_authid), name,
+                           "memory")
+    if not layer.isValid():
+        raise InvalidInputError(
+            "could not create the plants layer",
+            user_message="Impossibile creare il layer delle piante.")
+    layer.dataProvider().addAttributes(list(make_fields(PLANT_FIELDS)))
+    layer.updateFields()
+    layer.dataProvider().addFeatures(
+        point_features(result, layer.fields(), zone=zone))
+    layer.updateExtents()
+    if apply_symbology:
+        symbology_mod.apply_species_symbology(layer)
+    return layer

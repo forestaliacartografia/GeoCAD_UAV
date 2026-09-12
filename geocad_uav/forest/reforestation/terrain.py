@@ -133,6 +133,66 @@ class TerrainAnalysis:
         return cls(model, warnings)
 
     @classmethod
+    def auto_download(cls, bounds, source_crs, adapter_id: str = "nasadem",
+                      work_crs=None, margin_m: float = 50.0, key=None,
+                      transport=None, feedback=None, cache_dir=None):
+        """Fetch a DEM covering ``bounds`` and open it, without asking anyone.
+
+        The point of this is that an operator with a parcel should not have to
+        go and find a raster first. The window is the bounding box of what
+        they already drew -- the *superficie utile* -- grown by ``margin_m``
+        so the slope at the very edge is computed from real neighbours rather
+        than from the padding.
+
+        Nothing about the download is new here: ``io.dem_source`` already owns
+        the adapters, the disk cache and, above all, the declared status of
+        each source. An adapter whose request schema was never verified end to
+        end refuses to run, and says so with the URL of its documentation --
+        this method does not talk it into working. Today that means the
+        OpenTopography-hosted NASADEM is the one that downloads, and it wants
+        the key an operator puts in the settings; the others are listed,
+        described and honest about being PARTIAL.
+
+        Returns a :class:`TerrainAnalysis`, or None if the operator cancelled.
+        """
+        from qgis.core import (QgsCoordinateReferenceSystem,    # noqa: PLC0415
+                               QgsCoordinateTransform, QgsProject,
+                               QgsRectangle)
+
+        from ...io import dem_source                           # noqa: PLC0415
+
+        if source_crs is None or not source_crs.isValid():
+            raise InvalidInputError(
+                "cannot download a DEM without knowing the area's CRS",
+                user_message="Sistema di riferimento dell'area non definito.")
+        xmin, ymin, xmax, ymax = cls._bbox(bounds)
+        margin = max(0.0, float(margin_m))
+        rectangle = QgsRectangle(xmin - margin, ymin - margin,
+                                 xmax + margin, ymax + margin)
+
+        # The adapters speak degrees; the project almost never does.
+        geographic = QgsCoordinateReferenceSystem("EPSG:4326")
+        if source_crs != geographic:
+            transform = QgsCoordinateTransform(source_crs, geographic,
+                                               QgsProject.instance())
+            rectangle = transform.transformBoundingBox(rectangle)
+        bbox = (rectangle.xMinimum(), rectangle.yMinimum(),
+                rectangle.xMaximum(), rectangle.yMaximum())
+
+        kwargs = {"feedback": feedback, "cache_dir": cache_dir}
+        if key is not None:
+            kwargs["key"] = key
+        if transport is not None:
+            kwargs["transport"] = transport
+        path = dem_source.fetch(adapter_id, bbox, **kwargs)
+        if path is None:
+            return None
+
+        layer = dem_source.raster_layer(path, "DEM {0}".format(adapter_id))
+        target = work_crs if work_crs is not None else source_crs
+        return cls.from_layer(layer, target, bounds, margin_m=margin)
+
+    @classmethod
     def from_array(cls, elevation, transform, crs_authid: str = "",
                    source: str = "", is_surface_model: bool = False):
         """A surface already in memory: an array plus a geotransform."""

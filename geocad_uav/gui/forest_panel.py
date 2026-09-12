@@ -16,7 +16,6 @@ import math
 
 from typing import Optional
 
-import numpy as np
 from qgis.core import (Qgis, QgsGeometry, QgsMapLayerProxyModel, QgsPointXY,
                        QgsProject, QgsWkbTypes)
 from qgis.gui import QgsMapLayerComboBox, QgsRubberBand
@@ -103,12 +102,12 @@ class ForestPanel(QWidget):
             "corrono perpendicolari a questa direzione: con 0 le file vanno "
             "da Ovest a Est."))
         form.addRow(tr("Azimut del sesto"), self.azimuth)
-        azimuth_buttons = QHBoxLayout()
-        self.azimuth_from_map = QPushButton(tr("Da due click"))
-        self.azimuth_from_edge = QPushButton(tr("Parallelo a un lato"))
-        azimuth_buttons.addWidget(self.azimuth_from_map)
-        azimuth_buttons.addWidget(self.azimuth_from_edge)
-        form.addRow(azimuth_buttons)
+        # v1.12.0: the two alignment shortcuts that used to sit here are
+        # gone. Both set this same spin box, two clicks later than typing the
+        # number into it, and the orientation an operator actually wants on a
+        # hillside comes from the ground rather than from a pair of clicks --
+        # forest.reforestation.orient computes it from the DEM, a girapoggio
+        # or a rittochino.
 
         self.margin = self._spin(2.0, 0.0, 1000.0, " m")
         form.addRow(tr("Margine dal bordo"), self.margin)
@@ -159,9 +158,7 @@ class ForestPanel(QWidget):
 
         for button, slot in ((self.preview_button, self.refresh_preview),
                              (self.confirm_button, self.confirm),
-                             (self.step_from_map, self._pick_step),
-                             (self.azimuth_from_map, self._pick_azimuth),
-                             (self.azimuth_from_edge, self._azimuth_from_edge)):
+                             (self.step_from_map, self._pick_step)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
 
@@ -220,25 +217,6 @@ class ForestPanel(QWidget):
             self.refresh_preview()
 
         self.extent.start_measure(apply_step)
-
-    def _pick_azimuth(self):
-        def apply_azimuth(_length, azimuth):
-            self.azimuth.setValue(azimuth % 360.0)
-            self.refresh_preview()
-
-        self.extent.start_measure(apply_azimuth)
-
-    def _azimuth_from_edge(self):
-        geometry = self.extent.geometry()
-        if geometry is None:
-            return
-        try:
-            ring = geometry.asPolygon()[0]
-        except (IndexError, TypeError):
-            return
-        points = np.array([[p.x(), p.y()] for p in ring], dtype=float)
-        self.azimuth.setValue(grid_mod.azimuth_of_longest_edge(points) % 360.0)
-        self.refresh_preview()
 
     # -- computation -------------------------------------------------------
 

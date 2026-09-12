@@ -31,7 +31,7 @@ QGS.initQgis()
 # it (or qgis.analysis) beforehand crashes the interpreter with no traceback.
 from qgis.core import QgsVectorDataProvider                     # noqa: E402
 from qgis.gui import QgsMapCanvas                               # noqa: E402
-from qgis.PyQt.QtCore import Qt                                 # noqa: E402
+from qgis.PyQt.QtCore import QCoreApplication, Qt              # noqa: E402
 
 from geocad_uav.cad import dynamic_input as di                  # noqa: E402
 from geocad_uav.cad import parametric as pa                     # noqa: E402
@@ -3367,7 +3367,11 @@ pv_dialog = counting_answer(pr.TOOL_SQUARE, "side_m", side_m=SIDE,
                             azimuth_deg=0.0)
 pv = mi_tool.create(canvas, iface=None, layer_provider=lambda: pv_layer,
                     dialog_factory=pv_dialog)
-pv.activate()
+# setMapTool() is what activates a map tool, and activate() schedules the
+# dialog on the next turn of the event loop instead of running a modal one
+# inside it. This is that turn.
+canvas.setMapTool(pv)
+QCoreApplication.processEvents()
 check("il dialogo e' stato chiesto all'attivazione", len(pv_dialog.calls), 1)
 check_true("le misure ci sono", pv.session.has_values)
 check_true("...e la forma sta aspettando dove metterla",
@@ -3451,6 +3455,7 @@ check("il tasto destro riapre il dialogo", len(pv_dialog.calls), 2)
 check("...senza scrivere nulla", pv_layer.featureCount(), 2)
 check_true("l'anteprima riparte da capo, senza cursore",
            pv.session.preview_points() is None)
+canvas.unsetMapTool(pv)
 pv.deactivate()
 
 print("\n-- annullare il dialogo non lascia nulla a mezzo --")
@@ -3466,7 +3471,8 @@ def refuse(session, _parent):
 pv_cancel = mi_tool.create(canvas, iface=None,
                            layer_provider=lambda: pv_cancel_layer,
                            dialog_factory=refuse)
-pv_cancel.activate()
+canvas.setMapTool(pv_cancel)
+QCoreApplication.processEvents()
 check("il dialogo e' stato chiesto", len(cancel_calls), 1)
 check_true("annullato, non ci sono misure", not pv_cancel.session.has_values)
 check_true("...ne' un'anteprima",
@@ -3478,7 +3484,9 @@ check("un click chiede di nuovo le misure", len(cancel_calls), 2)
 check("...e senza misure non scrive niente", pv_cancel_layer.featureCount(), 0)
 check_true("la sessione resta ferma",
            pv_cancel.session.state == tb.ToolState.IDLE)
+canvas.unsetMapTool(pv_cancel)
 pv_cancel.deactivate()
+QCoreApplication.processEvents()
 
 
 print("\n" + "=" * 80)

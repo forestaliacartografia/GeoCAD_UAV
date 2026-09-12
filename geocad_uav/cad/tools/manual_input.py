@@ -420,6 +420,11 @@ class ManualInputMapTool(CadMapTool):
         #: True while a dialog is up: the canvas events that arrive meanwhile
         #: must not open a second one.
         self._asking = False
+        #: Whether the measures have been asked for since this activation.
+        #: The scheduled dialog is the normal way; a first click is the
+        #: fallback for an embedding where the timer never gets a turn, so
+        #: the tool can never place a shape whose numbers nobody confirmed.
+        self._asked = False
 
     @staticmethod
     def _default_dialog(session, parent) -> bool:
@@ -434,8 +439,33 @@ class ManualInputMapTool(CadMapTool):
         this tool has picked it in order to place something particular, and
         the defaults sitting in the fields are a starting point for the
         dialog, not an answer to it.
+
+        Scheduled, not called: QGIS calls ``activate()`` from inside
+        ``setMapTool()``, and opening a modal dialog there runs a second
+        event loop inside the one that is still switching tools. A zero
+        timer puts the dialog on the next turn of the loop, when the tool is
+        properly current and the canvas is its own again.
         """
         super().activate()
+        self._asked = False
+        self.schedule_measures()
+
+    def schedule_measures(self) -> None:
+        """Ask for the measures as soon as the event loop comes back."""
+        from qgis.PyQt.QtCore import QTimer                     # noqa: PLC0415
+
+        QTimer.singleShot(0, self._ask_if_still_current)
+
+    def _ask_if_still_current(self) -> None:
+        """The scheduled ask, dropped if the operator moved on meanwhile.
+
+        Only the *scheduled* one: a dialog the operator asked for by
+        clicking is opened whatever the canvas thinks is current, because
+        they just asked for it.
+        """
+        canvas = self.canvas()
+        if canvas is not None and canvas.mapTool() is not self:
+            return
         self.ask_measures()
 
     def ask_measures(self) -> bool:
@@ -458,6 +488,7 @@ class ManualInputMapTool(CadMapTool):
             accepted = bool(self.dialog_factory(self.session, parent))
         finally:
             self._asking = False
+            self._asked = True
         if not accepted:
             self.session.values = {}
             self._escape()
@@ -494,7 +525,7 @@ class ManualInputMapTool(CadMapTool):
         if self._work_decision is None:
             super().canvasReleaseEvent(event)
             return
-        if not self.session.has_values and not self.ask_measures():
+        if (not self._asked or not self.session.has_values)                 and not self.ask_measures():
             return
         x, y = self._map_to_work(self.picked_point(event))
         self.session.set_origin(x, y)

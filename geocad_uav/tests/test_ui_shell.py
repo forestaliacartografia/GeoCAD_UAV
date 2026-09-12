@@ -289,6 +289,12 @@ check_true("the parametric mode is a tool of its own",
 check_true("...pointed at the square by the registry, not by the plugin",
            params_tool.session.spec.tool == "square")
 check_true("the canvas is using it", canvas.mapTool() is params_tool)
+# Leave a drawing tool current: the parametric one schedules its measures
+# dialog on the next turn of the event loop, and this suite has no stub for
+# it. Switching away is also what tells that dialog not to open.
+rect_action.trigger()
+check_true("switching away leaves the drawing tool current",
+           canvas.mapTool() is plugin.map_tools.get("rectangle"))
 
 # --------------------------------------------------------------------------
 # U6 - unload is symmetric and re-init does not duplicate
