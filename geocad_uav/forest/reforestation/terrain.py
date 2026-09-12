@@ -196,8 +196,27 @@ class TerrainAnalysis:
         return self.model.sample(x, y)
 
     def slope_aspect_at(self, x, y):
-        """Slope and aspect of the cell each point falls in."""
-        return z_mod.sample_slope_aspect(self.model, x, y)
+        """Slope and aspect of the cell each point falls in.
+
+        The same answer ``core.z.sample_slope_aspect`` gives -- a test pins
+        that, cell by cell -- but read off the grids this object already
+        holds. The frozen helper recomputes the whole Horn operator on every
+        call, which is free for a handful of waypoints and ruinous for a
+        plantation: laying out 30 000 plants asks this question 30 000 times,
+        once per corrected step.
+        """
+        slope, aspect = self.grids()
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        x0, dx, _, y0, _, dy = self.model.gt
+        col = np.floor((x - x0) / dx).astype(np.int64)
+        row = np.floor((y0 - y) / (-dy)).astype(np.int64)
+        ok = ((col >= 0) & (row >= 0)
+              & (col < self.model.cols) & (row < self.model.rows))
+        colc = np.clip(col, 0, self.model.cols - 1)
+        rowc = np.clip(row, 0, self.model.rows - 1)
+        return (np.where(ok, slope[rowc, colc], np.nan),
+                np.where(ok, aspect[rowc, colc], np.nan))
 
     def as_planner_terrain(self):
         """The object ``forest.planting`` expects as its ``terrain``.

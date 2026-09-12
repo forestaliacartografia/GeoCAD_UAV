@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.7.0
+version=1.8.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,30 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.7.0
+changelog=1.8.0
+    - Il sesto si indica in distanze REALI sul terreno, non sulla
+      carta. Il generatore chiede al DEM la pendenza nel punto in cui
+      si trova e accorcia il passo planimetrico del suo coseno:
+      3 m richiesti su una pendenza di 30 gradi diventano 2.598 m in
+      pianta. Su terreno orizzontale non cambia nulla.
+    - Le piante escono come punti quotati (PointZ): la Z viene dal
+      DEM, non da zero. Una pianta senza quota resta un punto 2D
+      invece di finire al livello del mare.
+    - Due modi di leggere la pendenza: quella massima locale, che e'
+      la convenzione con cui un sesto si dichiara, e quella misurata
+      lungo la direzione del passo, che non accorcia una fila che
+      corre di livello.
+    - File sulle curve di livello: le curve si estraggono col
+      contouring di GDAL (equidistanza a scelta), si ritagliano sulla
+      superficie utile e si piantano con la correzione longitudinale.
+    - Orientamento delle file: manuale, geometrico (asse maggiore
+      della particella) o morfologico, a girapoggio o a rittochino.
+      Su terreno piano il criterio morfologico dichiara di non avere
+      una risposta invece di inventarne una.
+    - Due schemi nuovi: irregolare (naturaliforme, con spostamento
+      casuale limitato e riproducibile dal seme) e personalizzato
+      (sfalsamento di ogni fila deciso dall'operatore).
+    1.7.0
     - Il CAD offre esattamente tre primitive: Quadrato, Rettangolo e
       Poligono. Linea, polilinea, cerchio, arco e poligono regolare
       non sono piu' strumenti di disegno: chi li chiede per nome
