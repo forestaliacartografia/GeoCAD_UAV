@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.13.0
+version=1.14.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,24 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.13.0
+changelog=1.14.0
+    - Nuovo spazio di lavoro per il rimboschimento: a sinistra le
+      undici fasi del progetto con lo stato di ciascuna, a destra solo
+      i comandi della fase in corso, e in mezzo la mappa, che torna a
+      essere la cosa piu' grande sullo schermo.
+    - Nella barra degli strumenti restano quattro pulsanti: Quadrato,
+      Rettangolo, Poligono e l'interruttore fra disegno libero e
+      inserimento parametrico. Una forma, un pulsante; i modificatori
+      restano nel pannello, perche' non sono primitive.
+    - La barra di stato di QGIS mostra superficie utile, piante e
+      stato del progetto: niente piu' cruscotti che rubano la mappa.
+    - 1.13.1 - il catasto arriva davvero nell'interfaccia: il task
+      emette un segnale col risultato, il pannello Area lo riceve e
+      scrive comune, codice Belfiore, particelle e superfici. Il
+      codice diventa il nome del comune leggendo la tabella locale.
+      Se il servizio non risponde, il pannello lo dice e il progetto
+      resta intero.
+    1.13.0
     - Il catasto non e' piu' un dato sul singolo poligono ma un
       servizio sull'area di progetto: si interroga il WFS sul contorno
       dell'area, si intersecano le particelle vere con la geometria

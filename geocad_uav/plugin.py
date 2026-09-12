@@ -45,6 +45,16 @@ CAD_TOOL_ORDER = ("square", "square_params",
                   "digitize", "polygon_params",
                   "rotate", "move", "resize")
 
+#: v1.14.0: the three primitives live on the QGIS toolbar, one action each,
+#: with a single toggle deciding whether a click draws them or types them.
+#: Four buttons for six registry entries, and one place to reach each shape.
+#: The dock's own toolbar keeps the modifiers, which are not primitives.
+SHAPE_ACTIONS = (
+    ("Quadrato", "square", "square_params"),
+    ("Rettangolo", "rectangle", "rectangle_params"),
+    ("Poligono", "digitize", "polygon_params"),
+)
+
 # Where an action is mounted.
 HOST_TOOLBAR = "toolbar"      # the QGIS main toolbar -- one action only
 HOST_DOCK = "dock"            # the CAD toolbar inside the dock
@@ -65,6 +75,11 @@ class GeoCadUavPlugin:
         self.tool_actions = {}
         self.map_tools = {}
         self.tool_group = None
+        self.shape_group = None
+        self.shape_actions = {}
+        self.parametric_action = None
+        self._active_shape = None
+        self.workspace = None
         self._scratch_layers = {}
         self._shortcut_notes = []
         self._connections = []
@@ -158,7 +173,9 @@ class GeoCadUavPlugin:
 
         # The dock is built now, hidden, because it hosts the CAD toolbar.
         self._ensure_dock()
+        self._build_shape_actions()
         self._build_cad_actions()
+        self._ensure_workspace()
 
         # Menu only: the same algorithms are reachable from the dock tabs.
         self._make_action(self.tr("Piano di volo UAV..."), self.open_flight_alg,
@@ -191,18 +208,91 @@ class GeoCadUavPlugin:
             pass
         return self.dock
 
+    def _ensure_workspace(self):
+        """The reforestation workspace: workflow left, context right."""
+        if self.workspace is not None:
+            return self.workspace
+        from .gui.workflow import Workspace                     # noqa: PLC0415
+
+        self.workspace = Workspace(self.iface)
+        self.workspace.mount()
+        self.workspace.set_visible(False)
+        return self.workspace
+
+    def toggle_workspace(self, checked=True):
+        workspace = self._ensure_workspace()
+        if workspace is not None:
+            workspace.set_visible(bool(checked))
+
     def _on_dock_visibility(self, visible):
         if self.dock_action is not None and \
                 self.dock_action.isChecked() != bool(visible):
             self.dock_action.setChecked(bool(visible))
 
+    def _build_shape_actions(self):
+        """The three primitives, plus the switch between drawing and typing.
+
+        The registry already pairs each shape with its two input modes; this
+        reads that pairing rather than restating it, so a shape can never end
+        up on the toolbar without both of its modes behind it.
+        """
+        from .cad import tools as cad_tools                     # noqa: PLC0415
+
+        self.shape_group = QActionGroup(self._main_window())
+        self.shape_group.setExclusive(True)
+        for label, drawn_key, typed_key in SHAPE_ACTIONS:
+            if drawn_key not in cad_tools.TOOL_REGISTRY:
+                continue
+            action = self._make_action(
+                self.tr(label),
+                lambda checked, k=drawn_key: self._toggle_shape(k, checked),
+                checkable=True,
+                tip=self.tr("Disegna o inserisci un {0}").format(
+                    label.lower()),
+                host=HOST_TOOLBAR, to_menu=False)
+            self._assign_shortcut(action, cad_tools.tool_shortcut(drawn_key))
+            self.shape_group.addAction(action)
+            self.shape_actions[drawn_key] = action
+
+        self.parametric_action = self._make_action(
+            self.tr("Parametrico"), self._on_parametric_toggled,
+            checkable=True,
+            tip=self.tr("Inserimento parametrico: misure nella finestra, poi "
+                        "un click per posizionare. Spento: disegno libero."),
+            host=HOST_TOOLBAR, to_menu=False)
+
+    def _parametric_key(self, drawn_key):
+        """Which registry entry a shape button activates right now."""
+        parametric = bool(self.parametric_action is not None
+                          and self.parametric_action.isChecked())
+        for _label, drawn, typed in SHAPE_ACTIONS:
+            if drawn == drawn_key:
+                return typed if parametric else drawn
+        return drawn_key
+
+    def _toggle_shape(self, drawn_key, checked):
+        self._active_shape = drawn_key if checked else None
+        self._toggle_tool(self._parametric_key(drawn_key), checked)
+
+    def _on_parametric_toggled(self, _checked=False):
+        """Switching mode re-arms whichever shape is currently selected."""
+        if self._active_shape is None:
+            return
+        for _label, drawn, typed in SHAPE_ACTIONS:
+            for key in (drawn, typed):
+                tool = self.map_tools.get(key)
+                if tool is not None and self.iface.mapCanvas().mapTool() is tool:
+                    self.iface.mapCanvas().unsetMapTool(tool)
+        self._toggle_tool(self._parametric_key(self._active_shape), True)
+
     def _build_cad_actions(self):
-        """CAD map tools: mounted on the dock's toolbar, not on the QGIS one."""
+        """The modifiers, on the dock's toolbar. The primitives are on the
+        QGIS one, one action per shape, so a shape has a single place."""
         from .cad import tools as cad_tools                     # noqa: PLC0415
 
         self.tool_group = QActionGroup(self._main_window())
         self.tool_group.setExclusive(True)
-        for key in CAD_TOOL_ORDER:
+        for key in EDIT_IN_PLACE_TOOLS:
             if key not in cad_tools.TOOL_REGISTRY:
                 continue                    # tool not shipped in this build
             label = cad_tools.tool_label(key)
@@ -229,6 +319,17 @@ class GeoCadUavPlugin:
             except (TypeError, RuntimeError):
                 pass
         self._connections = []
+
+        if self.workspace is not None:
+            try:
+                self.workspace.unmount()
+            except Exception:                                   # noqa: BLE001
+                pass
+            self.workspace = None
+        self.shape_actions = {}
+        self.shape_group = None
+        self.parametric_action = None
+        self._active_shape = None
 
         # Map tools first: a tool still set on the canvas outlives the plugin.
         canvas = None

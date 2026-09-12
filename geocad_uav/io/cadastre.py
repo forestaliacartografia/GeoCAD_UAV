@@ -891,21 +891,60 @@ def query_area(project_geometry, project_crs, transport=None,
     return result
 
 
-def area_task(project_geometry, project_crs, on_result, transport=None,
-              timeout: float = DEFAULT_TIMEOUT_S, work_crs=None):
-    """Run :func:`query_area` on QGIS's task manager. Returns the task.
+def payload(result) -> dict:
+    """The result as a plain dict, for a Qt signal and for a report.
 
-    The interface stays live while a government server thinks about it, the
-    operator can cancel, and a cadastral failure returns a result with status
-    ERRORE instead of an exception: the reforestation project does not depend
-    on the cadastre and must not be lost with it.
+    A signal carrying a dict is a signal anything can connect to -- a panel,
+    a log, a test -- without importing this module's classes. The full object
+    rides along under ``result`` for callers that want the parcel list.
     """
-    from qgis.core import QgsApplication, QgsTask               # noqa: PLC0415
+    if result is None:
+        return {"stato": STATUS_ERROR, "messaggio": "nessun risultato",
+                "righe": [], "result": None}
+    data = dict(result.as_attributes())
+    data.update({
+        "messaggio": result.message,
+        "righe": result.rows(),
+        "avvisi": list(result.warnings),
+        "crs_calcolo": result.work_crs_authid,
+        "result": result,
+    })
+    return data
 
-    class _AreaTask(QgsTask):
-        def __init__(self):
+
+_TASK_CLASS = None
+
+
+def task_class():
+    """The cadastral ``QgsTask``, with the signals the GUI listens to.
+
+    Built on first use rather than at import: defining a QObject subclass
+    needs Qt, and importing this module must not require a running QGIS.
+    """
+    global _TASK_CLASS
+    if _TASK_CLASS is not None:
+        return _TASK_CLASS
+
+    from qgis.core import QgsTask                               # noqa: PLC0415
+    from qgis.PyQt.QtCore import pyqtSignal                     # noqa: PLC0415
+
+    class CadastralTask(QgsTask):
+        """WFS -> parse -> intersect -> Belfiore -> signal."""
+
+        #: Emitted on success with :func:`payload`.
+        cadastralDataReady = pyqtSignal(dict)
+        #: Emitted when the cadastre could not answer. The project is fine.
+        cadastralFailed = pyqtSignal(str)
+
+        def __init__(self, project_geometry, project_crs, transport=None,
+                     timeout=DEFAULT_TIMEOUT_S, work_crs=None):
             super().__init__("GeoCad UAV: dati catastali",
                              QgsTask.Flag.CanCancel)
+            self._geometry = project_geometry
+            self._crs = project_crs
+            self._transport = transport
+            self._timeout = timeout
+            self._work_crs = work_crs
             self.result = None
 
         def run(self):
@@ -917,9 +956,9 @@ def area_task(project_geometry, project_crs, on_result, transport=None,
                 self.setProgress(float(value))
 
             try:
-                self.result = query_area(project_geometry, project_crs,
-                                         transport, timeout, work_crs,
-                                         progress)
+                self.result = query_area(self._geometry, self._crs,
+                                         self._transport, self._timeout,
+                                         self._work_crs, progress)
             except CadastreError as exc:
                 self.result = CadastralResult(
                     status=STATUS_ERROR, message=exc.formatted())
@@ -931,12 +970,52 @@ def area_task(project_geometry, project_crs, on_result, transport=None,
             return True
 
         def finished(self, ok):
+            """Back on the GUI thread: emit, then call the plain callback.
+
+            Both, because a signal is what a panel wants and a callback is
+            what a test or a script wants, and neither should have to learn
+            the other's idiom.
+            """
+            data = payload(self.result)
             try:
-                on_result(self.result)
+                if self.result is not None and self.result.is_usable:
+                    self.cadastralDataReady.emit(data)
+                else:
+                    self.cadastralFailed.emit(
+                        data.get("messaggio")
+                        or STATUS_LABELS.get(data.get("stato"), ""))
+                    self.cadastralDataReady.emit(data)
             except Exception:                                   # noqa: BLE001
                 pass
 
-    task = _AreaTask()
+    _TASK_CLASS = CadastralTask
+    return _TASK_CLASS
+
+
+def area_task(project_geometry, project_crs, on_result=None, transport=None,
+              timeout: float = DEFAULT_TIMEOUT_S, work_crs=None):
+    """Run :func:`query_area` on QGIS's task manager. Returns the task.
+
+    The interface stays live while a government server thinks about it, the
+    operator can cancel, and a cadastral failure arrives as a result with
+    status ERRORE instead of an exception: the reforestation project does not
+    depend on the cadastre and must not be lost with it.
+
+    Connect to ``task.cadastralDataReady`` for the Qt way; pass ``on_result``
+    for the plain one.
+    """
+    from qgis.core import QgsApplication                        # noqa: PLC0415
+
+    task = task_class()(project_geometry, project_crs, transport, timeout,
+                        work_crs)
+    if on_result is not None:
+        def _forward(_data, _task=task, _callback=on_result):
+            try:
+                _callback(_task.result)
+            except Exception:                                   # noqa: BLE001
+                pass
+
+        task.cadastralDataReady.connect(_forward)
     QgsApplication.taskManager().addTask(task)
     return task
 

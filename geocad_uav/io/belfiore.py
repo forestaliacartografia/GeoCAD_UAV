@@ -51,6 +51,19 @@ PROVINCE_COLUMN = "provincia"
 REGION_COLUMN = "regione"
 REQUIRED_COLUMNS = (CODE_COLUMN, NAME_COLUMN, PROVINCE_COLUMN, REGION_COLUMN)
 
+#: The smallest table that still answers the only question that matters:
+#: which comune is this code. A file with just these two columns is read
+#: too, so an operator can drop in a two-column list without having to
+#: invent a province for every row.
+MINIMAL_COLUMNS = ("codice", "comune")
+COLUMN_ALIASES = {
+    "codice": CODE_COLUMN, "code": CODE_COLUMN,
+    "codice_catastale": CODE_COLUMN, "belfiore": CODE_COLUMN,
+    "comune": NAME_COLUMN, "denominazione": NAME_COLUMN,
+    "nome": NAME_COLUMN,
+    "sigla_provincia": "sigla", "prov": PROVINCE_COLUMN,
+}
+
 SOURCE_URL = ("https://www.istat.it/storage/codici-unita-amministrative/"
               "Elenco-comuni-italiani.csv")
 SOURCE_NAME = "ISTAT - Codici delle unita' amministrative territoriali"
@@ -123,13 +136,24 @@ class BelfioreRegistry:
         try:
             with io.open(self.path, encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle)
-                missing = [name for name in REQUIRED_COLUMNS
-                           if name not in (reader.fieldnames or ())]
-                if missing:
+                headers = [str(name or "").strip().lower()
+                           for name in (reader.fieldnames or ())]
+                # A header written any of the accepted ways is normalised
+                # once, here, so the rest of the reader sees one schema.
+                normalised = {name: COLUMN_ALIASES.get(name, name)
+                              for name in headers}
+                present = set(normalised.values())
+                if not {CODE_COLUMN, NAME_COLUMN} <= present:
                     self.error = ("colonne mancanti nella tabella Belfiore: "
-                                  "{0}".format(", ".join(missing)))
+                                  "{0}".format(", ".join(
+                                      name for name in (CODE_COLUMN,
+                                                        NAME_COLUMN)
+                                      if name not in present)))
                     return self._by_code
-                for row in reader:
+                for raw in reader:
+                    row = {normalised.get(str(k or "").strip().lower(),
+                                          str(k or "").strip().lower()): v
+                           for k, v in raw.items()}
                     code = (row.get(CODE_COLUMN) or "").strip().upper()
                     if not code:
                         continue
