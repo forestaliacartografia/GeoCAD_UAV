@@ -15,7 +15,9 @@
     "focal_mm, sensor_w_mm, sensor_h_mm are millimetres.",
     "image_w_px, image_h_px are pixels of the delivered still image.",
     "Consistency is self-checked: sensor_w/image_w must match sensor_h/image_h",
-    "to within ~1 %, otherwise the plugin raises a warning."
+    "to within ~1 %, otherwise the plugin raises a warning.",
+    "",
+    "kind is what the payload sees: rgb, multispectral, thermal or lidar. Every bundled preset is an RGB frame camera; a user library may declare the others, with numbers taken from its own spec sheet."
   ],
   "cameras": [
     {
@@ -30,7 +32,8 @@
       "min_interval_s": 0.7,
       "mechanical_shutter": true,
       "source": "DJI Mavic 3 Enterprise series specification (4/3 CMOS, 20 MP)",
-      "notes": "Mechanical shutter: no rolling-shutter smear, blur limit is the binding one."
+      "notes": "Mechanical shutter: no rolling-shutter smear, blur limit is the binding one.",
+      "kind": "rgb"
     },
     {
       "key": "dji_zenmuse_l2_rgb",
@@ -44,7 +47,8 @@
       "min_interval_s": 0.7,
       "mechanical_shutter": true,
       "source": "DJI Zenmuse L2 specification, RGB mapping camera (4/3 CMOS, 20 MP)",
-      "notes": "LiDAR payload; this preset covers only the RGB photogrammetric camera."
+      "notes": "LiDAR payload; this preset covers only the RGB photogrammetric camera.",
+      "kind": "rgb"
     },
     {
       "key": "dji_p4rtk",
@@ -58,7 +62,8 @@
       "min_interval_s": 2.0,
       "mechanical_shutter": true,
       "source": "DJI Phantom 4 RTK specification (1-inch CMOS, 20 MP)",
-      "notes": "RTK/PPK positions; TimeSync offsets the camera centre from the antenna."
+      "notes": "RTK/PPK positions; TimeSync offsets the camera centre from the antenna.",
+      "kind": "rgb"
     },
     {
       "key": "dji_p4p",
@@ -72,7 +77,8 @@
       "min_interval_s": 2.0,
       "mechanical_shutter": true,
       "source": "DJI Phantom 4 Pro V2.0 specification (1-inch CMOS, 20 MP)",
-      "notes": ""
+      "notes": "",
+      "kind": "rgb"
     },
     {
       "key": "dji_zenmuse_p1_24",
@@ -86,7 +92,8 @@
       "min_interval_s": 0.7,
       "mechanical_shutter": true,
       "source": "DJI Zenmuse P1 specification (full-frame 35.9 x 24 mm, 45 MP)",
-      "notes": "Fixed 24 mm DL lens."
+      "notes": "Fixed 24 mm DL lens.",
+      "kind": "rgb"
     },
     {
       "key": "dji_zenmuse_p1_35",
@@ -100,7 +107,8 @@
       "min_interval_s": 0.7,
       "mechanical_shutter": true,
       "source": "DJI Zenmuse P1 specification (full-frame 35.9 x 24 mm, 45 MP)",
-      "notes": "Fixed 35 mm DL lens."
+      "notes": "Fixed 35 mm DL lens.",
+      "kind": "rgb"
     },
     {
       "key": "dji_zenmuse_p1_50",
@@ -114,7 +122,8 @@
       "min_interval_s": 0.7,
       "mechanical_shutter": true,
       "source": "DJI Zenmuse P1 specification (full-frame 35.9 x 24 mm, 45 MP)",
-      "notes": "Fixed 50 mm DL lens; long focal, watch the blur limit."
+      "notes": "Fixed 50 mm DL lens; long focal, watch the blur limit.",
+      "kind": "rgb"
     },
     {
       "key": "dji_mini4pro_48",
@@ -128,7 +137,8 @@
       "min_interval_s": 2.0,
       "mechanical_shutter": false,
       "source": "DJI Mini 4 Pro specification (1/1.3-inch CMOS, 48 MP native)",
-      "notes": "Electronic rolling shutter: keep speed low, prefer the blur limit at 1.0 px."
+      "notes": "Electronic rolling shutter: keep speed low, prefer the blur limit at 1.0 px.",
+      "kind": "rgb"
     },
     {
       "key": "dji_mini4pro_12",
@@ -142,7 +152,8 @@
       "min_interval_s": 1.0,
       "mechanical_shutter": false,
       "source": "DJI Mini 4 Pro specification, 12 MP quad-bayer binned mode",
-      "notes": "Binned 2x2: effective pixel pitch is doubled, GSD is coarser."
+      "notes": "Binned 2x2: effective pixel pitch is doubled, GSD is coarser.",
+      "kind": "rgb"
     },
     {
       "key": "dji_air2s",
@@ -156,7 +167,8 @@
       "min_interval_s": 2.0,
       "mechanical_shutter": false,
       "source": "DJI Air 2S specification (1-inch CMOS, 20 MP)",
-      "notes": "Electronic shutter only."
+      "notes": "Electronic shutter only.",
+      "kind": "rgb"
     }
   ]
 }

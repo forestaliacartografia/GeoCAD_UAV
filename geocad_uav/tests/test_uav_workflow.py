@@ -78,6 +78,15 @@ def io_open(path):
         return handle.read()
 
 
+def refuses_axis(geometry):
+    """True when prepare_aoi refuses a line instead of gridding it."""
+    try:
+        sv.prepare_aoi([geometry])
+    except sv.RoutingError:
+        return True
+    return False
+
+
 # -- a hillside on disk ----------------------------------------------------
 CELL = 5.0
 NX, NY = 120, 110
@@ -578,6 +587,106 @@ else:
         check_true("...e i numeri della missione",
                    "{0}".format(len(covered.waypoints)) in html
                    or "waypoint" in html.lower())
+
+# --------------------------------------------------------------------------
+# W9 - the hardware step says what the hardware is
+# --------------------------------------------------------------------------
+print("\n== W9: lo step Hardware descrive camera e drone ==")
+panel.recompute()
+note = panel.gear_note.text()
+print("        {0}".format(note.replace("\n", "\n        ")))
+camera = panel.current_camera()
+drone = panel.current_drone()
+check_true("la nota nomina la camera", camera.name in note)
+check_true("...e il tipo di sensore", camera.kind_label in note)
+check_true("...e la focale e il passo del pixel",
+           "f=" in note and "pitch" in note)
+check_true("...e l'intervallo minimo di scatto, che limita la velocita'",
+           "intervallo min" in note)
+check_true("la nota nomina anche il drone e la sua autonomia",
+           drone.name in note and "autonomia" in note)
+check_true("l'elenco delle camere porta il tipo accanto al nome",
+           all("[" in panel.camera_combo.itemText(i)
+               for i in range(panel.camera_combo.count())))
+
+# --------------------------------------------------------------------------
+# W8 - a bending road is a corridor mission, not a grid over its bounding box
+# --------------------------------------------------------------------------
+print("\n== W8: asse lineare -> missione a corridoio ==")
+axis_points = []
+for i in range(11):
+    ax = OX + 120.0 + i * 30.0
+    ay = OY - 300.0 + 70.0 * np.sin(i / 3.0)
+    axis_points.append("{0} {1}".format(ax, ay))
+AXIS = QgsGeometry.fromWkt("LINESTRING({0})".format(",".join(axis_points)))
+
+panel.check_coverage.setChecked(False)
+panel.extent.set_extent(AXIS, CRS)
+panel.recompute()
+print("        {0}".format(panel.extent.summary.text()))
+check_true("il pannello riconosce di avere un asse", panel.is_corridor())
+check_true("...e lo descrive come sviluppo, non come area",
+           "sviluppo" in panel.extent.summary.text())
+check_true("la larghezza del corridoio compare",
+           not panel.corridor_width.isHidden())
+check_true("...e i comandi che non c'entrano si spengono",
+           not panel.azimuth.isEnabled()
+           and not panel.pattern_combo.isEnabled()
+           and not panel.azimuth_optimise.isEnabled())
+
+panel.corridor_width.setValue(0.0)
+ready, reason = panel.readiness()
+print("        {0}".format(reason))
+check_true("senza larghezza non si vola", not ready and "larghezza" in reason)
+panel.corridor_width.setValue(140.0)
+panel.recompute()
+check_true("con la larghezza si", panel.readiness()[0])
+
+corridor = panel.generate()
+check_true("la missione a corridoio esiste", corridor is not None)
+if corridor is None:
+    skip("il resto di W8", "nessuna missione a corridoio")
+else:
+    print("        schema '{0}', {1} strisciate, {2} waypoint, {3:,.0f} m"
+          .format(corridor.pattern, corridor.stats.n_strips,
+                  len(corridor.waypoints), corridor.stats.total_length_m))
+    check_true("e' pianificata come corridoio, non come griglia",
+               corridor.pattern == "corridor")
+    check_true("le strisciate sono piu' di una",
+               corridor.stats.n_strips >= 3)
+
+    # The strips are offset curves of the axis: every waypoint sits within
+    # half the corridor width (plus the half footprint the layout adds) of
+    # it, which a grid over the bounding box would not manage on a bend.
+    from qgis.core import QgsPointXY as _P
+    survey_geom = panel.survey_geometry()
+    reach = 0.5 * (140.0 + survey_geom.footprint_across_m) + 1.0
+    far = [w for w in corridor.waypoints
+           if AXIS.distance(QgsGeometry.fromPointXY(_P(w.x, w.y))) > reach]
+    spread = max(AXIS.distance(QgsGeometry.fromPointXY(_P(w.x, w.y)))
+                 for w in corridor.waypoints)
+    print("        distanza massima dall'asse: {0:.1f} m (limite {1:.1f})"
+          .format(spread, reach))
+    check("nessun waypoint esce dal corridoio", len(far), 0)
+    check_true("...e le strisciate esterne ci arrivano davvero",
+               spread > 0.5 * 140.0 * 0.6)
+
+    agl = np.array([w.z_agl for w in corridor.waypoints], dtype=float)
+    print("        AGL: {0:.2f} - {1:.2f} m, buchi DEM: {2}".format(
+        float(np.nanmin(agl)), float(np.nanmax(agl)),
+        sum(1 for w in corridor.waypoints if w.dem_gap)))
+    check_true("il terrain following vale anche in corridoio",
+               bool(np.isfinite(agl).all())
+               and float(np.abs(agl - panel.h_agl.value()).max()) < 0.01)
+    check_true("la missione dichiara la larghezza coperta",
+               any("120" in w or "140" in w for w in corridor.warnings))
+    check_true("l'area di riferimento e' la fascia ripresa, non zero",
+               corridor.stats.aoi_area_ha > 1.0)
+
+    # And the same axis planned as if it were an area is refused, rather
+    # than silently gridded over its bounding box.
+    check_true("un asse non passa per un'area",
+               refuses_axis(AXIS))
 
 # --------------------------------------------------------------------------
 print("\n" + "=" * 78)

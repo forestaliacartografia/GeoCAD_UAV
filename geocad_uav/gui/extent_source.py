@@ -136,11 +136,30 @@ class ExtentSource(QGroupBox):
                 geometry = geometry.makeValid()
             self._geometry = geometry
             self._crs = crs
-            self.summary.setText(tr(
-                "Estensione: {0:,.0f} m2 ({1:.3f} ha), CRS {2}").format(
-                    geometry.area(), geometry.area() / 10_000.0,
-                    crs.authid() if crs else "?"))
+            self.summary.setText(self.describe(geometry, crs))
         self._notify()
+
+    @staticmethod
+    def describe(geometry, crs) -> str:
+        """What was picked, in the units that kind of thing is measured in.
+
+        A line has no area, and reporting 0 m2 for a road centreline reads
+        as "nothing selected" rather than "a 2 km axis".
+        """
+        authid = crs.authid() if crs else "?"
+        if QgsWkbTypes.geometryType(geometry.wkbType()) == \
+                QgsWkbTypes.LineGeometry:
+            return tr("Asse: {0:,.0f} m di sviluppo, CRS {1}").format(
+                geometry.length(), authid)
+        return tr("Estensione: {0:,.0f} m2 ({1:.3f} ha), CRS {2}").format(
+            geometry.area(), geometry.area() / 10_000.0, authid)
+
+    def is_line(self) -> bool:
+        """True when what is held is a linear feature, not a surface."""
+        if self._geometry is None:
+            return False
+        return QgsWkbTypes.geometryType(self._geometry.wkbType()) == \
+            QgsWkbTypes.LineGeometry
 
     def _from_layer(self, *_args):
         layer = self.layer_combo.currentLayer()

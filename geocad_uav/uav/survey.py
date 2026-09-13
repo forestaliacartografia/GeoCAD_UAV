@@ -207,6 +207,49 @@ def prepare_aoi(geometries, split_multipart: bool = False):
     return blocks, warnings
 
 
+def prepare_axis(geometries):
+    """Validate and merge line geometries into one corridor axis each.
+
+    The mirror of :func:`prepare_aoi` for the linear case. Returns
+    ``(axes, warnings)``. Multipart lines are merged where their ends meet,
+    because an offset curve of a broken axis is a broken corridor; where
+    they do not meet, each part becomes its own axis and the warning says
+    so.
+    """
+    from qgis.core import QgsGeometry, QgsWkbTypes                # noqa: PLC0415
+
+    warnings: "list[str]" = []
+    axes = []
+    for geom in geometries or []:
+        if geom is None or geom.isEmpty():
+            continue
+        if QgsWkbTypes.geometryType(geom.wkbType()) != \
+                QgsWkbTypes.LineGeometry:
+            warnings.append(
+                "Skipped a non-line feature ({0}) on a corridor mission."
+                .format(QgsWkbTypes.displayString(geom.wkbType())))
+            continue
+        if geom.isMultipart():
+            merged = geom.mergeLines()
+            if merged is not None and not merged.isEmpty():
+                geom = merged
+            if geom.isMultipart():
+                parts = [part for part in geom.asGeometryCollection()
+                         if not part.isEmpty()]
+                warnings.append(
+                    "The axis is in {0} pieces that do not join; each is "
+                    "planned as its own corridor.".format(len(parts)))
+                axes.extend(parts)
+                continue
+        axes.append(QgsGeometry(geom))
+
+    if not axes:
+        raise RoutingError(
+            "No usable line found for the corridor axis. Select a line "
+            "feature, or choose a line layer.")
+    return axes, warnings
+
+
 def photogrammetric_buffer(geom, footprint_across_m: float,
                            user_margin_m: float = 0.0, segments: int = 12):
     """Expand the AOI so its edges are imaged by complete, overlapped frames.

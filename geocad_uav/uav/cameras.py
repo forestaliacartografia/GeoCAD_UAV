@@ -15,7 +15,7 @@ import json
 import os
 from typing import Optional
 
-from .photogrammetry import Camera, PhotogrammetryError
+from .photogrammetry import KIND_RGB, Camera, PhotogrammetryError
 
 _BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "profiles", "cameras.json")
@@ -51,6 +51,7 @@ def camera_from_dict(entry: dict) -> Camera:
             shutter_s=float(entry.get("shutter_s", 1.0 / 1000.0)),
             min_interval_s=float(entry.get("min_interval_s", 2.0)),
             mechanical_shutter=bool(entry.get("mechanical_shutter", False)),
+            kind=str(entry.get("kind", KIND_RGB)),
             source=str(entry.get("source", "")),
             notes=str(entry.get("notes", "")),
         )
@@ -107,8 +108,13 @@ def check_camera(camera: Camera) -> "list[str]":
 
 def describe(camera: Camera) -> str:
     """One-line human description used in reports and the GUI."""
-    return ("{0} | f={1:g} mm | sensor {2:g}x{3:g} mm | {4}x{5} px "
-            "({6:.1f} MP) | pitch {7:.4f} mm | FOV_diag {8:.1f} deg").format(
-        camera.name, camera.focal_mm, camera.sensor_w_mm, camera.sensor_h_mm,
-        camera.image_w_px, camera.image_h_px, camera.megapixels,
-        camera.pitch_mm, camera.diagonal_fov_deg)
+    return ("{0} | {1} | f={2:g} mm | sensor {3:g}x{4:g} mm | {5}x{6} px "
+            "({7:.1f} MP, {8:.2f}:1) | pitch {9:.4f} mm | FOV_diag "
+            "{10:.1f} deg | otturatore 1/{11:.0f} s, intervallo min "
+            "{12:g} s").format(
+        camera.name, camera.kind_label, camera.focal_mm, camera.sensor_w_mm,
+        camera.sensor_h_mm, camera.image_w_px, camera.image_h_px,
+        camera.megapixels, camera.aspect_ratio, camera.pitch_mm,
+        camera.diagonal_fov_deg,
+        1.0 / camera.shutter_s if camera.shutter_s else 0.0,
+        camera.min_interval_s)

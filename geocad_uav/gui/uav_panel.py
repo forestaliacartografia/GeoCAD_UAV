@@ -135,6 +135,18 @@ class UavPanel(QWidget):
         self.dem_note = QLabel()
         self.dem_note.setWordWrap(True)
         terrain_form.addRow(self.dem_note)
+        # Minimum zero, not one: zero is how an operator says "I have
+        # not decided yet", and readiness has to be able to see that.
+        self.corridor_width = self._spin(120.0, 0.0, 5000.0, " m")
+        self.corridor_width.setToolTip(tr(
+            "Larghezza totale da riprendere, centrata sull'asse. Compare "
+            "solo quando l'area scelta e' una linea: strada, corso d'acqua, "
+            "elettrodotto."))
+        self.corridor_label = QLabel(tr("Larghezza del corridoio"))
+        terrain_form.addRow(self.corridor_label, self.corridor_width)
+        self.corridor_label.setVisible(False)
+        self.corridor_width.setVisible(False)
+
         self.user_margin = self._spin(0.0, 0.0, 500.0, " m")
         self.user_margin.setToolTip(tr(
             "Fascia aggiunta attorno all'area, oltre alla mezza impronta "
@@ -147,7 +159,9 @@ class UavPanel(QWidget):
         gear_form = QFormLayout(gear_box)
         self.camera_combo = QComboBox()
         for key in sorted(self._cameras):
-            self.camera_combo.addItem(self._cameras[key].name, key)
+            camera = self._cameras[key]
+            self.camera_combo.addItem(
+                "{0} [{1}]".format(camera.name, camera.kind_label), key)
         gear_form.addRow(tr("Camera"), self.camera_combo)
         self.drone_combo = QComboBox()
         for key in sorted(self._drones):
@@ -300,6 +314,7 @@ class UavPanel(QWidget):
                 (self.safety_margin, "valueChanged"),
                 (self.vegetation_clearance, "valueChanged"),
                 (self.user_margin, "valueChanged"),
+                (self.corridor_width, "valueChanged"),
                 (self.pattern_combo, "currentIndexChanged"),
                 (self.double_grid, "toggled"),
                 (self.check_coverage, "toggled"),
@@ -386,6 +401,19 @@ class UavPanel(QWidget):
         return pg.solve_survey_geometry(self.current_camera(), self.overlap(),
                                         h_agl_m=self.h_agl.value())
 
+    def is_corridor(self) -> bool:
+        """A corridor mission is one whose AOI is a line.
+
+        Not a checkbox: what was picked already says which kind of mission
+        this is, and a switch that could disagree with the geometry is a
+        switch that will.
+        """
+        return bool(self.extent.is_line())
+
+    def corridor_width_m(self) -> float:
+        return (float(self.corridor_width.value()) if self.is_corridor()
+                else 0.0)
+
     def azimuth_choice(self):
         """``(strategy, manual azimuth or None)`` from the azimuth combo."""
         key = self.azimuth_mode.currentData() or "manual"
@@ -419,6 +447,7 @@ class UavPanel(QWidget):
             pattern=self.pattern_combo.currentData()
             or sv.PATTERN_BOUSTROPHEDON,
             double_grid=self.double_grid.isChecked(),
+            corridor_width_m=self.corridor_width_m(),
             azimuth_strategy=strategy,
             manual_azimuth_deg=manual,
             v_mission_ms=self.speed_ms(),
@@ -643,6 +672,10 @@ class UavPanel(QWidget):
                 "Il CRS dell'area ({0}) e' geografico: distanze e "
                 "sovrapposizioni verrebbero calcolate in gradi. Riproietta "
                 "in un CRS metrico (UTM).").format(crs.authid())
+        if self.is_corridor() and self.corridor_width.value() <= 0.0:
+            return False, tr(
+                "Hai scelto un asse lineare: indica la larghezza del "
+                "corridoio da riprendere.")
         if self.height_source() == HEIGHT_FROM_GSD:
             try:
                 height = pg.height_from_gsd(self.current_camera(),
@@ -679,8 +712,22 @@ class UavPanel(QWidget):
                 tr("Parametri non validi: {0}").format(exc))
             return
         self.interval.setText("{0:.2f} s".format(interval))
+        self.gear_note.setText(
+            cam_lib.describe(self.current_camera())
+            + "\n" + drone_lib.describe(self.current_drone()))
+        corridor = self.is_corridor()
+        self.corridor_label.setVisible(corridor)
+        self.corridor_width.setVisible(corridor)
+        # A corridor's strips follow the axis: an azimuth and a grid pattern
+        # would be controls with nothing to act on.
+        for widget in (self.azimuth, self.azimuth_mode, self.pattern_combo,
+                       self.double_grid, self.azimuth_optimise,
+                       self.azimuth_from_edge, self.azimuth_from_map):
+            widget.setEnabled(not corridor)
         self._pair_height_and_gsd(geometry)
-        self.azimuth.setEnabled(self.azimuth_choice()[0] == sv.AZIMUTH_MANUAL)
+        if not corridor:
+            self.azimuth.setEnabled(
+                self.azimuth_choice()[0] == sv.AZIMUTH_MANUAL)
 
         drone = self.current_drone()
         budget = pg.build_speed_budget(geometry, self.speed_ms(),
@@ -795,8 +842,10 @@ class UavPanel(QWidget):
 
         geometry = self.extent.geometry()
         crs = self.extent.crs()
+        corridor = self.is_corridor()
         try:
-            blocks, warnings = sv.prepare_aoi([geometry])
+            blocks, warnings = (sv.prepare_axis([geometry]) if corridor
+                                else sv.prepare_aoi([geometry]))
         except sv.RoutingError as exc:
             self.last_mission = None
             self.last_terrain = None
@@ -811,13 +860,19 @@ class UavPanel(QWidget):
         params = self.build_params()
         geom_survey = self.survey_geometry()
         box = aoi.boundingBox()
+        # The DEM window has to cover what is flown, and a corridor's axis
+        # bounding box is a thin ribbon: the strips sit half the corridor
+        # width away from it on both sides.
+        margin = max(geom_survey.footprint_across_m,
+                     geom_survey.footprint_along_m)
+        if corridor:
+            margin += 0.5 * self.corridor_width_m()
         try:
             terrain, dem_warnings = TerrainModel.from_layer(
                 self.dem_layer(), crs,
                 (box.xMinimum(), box.yMinimum(), box.xMaximum(),
                  box.yMaximum()),
-                margin_m=max(geom_survey.footprint_across_m,
-                             geom_survey.footprint_along_m))
+                margin_m=margin)
         except Exception as exc:                                # noqa: BLE001
             self.last_mission = None
             self.last_terrain = None

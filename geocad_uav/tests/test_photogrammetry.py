@@ -187,6 +187,42 @@ check("footprint across extent = 2*half_across",
 check("footprint along extent = 2*half_along",
       float(rect[:, 1].max() - rect[:, 1].min()), 100.0, 1e-9)
 
+# ------------------------------------------------------- sensor kind (1.34) --
+print("\n== il tipo di sensore ==")
+from geocad_uav.uav import cameras as _cam_lib                   # noqa: E402
+
+_library = _cam_lib.load_library()
+print("        preset: {0}".format(
+    sorted({c.kind for c in _library.values()})))
+check_true("ogni preset dichiara un tipo di sensore valido",
+           all(c.kind in pg.SENSOR_KINDS for c in _library.values()))
+check_true("i dieci presenti sono fotocamere RGB, e lo dicono",
+           all(c.kind == pg.KIND_RGB for c in _library.values()))
+check_true("il tipo ha un'etichetta leggibile",
+           all(c.kind_label for c in _library.values()))
+check_true("il vocabolario copre RGB, multispettrale, termico e LiDAR",
+           set(pg.SENSOR_KINDS) == {"rgb", "multispectral", "thermal",
+                                    "lidar"})
+
+_one = next(iter(_library.values()))
+check("il rapporto d'aspetto viene dai pixel", _one.aspect_ratio,
+      _one.image_w_px / _one.image_h_px, 1e-12)
+check_true("la descrizione porta il tipo",
+           _one.kind_label in _cam_lib.describe(_one))
+
+_bad = False
+try:
+    pg.Camera(name="ignota", focal_mm=10.0, sensor_w_mm=13.2,
+              sensor_h_mm=8.8, image_w_px=5472, image_h_px=3648,
+              kind="sonar")
+except pg.PhotogrammetryError:
+    _bad = True
+check_true("un tipo inventato viene rifiutato", _bad)
+check_true("...e l'assenza di tipo vale RGB",
+           pg.Camera(name="senza tipo", focal_mm=10.0, sensor_w_mm=13.2,
+                     sensor_h_mm=8.8, image_w_px=5472,
+                     image_h_px=3648).kind == pg.KIND_RGB)
+
 # ------------------------------------------------------------------ verdict --
 print("\n" + "=" * 72)
 if FAILURES:

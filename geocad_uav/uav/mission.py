@@ -66,6 +66,10 @@ class MissionParams:
     wind_from_deg: Optional[float] = None
     pattern: str = sv.PATTERN_BOUSTROPHEDON
     double_grid: bool = False
+    #: Width of the swath to image, centred on the axis, for a corridor
+    #: mission. Zero -- the default -- means the AOI is an area and the
+    #: strips are a grid over it.
+    corridor_width_m: float = 0.0
     user_margin_m: float = 0.0
     lead_in_m: float = 0.0
 
@@ -146,10 +150,15 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
         pattern=params.pattern, turn_radius_m=params.drone.turn_radius_m,
         lead_in_m=params.lead_in_m)
 
+    is_corridor = params.corridor_width_m > 0.0
     strategy = params.azimuth_strategy
     manual_azimuth = params.manual_azimuth_deg
     azimuth_scores = []
-    if strategy == sv.AZIMUTH_OPTIMISED and not params.double_grid:
+    if is_corridor:
+        # The axis IS the orientation: there is nothing to choose and
+        # nothing to sweep.
+        strategy = sv.AZIMUTH_MANUAL
+    elif strategy == sv.AZIMUTH_OPTIMISED and not params.double_grid:
         # Solved here and not inside plan_route: the sweep needs the strip
         # spacing and the footprint, which only exist once the
         # photogrammetric geometry above has been solved.
@@ -164,7 +173,18 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
             "Doppia griglia: l'ottimizzazione dell'azimut non si applica, "
             "le due passate sono ortogonali per definizione.")
 
-    if params.double_grid:
+    if is_corridor:
+        plans = [sv.plan_corridor(
+            aoi_geom, d_side_m=geometry.d_side_m,
+            d_front_m=geometry.d_front_m,
+            corridor_width_m=params.corridor_width_m,
+            footprint_across_m=geometry.footprint_across_m,
+            user_margin_m=params.user_margin_m)]
+        if params.double_grid:
+            warnings.append(
+                "Corridoio: la doppia griglia non si applica, le strisciate "
+                "seguono l'asse.")
+    elif params.double_grid:
         plans = sv.plan_double_grid(aoi_geom, **route_kwargs)
     else:
         plans = [sv.plan_route(
@@ -174,8 +194,21 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
     for plan in plans:
         warnings.extend(plan.warnings)
 
+    # Everything downstream that asks "how much ground is this" -- the
+    # terrain statistics, the coverage check, the hectares in the report --
+    # needs a surface. A corridor's surface is the swath it images, which is
+    # the axis widened by the width asked for plus the half footprint the
+    # strips are laid out with.
+    survey_geom = aoi_geom
+    if is_corridor:
+        swath = 0.5 * (params.corridor_width_m + geometry.footprint_across_m)
+        widened = aoi_geom.buffer(swath + params.user_margin_m, 12)
+        if widened is not None and not widened.isEmpty():
+            survey_geom = widened
+
     # -- 3. altitude reference --------------------------------------------
-    aoi_z_min, aoi_z_max, aoi_z_mean = _terrain_stats_over(terrain, aoi_geom)
+    aoi_z_min, aoi_z_max, aoi_z_mean = _terrain_stats_over(terrain,
+                                                           survey_geom)
     relief = aoi_z_max - aoi_z_min
     lift = params.h_agl_m if params.h_agl_m is not None else geometry.h_agl_m
     lift += params.safety_margin_m + params.vegetation_clearance_m
@@ -266,7 +299,7 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
                                     feedback)
 
     # -- 7. statistics -----------------------------------------------------
-    stats = _compute_stats(aoi_geom, plans, all_waypoints, all_photos,
+    stats = _compute_stats(survey_geom, plans, all_waypoints, all_photos,
                            lines, geometry, flight_time, n_sub,
                            aoi_z_min, aoi_z_max, transit_length)
 

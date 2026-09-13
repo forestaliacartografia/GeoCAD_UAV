@@ -29,6 +29,24 @@ class PhotogrammetryError(ValueError):
 
 #: Sensor long axis lies across the flight direction (classic "landscape" nadir
 #: mount). Footprint width comes from sensor_w, footprint length from sensor_h.
+#: What the payload sees. The optical relations below are the same for
+#: all of them -- a thermal array has a focal length and a pixel pitch like
+#: anything else -- but the planning conventions are not, and an operator
+#: chooses a payload by this before anything else.
+KIND_RGB = "rgb"
+KIND_MULTISPECTRAL = "multispectral"
+KIND_THERMAL = "thermal"
+KIND_LIDAR = "lidar"
+
+SENSOR_KINDS = (KIND_RGB, KIND_MULTISPECTRAL, KIND_THERMAL, KIND_LIDAR)
+
+SENSOR_KIND_LABELS = {
+    KIND_RGB: "RGB",
+    KIND_MULTISPECTRAL: "Multispettrale",
+    KIND_THERMAL: "Termico",
+    KIND_LIDAR: "LiDAR",
+}
+
 ORIENT_ACROSS = "across"
 #: Sensor long axis lies along the flight direction ("portrait" / rotated mount).
 ORIENT_ALONG = "along"
@@ -54,6 +72,9 @@ class Camera:
     #: Fastest sustained capture interval the payload can hold, in seconds.
     min_interval_s: float = 2.0
     mechanical_shutter: bool = False
+    #: One of :data:`SENSOR_KINDS`. Defaults to RGB, which is what a preset
+    #: that does not say is: every bundled one is a frame camera.
+    kind: str = KIND_RGB
     source: str = ""
     notes: str = ""
 
@@ -72,6 +93,19 @@ class Camera:
                 raise PhotogrammetryError(
                     "Camera {0}: {1} must be a positive integer, "
                     "got {2!r}".format(self.name, field_name, value))
+        if self.kind not in SENSOR_KINDS:
+            raise PhotogrammetryError(
+                "Camera {0}: unknown sensor kind {1!r}. Use one of: "
+                "{2}".format(self.name, self.kind, ", ".join(SENSOR_KINDS)))
+
+    @property
+    def kind_label(self) -> str:
+        return SENSOR_KIND_LABELS.get(self.kind, self.kind)
+
+    @property
+    def aspect_ratio(self) -> float:
+        """Width over height of the image, as the spec sheet quotes it."""
+        return float(self.image_w_px) / float(self.image_h_px)
 
     # -- pixel pitch -------------------------------------------------------
 
