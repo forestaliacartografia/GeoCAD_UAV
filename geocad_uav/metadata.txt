@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.19.0
+version=1.20.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,30 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.19.0
+changelog=1.20.0
+    - Cartografia: la tavola di progetto, come dodicesimo step. Non uno
+      screenshot della mappa, ma un QgsPrintLayout vero, con titolo,
+      sottotitolo, legenda, scala grafica, freccia del nord e una nota
+      che dichiara scala, sistema di riferimento, formato e autore.
+    - Il foglio e' descritto come frazioni di pagina: la stessa
+      composizione vale su A4 e su A0, in verticale e in orizzontale,
+      senza una seconda serie di misure da tenere allineata.
+    - La legenda elenca soltanto i layer del progetto. Una legenda
+      agganciata all'albero dei layer avrebbe elencato la carta di base
+      dell'operatore, la sua ortofoto e ogni layer di appoggio aperto.
+    - La scala chiesta e' la scala impostata; chiedendo "adatta al
+      progetto" si ottiene l'inquadratura dell'area con un margine, e la
+      scala risultante viene scritta sulla tavola.
+    - Esportazione in PDF e in immagine alla risoluzione scelta,
+      verificate: il PDF comincia per %PDF- e l'immagine misura i pixel
+      che formato e dpi impongono.
+    - La tavola finisce nel Gestore di layout di QGIS, dove l'operatore
+      puo' aprirla e modificarla come qualunque altra; ricomporla
+      sostituisce quella vecchia invece di lasciarne due che si
+      contraddicono.
+    - Una tavola senza niente da disegnare viene rifiutata con la
+      ragione, invece di produrre un foglio bianco con un titolo.
+    1.19.0
     - Editing interattivo dell'impianto, come undicesimo step del flusso.
       Un piano generato e' una proposta: l'operatore sa che dove e'
       finita la pianta 412 c'e' un masso, che l'angolo verso la pista ne

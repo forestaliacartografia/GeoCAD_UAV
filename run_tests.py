@@ -42,7 +42,8 @@ QGIS = ["test_survey.py", "test_cad.py", "test_mission.py",
         "test_natural.py",
         "test_map_end_to_end.py",
         "test_contours_gui.py",
-        "test_editing.py"]
+        "test_editing.py",
+        "test_cartography.py"]
 
 
 def has_qgis() -> bool:

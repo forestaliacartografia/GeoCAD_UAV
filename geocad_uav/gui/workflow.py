@@ -40,7 +40,8 @@ from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                                  QDockWidget, QDoubleSpinBox, QFormLayout,
                                  QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-                                 QListWidget, QListWidgetItem, QMessageBox,
+                                 QLineEdit, QListWidget, QListWidgetItem,
+                                 QMessageBox,
                                  QPushButton, QScrollArea, QSpinBox,
                                  QStackedWidget, QTabWidget, QTableWidget,
                                  QTableWidgetItem, QTextBrowser, QVBoxLayout,
@@ -61,6 +62,8 @@ from ..forest.reforestation import symbology as symbology_mod
 from ..forest.reforestation import terrain as terrain_mod
 from ..forest.reforestation import zones as zones_mod
 from ..io import cadastre as cadastre_mod
+from ..io import cartography as carto_mod
+from . import map_layers as map_layers_mod
 from .map_layers import ProjectLayers
 
 M2_PER_HA = 10_000.0
@@ -82,7 +85,8 @@ STEPS = (
     ("optimise", "9. Ottimizza"),
     ("verify", "10. Verifica"),
     ("edit", "11. Editing"),
-    ("outputs", "12. Elaborati"),
+    ("cartography", "12. Cartografia"),
+    ("outputs", "13. Elaborati"),
 )
 
 #: Visual state of one step. Derived from the model, never set by a widget
@@ -189,6 +193,10 @@ class ProjectState(QObject):
         #: on the layer has diverged from the one the generator produced.
         self.added_plants = 0
         self.edited = False
+        #: The sheet, once it has been composed. Kept because the report
+        #: quotes its scale and the export writes it out again.
+        self.layout = None
+        self.layout_spec = carto_mod.LayoutSpec()
         self.scenarios = []
         self.anomalies = []
         #: Set by the Verify panel when it actually ran. An empty anomaly
@@ -244,6 +252,8 @@ class ProjectState(QObject):
                         DONE if self.result is not None else NOT_STARTED)
         self.set_status("optimise", DONE if self.scenarios else NOT_STARTED)
         self.set_status("edit", DONE if self.edited else NOT_STARTED)
+        self.set_status("cartography",
+                        DONE if self.layout is not None else NOT_STARTED)
         if self.result is None or not self.verified:
             self.set_status("verify", NOT_STARTED)
         else:
@@ -379,6 +389,40 @@ class ProjectState(QObject):
         self.verified = False
         self.refresh_status()
         return len(records), added
+
+    # -- the printed sheet -------------------------------------------------
+
+    def map_layers(self):
+        """The layers the drawing shows, back to front.
+
+        The plugin's own, in the order the map service stacks them, plus the
+        plants layer the generator committed. Nothing else the operator may
+        have open: a project drawing is not a screenshot of their session.
+        """
+        ordered = []
+        for key, _title, *_rest in map_layers_mod.LAYER_SPEC:
+            layer = self.layers.layers.get(key)
+            if layer is not None:
+                ordered.append(layer)
+        if (self.plants_layer is not None
+                and self.plants_layer not in ordered):
+            ordered.insert(0, self.plants_layer)
+        return ordered
+
+    def compose_layout(self, spec=None, name: str = ""):
+        """Build the sheet and put it in the project's layout manager."""
+        spec = spec if spec is not None else self.layout_spec
+        spec.warnings = []
+        layers = self.map_layers()
+        extent = carto_mod.layers_extent(layers)
+        layout = carto_mod.build_layout(
+            QgsProject.instance(), spec, layers, extent,
+            name or spec.title or tr("Rimboschimento"))
+        carto_mod.register(QgsProject.instance(), layout)
+        self.layout = layout
+        self.layout_spec = spec
+        self.refresh_status()
+        return layout
 
     def set_species_on(self, feature_ids, key: str) -> int:
         """Give the chosen species to the plants an operator selected."""
@@ -606,6 +650,17 @@ class Panel(QWidget):
         heading = QLabel("<b>{0}</b>".format(title))
         heading.setWordWrap(True)
         self.layout.addWidget(heading)
+
+    def say(self, message: str) -> None:
+        """A plain notice. The message bar when there is one, print never."""
+        iface = self.state.iface
+        if iface is None:
+            return
+        try:
+            iface.messageBar().pushMessage("GeoCad UAV", message,
+                                           level=Qgis.Info, duration=5)
+        except Exception:                                       # noqa: BLE001
+            pass
 
     def warn(self, error) -> None:
         message = (error.formatted() if isinstance(error, GeoCadError)
@@ -2039,6 +2094,206 @@ class EditPanel(Panel):
         self.reload_species()
 
 
+class CartographyPanel(Panel):
+    """Step 12: the drawing, on a sheet, with a scale that can be measured.
+
+    A project is delivered on paper. Not a screenshot of the canvas: a sheet
+    with a title, a legend naming the colours, a scale bar, a north arrow and
+    a note saying which coordinate system the coordinates are in. All of that
+    is ``QgsPrintLayout``; this panel chooses the sheet and presses the
+    button, and the layout lands in the project's Layout Manager where the
+    operator can open it and change anything they like.
+    """
+
+    def __init__(self, state, parent=None):
+        super().__init__(tr("Cartografia"), state, parent)
+
+        form = QFormLayout()
+        self.title_edit = QLineEdit()
+        self.title_edit.setPlaceholderText(tr("Titolo della tavola"))
+        self.subtitle_edit = QLineEdit()
+        self.subtitle_edit.setPlaceholderText(tr("Comune, localita', foglio"))
+        self.author_edit = QLineEdit()
+        self.author_edit.setPlaceholderText(tr("Redatto da"))
+        form.addRow(tr("Titolo"), self.title_edit)
+        form.addRow(tr("Sottotitolo"), self.subtitle_edit)
+        form.addRow(tr("Autore"), self.author_edit)
+
+        self.page_combo = QComboBox()
+        for key, label in carto_mod.PAGE_SIZES:
+            self.page_combo.addItem(label, key)
+        self.page_combo.setCurrentIndex(self.page_combo.findData("A3"))
+        self.orientation_combo = QComboBox()
+        for key, label in carto_mod.ORIENTATIONS:
+            self.orientation_combo.addItem(label, key)
+        self.scale_spin = QSpinBox()
+        self.scale_spin.setRange(0, 500_000)
+        self.scale_spin.setSingleStep(500)
+        self.scale_spin.setSpecialValueText(tr("adatta al progetto"))
+        self.dpi_spin = QSpinBox()
+        self.dpi_spin.setRange(72, 1200)
+        self.dpi_spin.setValue(carto_mod.DEFAULT_DPI)
+        self.grid_spin = QDoubleSpinBox()
+        self.grid_spin.setRange(0.0, 10_000.0)
+        self.grid_spin.setSuffix(" m")
+        self.grid_spin.setSpecialValueText(tr("nessuno"))
+        form.addRow(tr("Formato"), self.page_combo)
+        form.addRow(tr("Orientamento"), self.orientation_combo)
+        form.addRow(tr("Scala"), self.scale_spin)
+        form.addRow(tr("Risoluzione"), self.dpi_spin)
+        form.addRow(tr("Reticolo"), self.grid_spin)
+        self.layout.addLayout(form)
+
+        elements = QGroupBox(tr("Elementi della tavola"))
+        elements_row = QHBoxLayout(elements)
+        self.legend_check = QCheckBox(tr("Legenda"))
+        self.scalebar_check = QCheckBox(tr("Scala grafica"))
+        self.north_check = QCheckBox(tr("Nord"))
+        for box in (self.legend_check, self.scalebar_check, self.north_check):
+            box.setChecked(True)
+            elements_row.addWidget(box)
+        self.layout.addWidget(elements)
+
+        self.compose_button = QPushButton(tr("Componi tavola"))
+        self.open_button = QPushButton(tr("Apri nel compositore"))
+        self.open_button.setEnabled(False)
+        self.layout.addWidget(self.compose_button)
+        self.layout.addWidget(self.open_button)
+
+        exports = QHBoxLayout()
+        self.pdf_button = QPushButton(tr("Esporta PDF"))
+        self.image_button = QPushButton(tr("Esporta immagine"))
+        for button in (self.pdf_button, self.image_button):
+            button.setEnabled(False)
+            exports.addWidget(button)
+        self.layout.addLayout(exports)
+
+        self.outcome = QLabel(tr("nessuna tavola composta"))
+        self.outcome.setWordWrap(True)
+        self.layout.addWidget(self.outcome)
+        self.layout.addStretch(1)
+
+        self.compose_button.clicked.connect(self.compose)
+        self.open_button.clicked.connect(self.open_designer)
+        self.pdf_button.clicked.connect(self.export_pdf)
+        self.image_button.clicked.connect(self.export_image)
+        state.changed.connect(self.refresh)
+
+    # -- the sheet ---------------------------------------------------------
+
+    def spec(self):
+        return carto_mod.LayoutSpec(
+            title=self.title_edit.text().strip()
+            or (self.state.area.label if self.state.area else "")
+            or tr("Progetto di rimboschimento"),
+            subtitle=self.subtitle_edit.text().strip() or self.default_subtitle(),
+            author=self.author_edit.text().strip(),
+            page=str(self.page_combo.currentData() or "A3"),
+            orientation=str(self.orientation_combo.currentData()
+                            or carto_mod.ORIENTATION_LANDSCAPE),
+            scale=float(self.scale_spin.value()),
+            dpi=int(self.dpi_spin.value()),
+            legend=self.legend_check.isChecked(),
+            scalebar=self.scalebar_check.isChecked(),
+            north=self.north_check.isChecked(),
+            grid_interval_m=float(self.grid_spin.value()))
+
+    def default_subtitle(self) -> str:
+        """What the sheet says when nobody typed anything: the real data."""
+        parts = []
+        cadastre = self.state.cadastre
+        if cadastre is not None and cadastre.n_parcels:
+            first = cadastre.shares[0]
+            parts.append(first.comune_name or first.parcel.comune_code)
+            parts.append(tr("Foglio {0}, particelle {1}").format(
+                first.parcel.foglio or DASH, cadastre.n_parcels))
+        if self.state.area is not None:
+            parts.append(tr("superficie utile {0}").format(
+                ha(self.state.usable_m2)))
+        if self.state.result is not None:
+            parts.append(tr("{0:,} piante").format(self.state.result.count))
+        return " - ".join(part for part in parts if part)
+
+    def compose(self, *_args):
+        try:
+            layout = self.state.compose_layout(self.spec())
+        except GeoCadError as exc:
+            self.warn(exc)
+            self.outcome.setText(exc.formatted())
+            return None
+        self.refresh()
+        return layout
+
+    def open_designer(self, *_args) -> bool:
+        """Hand the sheet to QGIS's own layout designer."""
+        if self.state.layout is None or self.state.iface is None:
+            return False
+        try:
+            self.state.iface.openLayoutDesigner(self.state.layout)
+        except (AttributeError, RuntimeError):
+            return False
+        return True
+
+    # -- writing it out ----------------------------------------------------
+
+    def export_pdf(self, *_args, path: str = ""):
+        return self._export(path, "PDF", "pdf", carto_mod.export_pdf)
+
+    def export_image(self, *_args, path: str = ""):
+        def _write(layout, target):
+            return carto_mod.export_image(layout, target,
+                                          dpi=int(self.dpi_spin.value()))
+
+        return self._export(path, tr("Immagine"), "png", _write)
+
+    def _export(self, path, label, suffix, writer):
+        if self.state.layout is None:
+            self.warn(GeoCadError(
+                "no layout composed",
+                user_message=tr("Componi prima la tavola.")))
+            return None
+        target = path or self.ask_path(label, suffix)
+        if not target:
+            return None
+        try:
+            written = writer(self.state.layout, target)
+        except GeoCadError as exc:
+            self.warn(exc)
+            self.outcome.setText(exc.formatted())
+            return None
+        self.outcome.setText(tr("Tavola scritta in {0}").format(written))
+        self.say(tr("Cartografia esportata: {0}").format(written))
+        return written
+
+    def ask_path(self, label, suffix) -> str:
+        from qgis.PyQt.QtWidgets import QFileDialog              # noqa: PLC0415
+
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, tr("Salva la tavola in {0}").format(label), "",
+            "{0} (*.{1})".format(label, suffix))
+        if chosen and not chosen.lower().endswith("." + suffix):
+            chosen += "." + suffix
+        return chosen
+
+    def refresh(self) -> None:
+        layout = self.state.layout
+        ready = layout is not None
+        self.open_button.setEnabled(ready and self.state.iface is not None)
+        self.pdf_button.setEnabled(ready)
+        self.image_button.setEnabled(ready)
+        if not ready:
+            self.outcome.setText(tr("nessuna tavola composta"))
+            return
+        item = layout.itemById(carto_mod.ITEM_MAP)
+        scale = item.scale() if item is not None else 0.0
+        text = tr("Tavola '{0}' composta, scala 1:{1:,.0f}").format(
+            layout.name(), scale).replace(",", ".")
+        warnings = list(self.state.layout_spec.warnings)
+        if warnings:
+            text += " - " + "; ".join(warnings)
+        self.outcome.setText(text)
+
+
 class OutputsPanel(Panel):
     """Step 11: the plants layer, written out."""
 
@@ -2150,6 +2405,10 @@ class OutputsPanel(Panel):
         if self.state.composition is not None:
             lines.append("")
             lines.extend(self.state.composition.describe())
+        if self.state.layout is not None:
+            lines.append("")
+            lines.extend(carto_mod.describe(self.state.layout_spec,
+                                            self.state.layout))
         if self.state.anomalies:
             lines.append("")
             lines.append(tr("ANOMALIE"))
@@ -2182,6 +2441,7 @@ class ContextDock(QDockWidget):
         self.optimise_panel = OptimisePanel(state)
         self.verify_panel = VerifyPanel(state)
         self.edit_panel = EditPanel(state)
+        self.cartography_panel = CartographyPanel(state)
         self.outputs_panel = OutputsPanel(state)
 
         #: step key -> (page, tab index or None). Specie and Sesti share the
@@ -2198,6 +2458,7 @@ class ContextDock(QDockWidget):
             "optimise": (self.optimise_panel, None),
             "verify": (self.verify_panel, None),
             "edit": (self.edit_panel, None),
+            "cartography": (self.cartography_panel, None),
             "outputs": (self.outputs_panel, None),
         }
         for panel in (self.area_panel, self.terrain_panel,
@@ -2205,7 +2466,7 @@ class ContextDock(QDockWidget):
                       self.scheme_panel, self.orientation_panel,
                       self.generate_panel, self.optimise_panel,
                       self.verify_panel, self.edit_panel,
-                      self.outputs_panel):
+                      self.cartography_panel, self.outputs_panel):
             holder = QScrollArea()
             holder.setWidgetResizable(True)
             holder.setWidget(panel)

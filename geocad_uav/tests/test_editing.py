@@ -132,7 +132,8 @@ print("\n== E1: Editing e' uno step del flusso ==")
 labels = [workspace.workflow.list.item(i).text()
           for i in range(workspace.workflow.list.count())]
 print("        {0}".format(labels))
-check("gli step sono dodici", workspace.workflow.list.count(), 12)
+check("il flusso elenca ogni step", workspace.workflow.list.count(),
+      len(wf.STEPS))
 check_true("...e uno si chiama Editing", "11. Editing" in labels)
 workspace.workflow.list.setCurrentRow(labels.index("11. Editing"))
 check_true("lo step apre il pannello di editing",
