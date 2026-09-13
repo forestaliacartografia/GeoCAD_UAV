@@ -17,6 +17,8 @@ that later drops a plant cannot disagree.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -107,6 +109,7 @@ class TerrainAnalysis:
         self.model = model
         self.warnings = list(warnings)
         self._grids = None
+        self._raster_layer = None
 
     # -- construction ------------------------------------------------------
 
@@ -366,6 +369,60 @@ class TerrainAnalysis:
                                cell_area_m2=suitability.cell_area_m2,
                                criteria=suitability.criteria,
                                warnings=list(suitability.warnings))
+
+    # -- the DEM, as a layer -----------------------------------------------
+
+    def raster_layer(self, path: Optional[str] = None, name: str = "DEM"):
+        """The working grid as a ``QgsRasterLayer``, written once to disk.
+
+        The contour algorithm is GDAL's and wants a raster, and the raster it
+        should read is *this* one: the window already warped into the working
+        CRS, with the same no-data cells the rest of the package sees. Handing
+        it the original source file instead would contour a grid in another
+        CRS and another resolution, and the contours would not line up with
+        the slope the plants are spaced by.
+
+        Written to a temporary GeoTIFF on first use and kept, so contouring
+        twice at two intervals does not warp and write twice.
+        """
+        from qgis.core import (QgsCoordinateReferenceSystem,      # noqa: PLC0415
+                               QgsRasterLayer)
+
+        from ...io import layer_factory as lf                     # noqa: PLC0415
+
+        if self._raster_layer is not None and path is None:
+            try:
+                if self._raster_layer.isValid():
+                    return self._raster_layer
+            except RuntimeError:
+                pass                        # deleted under us; write another
+        target = path
+        if target is None:
+            handle, target = tempfile.mkstemp(prefix="geocad_dem_",
+                                              suffix=".tif")
+            os.close(handle)
+        crs = QgsCoordinateReferenceSystem(self.model.crs_authid)
+        lf.write_geotiff(target, self.model.z, self.model.gt,
+                         crs.toWkt() if crs.isValid() else "")
+        layer = QgsRasterLayer(target, name, "gdal")
+        if not layer.isValid():
+            raise RasterError(
+                "the DEM window could not be reopened from {0}".format(target),
+                user_message="Impossibile rileggere il DEM di lavoro.")
+        if path is None:
+            self._raster_layer = layer
+        return layer
+
+    def release(self) -> None:
+        """Let go of the raster written for GDAL, while QGIS is still up.
+
+        That layer was never added to the project, so nothing else owns it.
+        Left to the interpreter it is collected when the module globals go,
+        which on shutdown is *after* QGIS has torn itself down: a
+        use-after-free that takes the process with it and prints nothing.
+        Called from the plugin's unload, where QGIS is still alive.
+        """
+        self._raster_layer = None
 
     # -- readout -----------------------------------------------------------
 

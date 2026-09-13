@@ -67,17 +67,29 @@ STEP_MODE_LABELS = {
 PATTERN_IRREGULAR = "irregular"
 PATTERN_CUSTOM = "custom"
 
+#: Not a lattice at all: the rows are the contour lines of the DEM, and the
+#: plants are spaced along them. It lives in this list because it is what the
+#: operator chooses in the same place they choose a quincunx, but what sets
+#: the distance *between* rows is the contour interval and the slope, not
+#: :attr:`SlopeSpacing.row_distance_m`. Everything that asks this module for
+#: an a-priori density has to say so -- see ``curves.plant_along_contours``,
+#: which is what actually generates it.
+PATTERN_CONTOUR = "contour"
+
 #: Which core pattern each added scheme is a displacement of.
 BASE_PATTERN = {
     PATTERN_IRREGULAR: grid_mod.PATTERN_RECT,
     PATTERN_CUSTOM: grid_mod.PATTERN_RECT,
+    PATTERN_CONTOUR: grid_mod.PATTERN_ROWS,
 }
 
-ALL_PATTERNS = grid_mod.ALL_PATTERNS + (PATTERN_IRREGULAR, PATTERN_CUSTOM)
+ALL_PATTERNS = grid_mod.ALL_PATTERNS + (PATTERN_IRREGULAR, PATTERN_CUSTOM,
+                                        PATTERN_CONTOUR)
 
 PATTERN_LABELS = dict(grid_mod.PATTERN_LABELS)
 PATTERN_LABELS[PATTERN_IRREGULAR] = "Irregolare (naturaliforme)"
 PATTERN_LABELS[PATTERN_CUSTOM] = "Personalizzato"
+PATTERN_LABELS[PATTERN_CONTOUR] = "Lungo le curve di livello"
 
 #: A jitter larger than this fraction of the step could put two plants on top
 #: of each other, so an irregular scheme is clamped to it. Half the step is
@@ -401,6 +413,16 @@ def generate(usable_geometry, spec: SlopeSpacing, terrain=None,
     """
     from qgis.core import QgsGeometry, QgsPoint                 # noqa: PLC0415
 
+    if spec.pattern == PATTERN_CONTOUR:
+        # It would "work": the base pattern is a row lattice and straight
+        # rows would come out. They would not be contours, and nothing
+        # downstream could tell the difference -- so it is refused here
+        # rather than answered wrongly.
+        raise InvalidInputError(
+            "contour planting does not come from the lattice generator",
+            user_message="Le file su curve di livello si generano dalle "
+                         "curve estratte dal DEM, non da un reticolo.",
+            hint="Usa curves.plant_along_contours.")
     if usable_geometry is None or usable_geometry.isEmpty():
         raise EmptyAoiError(
             "planting scheme on an empty area",

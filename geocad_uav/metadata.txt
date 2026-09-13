@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.17.0
+version=1.18.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,34 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.17.0
+changelog=1.18.0
+    - Impianto su curve di livello, dal pannello alla mappa. Il modulo
+      calcolava le file a quota costante da M04 e nessun operatore
+      poteva arrivarci: nell'interfaccia non esisteva la parola curva.
+    - Il pannello Terreno estrae le curve (gdal:contour sulla finestra
+      DEM gia' riproiettata nel sistema del progetto), le taglia sulla
+      superficie utile e le disegna come layer, con quota, sviluppo e
+      numero di piante per ciascuna.
+    - "Lungo le curve di livello" e' uno dei sesti, scelto dove si
+      scelgono gli altri. La generazione pianta lungo le linee con la
+      correzione di pendenza direzionale, che su una curva e' piccola
+      e vera.
+    - Le piante attese e la densita' non vengono piu' da una formula di
+      reticolo quando il sesto e' su curve: vengono dallo sviluppo
+      delle curve estratte, e la relazione lo scrive.
+    - Il confronto scenari confronta passi sulle curve, generandoli, e
+      non reticoli che non verrebbero piantati.
+    - Un DEM gia' caricato nel progetto si puo' usare senza scaricarne
+      un altro: un DTM regionale e' il caso piu' comune sul campo e non
+      richiede la rete.
+    - Rifiuti espliciti invece di risposte sbagliate: il generatore a
+      reticolo rifiuta lo schema su curve (avrebbe prodotto file
+      dritte spacciandole per curve), e la generazione su curve rifiuta
+      di lavorare a zone dicendo perche'.
+    - Il DEM di lavoro viene rilasciato alla chiusura del plugin: era un
+      QgsRasterLayer che il progetto non adotta, e raccoglierlo dopo lo
+      spegnimento di QGIS fa cadere il processo senza messaggi.
+    1.17.0
     - Il progetto si vede sulla mappa. Area, superficie utile, aree
       escluse, zone, radure e piante diventano layer veri sulla tela,
       aggiornati a ogni modifica e rimossi tutti insieme quando il

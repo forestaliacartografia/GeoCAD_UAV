@@ -646,8 +646,9 @@ def write_mission_gpkg(mission: Mission, path: str,
 # Raster products
 # --------------------------------------------------------------------------
 
-def _write_geotiff(path: str, array: np.ndarray, geotransform, crs_wkt: str,
-                   nodata: float = -9999.0) -> str:
+def write_geotiff(path: str, array: np.ndarray, geotransform, crs_wkt: str,
+                  nodata: float = -9999.0) -> str:
+    """One float band, written where GDAL and QGIS can both read it back."""
     from osgeo import gdal                                      # noqa: PLC0415
 
     gdal.UseExceptions()
@@ -669,6 +670,11 @@ def _write_geotiff(path: str, array: np.ndarray, geotransform, crs_wkt: str,
     band.FlushCache()
     dataset = None
     return path
+
+
+#: The old private spelling, kept because it is called from this module in a
+#: dozen places and renaming call sites is not what this change is about.
+_write_geotiff = write_geotiff
 
 
 def build_coverage_rasters(mission: Mission, aoi_geom, path_coverage: str,
@@ -740,6 +746,6 @@ def build_coverage_rasters(mission: Mission, aoi_geom, path_coverage: str,
             if count and math.isfinite(best):
                 gsd_map[r, c] = best * 100.0        # cm/px
 
-    _write_geotiff(path_coverage, coverage, geotransform, crs_wkt, nodata=-1.0)
-    _write_geotiff(path_gsd, gsd_map, geotransform, crs_wkt, nodata=-9999.0)
+    write_geotiff(path_coverage, coverage, geotransform, crs_wkt, nodata=-1.0)
+    write_geotiff(path_gsd, gsd_map, geotransform, crs_wkt, nodata=-9999.0)
     return path_coverage, path_gsd

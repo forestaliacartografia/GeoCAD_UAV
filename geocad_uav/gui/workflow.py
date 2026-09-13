@@ -51,6 +51,7 @@ from ..core.errors import GeoCadError
 from ..forest.reforestation import area as area_mod
 from ..forest.reforestation import composition as composition_mod
 from ..forest.reforestation import constraints as constraints_mod
+from ..forest.reforestation import curves as curves_mod
 from ..forest.reforestation import density as density_mod
 from ..forest.reforestation import natural as natural_mod
 from ..forest.reforestation import orient as orient_mod
@@ -63,6 +64,10 @@ from ..io import cadastre as cadastre_mod
 from .map_layers import ProjectLayers
 
 M2_PER_HA = 10_000.0
+
+#: Grown around the project before a DEM window is read, so the slope at the
+#: very edge comes from real neighbours and not from the padding.
+DEM_MARGIN_M = 50.0
 
 #: The workflow, in order. ``key`` is what the state reports status against.
 STEPS = (
@@ -158,6 +163,12 @@ class ProjectState(QObject):
         self.area = None                        # ReforestationArea
         self.crs = None                         # QgsCoordinateReferenceSystem
         self.terrain = None                     # TerrainAnalysis
+        #: The contour lines extracted from the DEM and cut to the usable
+        #: surface. They are rows an operator can see before deciding to
+        #: plant along them, which is why they live on the project and not
+        #: inside the generator.
+        self.contours = []                      # [curves_mod.ContourRow]
+        self.contour_interval_m = curves_mod.DEFAULT_INTERVAL_M
         self.constraints = constraints_mod.ConstraintSet()
         self.catalog = species_mod.SpeciesCatalog.from_layer(
             species_mod.SpeciesCatalog.memory_layer())
@@ -260,6 +271,9 @@ class ProjectState(QObject):
         self.crs = crs
         self.cadastre = None
         self.result = None
+        # Contours are cut to the usable surface: on a new area they are
+        # lines across somewhere else.
+        self.contours = []
         # Zones belong to a surface: a new area is a new project, and zones
         # cut from the old one would be planting somewhere else.
         self.zones = zones_mod.ZoneSet()
@@ -283,6 +297,7 @@ class ProjectState(QObject):
         self.layers.draw_area(self.area)
         self.layers.draw_zones(self.zones)
         self.layers.draw_glades(self.glades)
+        self.layers.draw_contours(self.contours)
         self.layers.draw_parcels(self.cadastre)
         self.layers.refresh_canvas()
 
@@ -291,14 +306,64 @@ class ProjectState(QObject):
             return None
         return composition_mod.Mix(self.shares, seed=0)
 
+    @property
+    def along_contours(self) -> bool:
+        return self.spec.pattern == spacing_mod.PATTERN_CONTOUR
+
+    def contour_length_m(self) -> float:
+        return sum(row.length_m for row in self.contours)
+
+    def expected_plants(self) -> float:
+        """How many plants the scheme promises on this surface.
+
+        Along the contours the rows are not a lattice: what is known in
+        advance is the total development of the lines that were extracted,
+        so the count comes from that and not from a row distance nobody is
+        going to use.
+        """
+        if self.along_contours:
+            step = self.spec.plant_distance_m
+            if step <= 0.0 or not self.contours:
+                return 0.0
+            return self.contour_length_m() / step
+        return density_mod.plants_for_area(self.density_per_ha(),
+                                           self.usable_m2)
+
     def density_per_ha(self) -> float:
+        if self.along_contours:
+            if self.usable_m2 <= 0.0:
+                return 0.0
+            return self.expected_plants() / (self.usable_m2 / M2_PER_HA)
         return density_mod.density_from_spacing(
             self.spec.pattern, self.spec.plant_distance_m,
             self.spec.row_distance_m)
 
-    def expected_plants(self) -> float:
-        return density_mod.plants_for_area(self.density_per_ha(),
-                                           self.usable_m2)
+    # -- the contours ------------------------------------------------------
+
+    def extract_contours(self, interval_m: float, min_length_m: float = 0.0):
+        """Contour the working DEM and keep the lines inside the project.
+
+        ``gdal:contour`` over the same warped window the slope comes from,
+        then cut to the usable surface: what comes back are the rows that
+        will be planted, so an operator sees them before choosing to.
+        """
+        if self.terrain is None:
+            raise GeoCadError(
+                "no DEM to contour",
+                user_message=tr("Scarica prima il DEM dal pannello Terreno."))
+        geometry = self.usable_geometry()
+        if geometry is None:
+            raise GeoCadError(
+                "no area", user_message=tr("Definisci prima l'area."))
+        layer = curves_mod.extract_contours(self.terrain.raster_layer(),
+                                            interval_m=interval_m)
+        rows = curves_mod.contour_rows(layer, clip_geometry=geometry,
+                                       min_length_m=min_length_m)
+        self.contours = rows
+        self.contour_interval_m = float(interval_m)
+        self.draw()
+        self.refresh_status()
+        return rows
 
     # -- the cadastre ------------------------------------------------------
 
@@ -633,6 +698,13 @@ class TerrainPanel(Panel):
                                 adapter_id)
         form = QFormLayout()
         form.addRow(tr("Sorgente"), self.source)
+        # A regional DTM already loaded in QGIS is the commonest case in the
+        # field, and it does not need the internet. The download stays for
+        # the operator who has nothing.
+        self.local_dem = QComboBox()
+        self.use_local_button = QPushButton(tr("Usa DEM del progetto"))
+        form.addRow(tr("DEM caricato"), self.local_dem)
+        form.addRow(self.use_local_button)
         self.layout.addLayout(form)
 
         box = QGroupBox(tr("Morfologia"))
@@ -655,10 +727,32 @@ class TerrainPanel(Panel):
         self.slope_max.setSuffix(" deg")
         limit_form.addRow(tr("Pendenza massima"), self.slope_max)
         self.layout.addWidget(limits)
+
+        contours = QGroupBox(tr("Curve di livello"))
+        contour_form = QFormLayout(contours)
+        self.contour_interval = QDoubleSpinBox()
+        self.contour_interval.setRange(0.5, 500.0)
+        self.contour_interval.setValue(curves_mod.DEFAULT_INTERVAL_M)
+        self.contour_interval.setSuffix(" m")
+        self.contour_min_length = QDoubleSpinBox()
+        self.contour_min_length.setRange(0.0, 10_000.0)
+        self.contour_min_length.setValue(20.0)
+        self.contour_min_length.setSuffix(" m")
+        contour_form.addRow(tr("Equidistanza"), self.contour_interval)
+        contour_form.addRow(tr("Lunghezza minima"), self.contour_min_length)
+        self.contour_button = QPushButton(tr("Estrai curve di livello"))
+        contour_form.addRow(self.contour_button)
+        self.contour_label = QLabel(tr("nessuna curva estratta"))
+        self.contour_label.setWordWrap(True)
+        contour_form.addRow(tr("Esito"), self.contour_label)
+        self.layout.addWidget(contours)
         self.layout.addStretch(1)
 
         self.download_button.clicked.connect(self.download)
+        self.use_local_button.clicked.connect(self.use_local_dem)
+        self.contour_button.clicked.connect(self.extract_contours)
         state.changed.connect(self.refresh)
+        self.reload_rasters()
 
     def download(self, transport=None):
         geometry = self.state.usable_geometry()
@@ -680,7 +774,81 @@ class TerrainPanel(Panel):
         self.state.refresh_status()
         return analysis
 
+    def reload_rasters(self) -> int:
+        """List the raster layers the project already holds."""
+        # isinstance, not layer.type(): the enum that names a raster layer
+        # was QgsMapLayerType in 3.x and Qgis.LayerType from 3.30, and the
+        # class itself is the one thing both versions agree on.
+        from qgis.core import QgsRasterLayer                      # noqa: PLC0415
+
+        current = self.local_dem.currentData()
+        self.local_dem.clear()
+        for layer in QgsProject.instance().mapLayers().values():
+            if not isinstance(layer, QgsRasterLayer):
+                continue
+            self.local_dem.addItem(layer.name(), layer.id())
+        if current is not None:
+            index = self.local_dem.findData(current)
+            if index >= 0:
+                self.local_dem.setCurrentIndex(index)
+        return self.local_dem.count()
+
+    def use_local_dem(self, *_args):
+        """Read the chosen raster as the project's terrain."""
+        geometry = self.state.usable_geometry()
+        if geometry is None:
+            self.warn(GeoCadError(
+                "no area", user_message=tr("Definisci prima l'area.")))
+            return None
+        layer = QgsProject.instance().mapLayer(self.local_dem.currentData()
+                                               or "")
+        if layer is None:
+            self.warn(GeoCadError(
+                "no raster chosen",
+                user_message=tr("Nessun DEM caricato da usare. Carica un "
+                                "raster nel progetto, oppure scaricalo.")))
+            return None
+        try:
+            analysis = terrain_mod.TerrainAnalysis.from_layer(
+                layer, self.state.crs, geometry, margin_m=DEM_MARGIN_M)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return None
+        self.state.terrain = analysis
+        self.state.contours = []
+        self.state.draw()
+        self.state.refresh_status()
+        return analysis
+
+    def extract_contours(self, *_args) -> int:
+        """Contour the DEM and put the lines on the map."""
+        try:
+            rows = self.state.extract_contours(
+                self.contour_interval.value(),
+                min_length_m=self.contour_min_length.value())
+        except GeoCadError as exc:
+            self.warn(exc)
+            self.contour_label.setText(exc.formatted())
+            return 0
+        self.state.layers.zoom_to("contours")
+        return len(rows)
+
+    def describe_contours(self) -> str:
+        rows = self.state.contours
+        if not rows:
+            return tr("nessuna curva estratta")
+        heights = [row.elevation_m for row in rows
+                   if math.isfinite(row.elevation_m)]
+        text = tr("{0:,} curve, sviluppo {1:,.0f} m").format(
+            len(rows), self.state.contour_length_m())
+        if heights:
+            text += tr(", quote {0:.0f}-{1:.0f} m").format(min(heights),
+                                                           max(heights))
+        return text
+
     def refresh(self) -> None:
+        self.contour_label.setText(self.describe_contours())
+        self.reload_rasters()
         analysis = self.state.terrain
         if analysis is None:
             for label in (self.elevation_label, self.slope_label,
@@ -1194,6 +1362,8 @@ class GeneratePanel(Panel):
             self.warn(GeoCadError(
                 "no area", user_message=tr("Definisci prima l'area.")))
             return None
+        if self.state.along_contours:
+            return self.preview_contours(geometry)
         if len(self.state.zones):
             try:
                 result = zones_mod.plant(self.state.zones,
@@ -1222,6 +1392,59 @@ class GeneratePanel(Panel):
         self.state.verified = False
         self.state.anomalies = []
         self.state.refresh_status()
+        return result
+
+    def preview_contours(self, geometry):
+        """Plant along the contour lines the Terreno panel extracted.
+
+        The rows here are not generated: they are the lines of the DEM, cut
+        to the project, which the operator has already looked at on the map.
+        What this adds is the spacing along them, corrected by the slope
+        measured *along the line* -- a contour is almost level, so the
+        correction is small and true, where the maximum local slope would
+        shorten every step by the whole hillside angle.
+        """
+        from qgis.core import QgsPoint                           # noqa: PLC0415
+
+        state = self.state
+        if len(state.zones):
+            self.warn(GeoCadError(
+                "contour planting is not split by zone",
+                user_message=tr("Le file su curve di livello si generano "
+                                "sull'intera superficie utile: togli le zone "
+                                "oppure scegli un altro sesto.")))
+            return None
+        if not state.contours:
+            self.warn(GeoCadError(
+                "no contours extracted",
+                user_message=tr("Estrai prima le curve di livello dal "
+                                "pannello Terreno.")))
+            return None
+        engine = QgsGeometry.createGeometryEngine(geometry.constGet())
+        engine.prepareGeometry()
+
+        def inside(x, y):
+            return engine.intersects(QgsPoint(float(x), float(y)))
+
+        try:
+            plants = curves_mod.plant_along_contours(
+                state.contours, state.terrain, state.spec.plant_distance_m,
+                stagger=True, inside=inside)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return None
+        result = spacing_mod.SlopeGridResult(
+            plants=plants, spec=state.spec,
+            usable_area_m2=float(geometry.area()))
+        mix = state.mix()
+        state.composition = (composition_mod.assign(result.plants, mix)
+                             if mix is not None else None)
+        self.naturalise(result, geometry)
+        state.result = result
+        state.verified = False
+        state.anomalies = []
+        state.layers.draw_contours(state.contours)
+        state.refresh_status()
         return result
 
     def naturalise(self, result, geometry) -> None:
@@ -1322,6 +1545,7 @@ class OptimisePanel(Panel):
                 "no area", user_message=tr("Definisci prima l'area.")))
             return []
         base = self.state.spec
+        usable = float(geometry.area()) or 1.0
         scenarios = []
         for name, factor in (("A", 0.85), ("B", 1.0), ("C", 1.25)):
             spec = spacing_mod.SlopeSpacing(
@@ -1330,17 +1554,50 @@ class OptimisePanel(Panel):
                 row_azimuth_deg=base.row_azimuth_deg, pattern=base.pattern,
                 margin_m=base.margin_m, step_mode=base.step_mode)
             try:
-                result = spacing_mod.generate(geometry, spec,
-                                              terrain=self.state.terrain)
+                if self.state.along_contours:
+                    count = self.count_along_contours(spec.plant_distance_m)
+                    density = count / (usable / M2_PER_HA)
+                    length = self.state.contour_length_m() or 1.0
+                    layout = tr("{0:.2f} m sulle curve").format(
+                        spec.plant_distance_m)
+                    usage = count * spec.plant_distance_m / length
+                else:
+                    result = spacing_mod.generate(geometry, spec,
+                                                  terrain=self.state.terrain)
+                    count = result.count
+                    density = result.density_per_ha()
+                    layout = "{0:.2f} x {1:.2f} m".format(
+                        spec.plant_distance_m, spec.row_distance_m)
+                    usage = (count * spec.plant_distance_m
+                             * spec.row_distance_m / usable)
             except GeoCadError as exc:
                 self.warn(exc)
                 continue
-            scenarios.append({"name": name, "spec": spec,
-                              "plants": result.count,
-                              "density": result.density_per_ha()})
+            scenarios.append({"name": name, "spec": spec, "plants": count,
+                              "density": density, "sesto": layout,
+                              "utilizzo": usage})
         self.state.scenarios = scenarios
         self.state.refresh_status()
         return scenarios
+
+    def count_along_contours(self, step_m: float) -> int:
+        """How many plants this step would put on the contours, generated.
+
+        Generated, not estimated: the same function the plan uses, on copies
+        of the rows so that comparing scenarios does not overwrite the plants
+        the current plan put on them.
+        """
+        if not self.state.contours:
+            raise GeoCadError(
+                "no contours extracted",
+                user_message=tr("Estrai prima le curve di livello dal "
+                                "pannello Terreno."))
+        rows = [curves_mod.ContourRow(elevation_m=row.elevation_m,
+                                      geometry=row.geometry,
+                                      length_m=row.length_m)
+                for row in self.state.contours]
+        return len(curves_mod.plant_along_contours(
+            rows, self.state.terrain, step_m, stagger=True))
 
     def apply_selected(self) -> bool:
         row = self.table.currentRow()
@@ -1357,13 +1614,14 @@ class OptimisePanel(Panel):
         for row, scenario in enumerate(self.state.scenarios):
             spec = scenario["spec"]
             values = (scenario["name"],
-                      "{0:.2f} x {1:.2f} m".format(spec.plant_distance_m,
-                                                   spec.row_distance_m),
+                      scenario.get("sesto") or "{0:.2f} x {1:.2f} m".format(
+                          spec.plant_distance_m, spec.row_distance_m),
                       "{0:,.0f}/ha".format(scenario["density"]),
                       "{0:,}".format(scenario["plants"]),
-                      "{0:.1%}".format(scenario["plants"]
-                                       * spec.plant_distance_m
-                                       * spec.row_distance_m / usable))
+                      "{0:.1%}".format(scenario.get(
+                          "utilizzo",
+                          scenario["plants"] * spec.plant_distance_m
+                          * spec.row_distance_m / usable)))
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
 
@@ -1537,9 +1795,25 @@ class OutputsPanel(Panel):
             lines.append("")
         lines.extend(self.state.spec.describe())
         lines.append("")
-        lines.extend(density_mod.describe(
-            self.state.spec.pattern, self.state.spec.plant_distance_m,
-            self.state.spec.row_distance_m))
+        if self.state.along_contours:
+            # The lattice density formula does not apply: what sets the
+            # distance between rows here is the contour interval, so the
+            # report gives the interval and the measured result instead of a
+            # number derived from a row distance nobody used.
+            lines.extend(curves_mod.describe(self.state.contours,
+                                             self.state.contour_interval_m))
+            lines.append("  Densita' risultante: {0:,.0f} piante/ha".format(
+                self.state.result.density_per_ha()
+                if self.state.result is not None
+                else self.state.density_per_ha()))
+        else:
+            lines.extend(density_mod.describe(
+                self.state.spec.pattern, self.state.spec.plant_distance_m,
+                self.state.spec.row_distance_m))
+            if self.state.contours:
+                lines.append("")
+                lines.extend(curves_mod.describe(
+                    self.state.contours, self.state.contour_interval_m))
         if len(self.state.zones):
             lines.append("")
             lines.extend(self.state.zones.describe())
@@ -1717,6 +1991,11 @@ class Workspace(QObject):
 
     def unmount(self) -> None:
         self.state.layers.remove_all()
+        if self.state.terrain is not None:
+            # A QgsRasterLayer the project never adopted: released here,
+            # while QGIS is still standing.
+            self.state.terrain.release()
+        self.state.contours = []
         self.status.remove()
         if self.iface is None:
             return

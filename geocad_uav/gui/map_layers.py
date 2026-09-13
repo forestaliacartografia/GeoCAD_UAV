@@ -20,6 +20,7 @@ Nothing here computes anything. It asks the model for geometry and draws it.
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from qgis.core import (QgsCoordinateReferenceSystem, QgsFeature, QgsField,
@@ -38,6 +39,7 @@ LAYER_SPEC = (
     ("glades", "Radure", "Polygon", "#8d6e63", 0.25, 0.4),
     ("zones", "Zone", "Polygon", "#6a1b9a", 0.12, 0.6),
     ("parcels", "Particelle catastali", "Polygon", "#1565c0", 0.10, 0.6),
+    ("contours", "Curve di livello", "LineString", "#795548", 1.0, 0.26),
     ("excluded", "Aree escluse", "Polygon", "#c62828", 0.30, 0.4),
     ("usable", "Superficie utile", "Polygon", "#2e7d32", 0.18, 0.6),
     ("area", "Area di progetto", "Polygon", "#37474f", 0.05, 0.9),
@@ -59,9 +61,20 @@ LAYER_FIELDS = {
               ("sesto", "string"), ("densita", "double")),
     "glades": (("radura", "string"), ("raggio_m", "double"),
                ("superficie_ha", "double")),
+    "contours": (("quota_m", "double"), ("sviluppo_m", "double"),
+                 ("piante", "int")),
 }
 
 M2_PER_HA = 10_000.0
+
+
+def _finite(value):
+    """NULL rather than NaN: a contour with no elevation says so as a gap."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, 2) if math.isfinite(number) else None
 
 
 def _symbol_for(geometry_type: str, colour: str, opacity: float,
@@ -256,6 +269,17 @@ class ProjectLayers:
                                                    spec.row_distance_m)),
                 "densita": round(zone.density_per_ha(), 1)}))
         return self.draw("zones", rows)
+
+    def draw_contours(self, rows) -> int:
+        """The contour lines the project actually uses, with their heights."""
+        if not rows:
+            self.clear("contours")
+            return 0
+        return self.draw("contours", [
+            (row.geometry, {"quota_m": _finite(row.elevation_m),
+                            "sviluppo_m": round(row.length_m, 2),
+                            "piante": len(row.plants)})
+            for row in rows])
 
     def draw_glades(self, glades) -> int:
         if not glades:

@@ -388,14 +388,16 @@ check("con azimut 90 le file corrono davvero da Ovest a Est",
 # T2 - every pattern, including the two this module adds
 # --------------------------------------------------------------------------
 print("\n== T2: tutti gli schemi, compresi irregolare e personalizzato ==")
-check("gli schemi sono i cinque del motore piu' due",
-      len(sp.ALL_PATTERNS), len(grid_mod.ALL_PATTERNS) + 2)
+check("gli schemi sono i cinque del motore piu' tre",
+      len(sp.ALL_PATTERNS), len(grid_mod.ALL_PATTERNS) + 3)
 check_true("...e i cinque del motore ci sono tutti",
            set(grid_mod.ALL_PATTERNS) <= set(sp.ALL_PATTERNS))
 check_true("ognuno ha un'etichetta in italiano",
            all(sp.PATTERN_LABELS.get(key) for key in sp.ALL_PATTERNS))
 
-for pattern in sp.ALL_PATTERNS:
+LATTICE_PATTERNS = tuple(p for p in sp.ALL_PATTERNS
+                         if p != sp.PATTERN_CONTOUR)
+for pattern in LATTICE_PATTERNS:
     extra = {}
     if pattern == sp.PATTERN_IRREGULAR:
         extra = {"jitter_m": 0.8, "seed": 7}
@@ -413,6 +415,19 @@ for pattern in sp.ALL_PATTERNS:
                all(p.z is not None for p in out.plants[:80]))
 
 print("\n-- l'esagonale stringe le file, come da motore --")
+# Generating the contour scheme here would produce straight rows and call
+# them contours, which nothing downstream could catch: the lattice generator
+# refuses instead, and points at the module that does it properly.
+contour_spec = sp.SlopeSpacing(plant_distance_m=6.0, row_distance_m=6.0,
+                               pattern=sp.PATTERN_CONTOUR)
+try:
+    sp.generate(AOI, contour_spec, terrain=TERRAIN)
+    check_true("il reticolo rifiuta lo schema su curve", False)
+except InvalidInputError as exc:
+    print("        rifiuto: {0}".format(exc.user_message))
+    check_true("il reticolo rifiuta lo schema su curve",
+               "curve di livello" in exc.user_message)
+
 hexspec = sp.SlopeSpacing(plant_distance_m=6.0, row_distance_m=6.0,
                           row_azimuth_deg=90.0, pattern=grid_mod.PATTERN_HEX)
 check("l'interfila esagonale e' dx * sqrt(3)/2",
