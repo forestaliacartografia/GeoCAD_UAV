@@ -48,7 +48,8 @@ QGIS = ["test_survey.py", "test_cad.py", "test_mission.py",
         "test_project_file.py",
         "test_acceptance.py",
         "test_dashboard.py",
-        "test_cad_cadastre.py"]
+        "test_cad_cadastre.py",
+        "test_cad_panel.py"]
 
 
 def has_qgis() -> bool:
@@ -73,7 +74,26 @@ def run(name: str) -> tuple:
     if not ok:
         tail = [ln for ln in output.splitlines() if "FAIL" in ln or "Error" in ln]
         detail = " | ".join(tail[-4:]) or "exit {0}".format(proc.returncode)
-    return name, ok, elapsed, detail
+    return name, ok, elapsed, detail, tally(output)
+
+
+def tally(output: str) -> tuple:
+    """``(passed, failed, skipped)`` individual checks in one suite's output.
+
+    Every suite prints its checks in the same three shapes, so counting them
+    here costs nothing and turns "35 suites passed" into a number that says
+    how much was actually verified.
+    """
+    passed = failed = skipped = 0
+    for line in output.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("[ok  ]"):
+            passed += 1
+        elif stripped.startswith("[FAIL]"):
+            failed += 1
+        elif stripped.startswith("[skip]"):
+            skipped += 1
+    return passed, failed, skipped
 
 
 def main() -> int:
@@ -109,16 +129,20 @@ def main() -> int:
 
     failures = []
     total = 0.0
+    checks = [0, 0, 0]
     for name in suites:
-        label, ok, elapsed, detail = run(name)
+        label, ok, elapsed, detail, counted = run(name)
         total += elapsed
-        print("  [{0}] {1:<28} {2:6.2f}s  {3}".format(
-            "PASS" if ok else "FAIL", label, elapsed, detail))
+        for index, value in enumerate(counted):
+            checks[index] += value
+        print("  [{0}] {1:<28} {2:6.2f}s  {3:>5} ok  {4}".format(
+            "PASS" if ok else "FAIL", label, elapsed, counted[0], detail))
         if not ok:
             failures.append(label)
 
     print("-" * 68)
     print("{0} suite(s) in {1:.1f}s".format(len(suites), total))
+    print("verifiche ok={0} fail={1} skip={2}".format(*checks))
     if failures:
         print("FAILED: {0}".format(", ".join(failures)))
         return 1

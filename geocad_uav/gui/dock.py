@@ -33,6 +33,21 @@ def tr(text):
     return QCoreApplication.translate("GeoCadUav", text)
 
 
+M2_PER_HA = 10_000.0
+
+#: The cadastral readout, in the order a deed reads: where, then which
+#: sheet, then which parcel, then how much ground the shape covers.
+CADASTRE_ROWS = (
+    ("comune", "Comune"),
+    ("foglio", "Foglio"),
+    ("particella", "Particella"),
+    ("area", "Superficie"),
+    ("perimetro", "Perimetro"),
+)
+
+DASH = "--"
+
+
 class GeoCadDock(QDockWidget):
     """Parameter panel with a live derived-values preview."""
 
@@ -42,20 +57,9 @@ class GeoCadDock(QDockWidget):
         self.iface = iface
         self._connections = []
         self._cad_tool = None
-        for panel in (getattr(self, "forest_panel", None),
-                      getattr(self, "uav_panel", None),
-                      getattr(self, "export_panel", None),
-                      getattr(self, "player", None)):
-            if panel is not None:
-                try:
-                    panel.teardown()
-                except Exception:                               # noqa: BLE001
-                    pass
         self.setWidget(self._build())
         self._load_settings()
         self._wire()
-
-    # -- construction -----------------------------------------------------
 
     # -- construction -----------------------------------------------------
 
@@ -140,7 +144,35 @@ class GeoCadDock(QDockWidget):
         cad_form.addRow(self.cad_apply)
         cad_form.addRow(self.cad_hint)
 
-        self.tabs.addTab(self._scroll_page([self.cad_toolbar, self.cad_box]),
+        # ------------------------------------------------------- CATASTO
+        # Not a tab of its own and not behind a button: the parcel a shape
+        # falls on is part of what the operator just drew, so it is read
+        # where the drawing happens. The lookup runs on its own task; this
+        # box shows what the attribute table already holds and fills the
+        # three cadastral rows in behind it when the service answers.
+        self.cadastre_box = QGroupBox(tr("Dati catastali"))
+        cadastre_form = QFormLayout(self.cadastre_box)
+        self.cadastre_labels = {}
+        for key, label in CADASTRE_ROWS:
+            value = QLabel(DASH)
+            value.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+            cadastre_form.addRow(tr(label), value)
+            self.cadastre_labels[key] = value
+        self.cadastre_status = QLabel(tr("Nessuna geometria disegnata."))
+        self.cadastre_status.setWordWrap(True)
+        cadastre_form.addRow(self.cadastre_status)
+        self.set_cadastre_enabled = QCheckBox(
+            tr("Interroga il catasto a ogni geometria"))
+        self.set_cadastre_enabled.setToolTip(tr(
+            "Interrogazione WFS dell'Agenzia delle Entrate, su un task in "
+            "background. Spegnila quando lavori senza rete o fuori dal "
+            "territorio coperto: geometria, area e perimetro vengono "
+            "scritti comunque."))
+        cadastre_form.addRow(self.set_cadastre_enabled)
+
+        self.tabs.addTab(self._scroll_page([self.cad_toolbar, self.cad_box,
+                                            self.cadastre_box]),
                          tr("CAD"))
 
         # ------------------------------------------------------------ FORESTA
@@ -296,6 +328,7 @@ class GeoCadDock(QDockWidget):
                 (self.set_snap_tolerance, "valueChanged", self._save_settings),
                 (self.set_snap_vertex, "toggled", self._save_settings),
                 (self.set_snap_segment, "toggled", self._save_settings),
+                (self.set_cadastre_enabled, "toggled", self._save_settings),
                 (self.set_export_format, "currentIndexChanged", self._save_settings),
                 (self.settings_reset, "clicked", self._reset_settings),
                 (self.tabs, "currentChanged", self._save_settings)):
@@ -330,6 +363,8 @@ class GeoCadDock(QDockWidget):
             types = app_settings.snap_types()
             self.set_snap_vertex.setChecked("vertex" in types)
             self.set_snap_segment.setChecked("segment" in types)
+            self.set_cadastre_enabled.setChecked(
+                app_settings.get("cadastre/enabled"))
             self._select_data(self.set_export_format,
                               app_settings.get("export/format"))
             self.uav_panel.load_settings()
@@ -355,6 +390,8 @@ class GeoCadDock(QDockWidget):
         if self.set_snap_segment.isChecked():
             types.append("segment")
         app_settings.set("snap/types", ",".join(types))
+        app_settings.set("cadastre/enabled",
+                         self.set_cadastre_enabled.isChecked())
         app_settings.set("export/format", self.set_export_format.currentData())
         self.uav_panel.save_settings()
         app_settings.set("ui/last_tab", self.tabs.currentIndex())
@@ -415,6 +452,8 @@ class GeoCadDock(QDockWidget):
             except (TypeError, RuntimeError):
                 pass
         self._connections = []
+        if self._cad_tool is not None:
+            self._cad_tool.commit_observer = None
         self._cad_tool = None
         for panel in (getattr(self, "forest_panel", None),
                       getattr(self, "uav_panel", None),
@@ -436,6 +475,13 @@ class GeoCadDock(QDockWidget):
         therefore needs no changes in this file.
         """
         self._cad_tool = tool
+        # The one line that makes the readout live: the tool publishes each
+        # commit, and this panel is what listens.
+        tool.commit_observer = self.show_commit
+        if getattr(tool, "last_commit", None) is not None:
+            self.show_commit(tool.last_commit)
+        else:
+            self.clear_commit()
         slots = list(tool.session.slot_list)
         self.cad_box.setTitle(tr("CAD - {0}").format(tool.session.title))
         for index, (label, spin) in enumerate(self.cad_rows):
@@ -480,6 +526,56 @@ class GeoCadDock(QDockWidget):
                 "Clicca l'origine sulla mappa, poi digita i valori (Invio) "
                 "oppure compilali qui e premi Applica. Esc annulla."))
 
+    # -- the cadastral readout ---------------------------------------------
+
+    def show_commit(self, report) -> None:
+        """Mirror one committed CAD shape and the parcel it sits on.
+
+        Called by the map tool: once when the feature lands, with the three
+        cadastral rows still empty and the lookup out, and once more when
+        the task answers. Everything shown is read off the report, which was
+        itself read off the layer -- the panel never recomputes an area, so
+        what it says and what the attribute table says cannot drift apart.
+        """
+        if report is None:
+            self.clear_commit()
+            return
+        self.cadastre_labels["area"].setText(
+            tr("{0:,.2f} m2 ({1:,.4f} ha)").format(
+                report.area_m2, report.area_m2 / M2_PER_HA))
+        self.cadastre_labels["perimetro"].setText(
+            tr("{0:,.2f} m").format(report.perimeter_m))
+        for key, value in (("comune", report.comune),
+                           ("foglio", report.foglio),
+                           ("particella", report.particella)):
+            self.cadastre_labels[key].setText(
+                value if value else (tr("interrogazione in corso...")
+                                     if report.pending else DASH))
+        if report.pending:
+            self.cadastre_status.setText(tr(
+                "Geometria scritta sul layer '{0}'. Il catasto risponde fra "
+                "qualche secondo.").format(report.layer_name))
+        elif report.has_parcel:
+            self.cadastre_status.setText(tr(
+                "{0}, comune di {1}.").format(report.parcel_label(),
+                                              report.comune))
+        elif report.warning:
+            self.cadastre_status.setText(report.warning)
+        elif not self.set_cadastre_enabled.isChecked():
+            self.cadastre_status.setText(tr(
+                "Interrogazione catastale disattivata: area e perimetro sono "
+                "comunque sul layer."))
+        else:
+            self.cadastre_status.setText(tr(
+                "Nessuna particella per questo punto: fuori copertura, "
+                "oppure servizio non raggiungibile."))
+
+    def clear_commit(self) -> None:
+        """Back to dashes: no shape of this tool's is on screen any more."""
+        for label in self.cadastre_labels.values():
+            label.setText(DASH)
+        self.cadastre_status.setText(tr("Nessuna geometria disegnata."))
+
     def polyline_close_requested(self) -> bool:
         """Whether the operator asked the polyline to close its ring."""
         return bool(self.cad_close_ring.isChecked())
@@ -504,6 +600,8 @@ class GeoCadDock(QDockWidget):
             session.pivot_mode = self.cad_pivot.currentData()
 
     def unbind_cad_tool(self):
+        if self._cad_tool is not None:
+            self._cad_tool.commit_observer = None
         self._cad_tool = None
         self.cad_close_ring.setVisible(False)
         self.cad_pivot.setVisible(False)

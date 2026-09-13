@@ -30,6 +30,7 @@ Four rules paid for in blood during v1.0.0 and enforced here:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -414,6 +415,90 @@ def rubber_band_geometry_type(is_polygon: bool):
     return Qgis.GeometryType.Polygon if is_polygon else Qgis.GeometryType.Line
 
 
+@dataclass
+class CommitReport:
+    """What one committed CAD shape looks like to a panel.
+
+    Read back off the layer rather than assembled from the values the tool
+    just handed to ``addFeature``: the attribute table is what the operator
+    sees, so it is the only honest source for a readout that claims to
+    mirror it. A report is produced twice per shape -- once the instant the
+    feature is on the layer, with ``pending`` set while the cadastral task
+    is still out, and once more when that task answers.
+    """
+
+    layer_name: str = ""
+    feature_id: object = None
+    cad_id: object = None
+    area_m2: float = 0.0
+    perimeter_m: float = 0.0
+    comune: str = ""
+    foglio: str = ""
+    particella: str = ""
+    pending: bool = False
+    warning: str = ""
+
+    @property
+    def has_parcel(self) -> bool:
+        """True only for a real parcel: "N/D" is an answer, not a parcel."""
+        return bool(self.particella) and self.particella != lf.NOT_AVAILABLE
+
+    def parcel_label(self) -> str:
+        """Foglio and particella on one line, the way a deed writes them."""
+        if not self.has_parcel:
+            return ""
+        return "Foglio {0}, Particella {1}".format(self.foglio or lf.NOT_AVAILABLE,
+                                                   self.particella)
+
+
+def _text(value) -> str:
+    """A field value as a string, with NULL and None both reading empty."""
+    if value is None:
+        return ""
+    try:
+        from qgis.core import NULL                              # noqa: PLC0415
+
+        if value == NULL:
+            return ""
+    except Exception:                                           # noqa: BLE001
+        pass
+    return str(value)
+
+
+def commit_report(layer, cad_id, pending: bool = False,
+                  warning: str = "") -> CommitReport:
+    """Read one CAD feature back and describe it.
+
+    Takes the feature id from ``cad_id`` rather than from the QgsFeature the
+    commit built: inside an edit buffer that feature carries a provisional
+    negative id, and the value the table shows is the one that matters.
+    """
+    report = CommitReport(cad_id=cad_id, pending=bool(pending),
+                          warning=warning or "")
+    if layer is None or cad_id is None:
+        return report
+    try:
+        report.layer_name = layer.name()
+        feature_id = lf.feature_id_by_cad_id(layer, cad_id)
+        if feature_id is None:
+            return report
+        report.feature_id = feature_id
+        feature = layer.getFeature(feature_id)
+        fields = layer.fields()
+        if fields.indexOf(lf.AREA_FIELD) >= 0:
+            report.area_m2 = float(feature[lf.AREA_FIELD] or 0.0)
+        if fields.indexOf(lf.PERIMETER_FIELD) >= 0:
+            report.perimeter_m = float(feature[lf.PERIMETER_FIELD] or 0.0)
+        for name, attr in ((lf.CAT_COMUNE_FIELD, "comune"),
+                           (lf.CAT_FOGLIO_FIELD, "foglio"),
+                           (lf.CAT_PARTICELLA_FIELD, "particella")):
+            if fields.indexOf(name) >= 0:
+                setattr(report, attr, _text(feature[name]))
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+        return report
+    return report
+
+
 class BaseCadTool:
     """Mixin holding everything a CAD map tool does besides being a QgsMapTool.
 
@@ -454,6 +539,16 @@ class BaseCadTool:
         #: a background task: by the time it answers the commit is long over.
         self.cadastre_task = None
         self.cadastre_warning = ""
+        #: Transport the lookup uses. None means the real service; a test
+        #: hands in a recorded one so the whole commit path can be driven
+        #: without a network, and without pretending there was one.
+        self.cadastre_transport = None
+        #: Last shape this tool wrote, as the attribute table holds it.
+        self.last_commit = None
+        #: Optional ``callable(CommitReport)`` a panel installs to follow the
+        #: commits. Called on the main thread, twice per shape: once when the
+        #: feature lands, once when the cadastral task answers.
+        self.commit_observer = None
 
     # -- CRS ---------------------------------------------------------------
 
@@ -531,8 +626,29 @@ class BaseCadTool:
                                  "layer '{0}'.".format(layer.name()))
         layer.updateExtents()
         self.request_cadastre(layer, geometry, attributes)
+        # Announced after the lookup is started, so the report can say
+        # whether an answer is still on its way.
+        self.announce(layer, attributes.get(lf.CAD_ID_FIELD),
+                      pending=self.cadastre_task is not None)
         self.session.reset()
         return feature
+
+    def announce(self, layer, cad_id, pending: bool = False) -> CommitReport:
+        """Publish what the table now holds for one shape.
+
+        Always records it on the tool; calls the observer only when a panel
+        installed one. The observer is GUI code and must never be able to
+        break a commit, so it is called inside a guard.
+        """
+        report = commit_report(layer, cad_id, pending=pending,
+                               warning=self.cadastre_warning)
+        self.last_commit = report
+        if self.commit_observer is not None:
+            try:
+                self.commit_observer(report)
+            except Exception:                                   # noqa: BLE001
+                pass
+        return report
 
     # -- cadastral parcel --------------------------------------------------
 
@@ -586,11 +702,13 @@ class BaseCadTool:
                 return                  # the operator deleted it meanwhile
             if parcel is None or parcel.is_empty:
                 lf.write_cadastre_unavailable(layer, feature_id)
-                return
-            lf.write_cadastre(layer, feature_id, parcel)
+            else:
+                lf.write_cadastre(layer, feature_id, parcel)
+            self.announce(layer, cad_id, pending=False)
 
         try:
-            self.cadastre_task = cad_svc.lookup_task(x, y, crs, _apply)
+            self.cadastre_task = cad_svc.lookup_task(
+                x, y, crs, _apply, transport=self.cadastre_transport)
         except Exception as exc:                                # noqa: BLE001
             self.cadastre_warning = str(exc)
             self.cadastre_task = None

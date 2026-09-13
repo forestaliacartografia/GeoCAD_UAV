@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.29.0
+version=1.30.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,19 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.30.0
+    - La particella si legge dove si disegna. La scheda CAD porta un
+      riquadro "Dati catastali" che si compila da solo: superficie e
+      perimetro nell'istante in cui la figura viene posata, Comune,
+      Foglio e Particella appena il task catastale risponde. Nessun
+      pulsante da premere, nessuna scheda da cambiare.
+    - Quando il servizio non risponde o il terreno e' fuori copertura il
+      riquadro dice "N/D" e ne spiega il motivo; la figura, l'area e il
+      perimetro restano scritti.
+    - L'interruttore dell'interrogazione catastale e' finalmente sul
+      pannello: prima esisteva solo come impostazione, senza un comando
+      che potesse spegnerla.
 
 changelog=1.29.0
     - Disegnando un Quadrato, un Rettangolo o un Poligono col CAD, la
