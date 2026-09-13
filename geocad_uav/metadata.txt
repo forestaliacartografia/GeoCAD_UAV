@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.26.0
+version=1.27.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,23 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.26.0
+changelog=1.27.0
+    - Il catalogo delle specie si apre, si corregge e si salva dal
+      pannello Specie. Il plugin non porta con se' nessuna lista di
+      specie -- sarebbe vecchia in una stagione e sbagliata in una valle
+      -- ma finora non c'era nemmeno il modo di caricarne una: una specie
+      digitata era un codice e un nome, senza distanza minima propria,
+      e il passaggio naturaliforme che rispetta la distanza di ciascuna
+      specie non aveva niente da rispettare.
+    - La tabella delle specie mostra il nome di catalogo e la distanza
+      minima di ognuna, e quella distanza si corregge digitandola: va nel
+      catalogo, che si risalva in GeoPackage per il progetto successivo.
+    - Verificato sul percorso intero: catalogo con leccio a 7 m e pino a
+      3 m, sesto di 4 m, dopo il diradamento restano 441 lecci a non meno
+      di 8,00 m l'uno dall'altro, e il pino -- che a 4 m da un leccio gli
+      sta in mezzo -- viene dichiarato come specie che non trova piu'
+      posto, invece di sparire in silenzio da meta' della mescolanza.
+    1.26.0
     - Il limite di pendenza smette di essere una percentuale e diventa
       superficie tolta. Fino a ieri l'operatore impostava "pendenza
       massima 35 deg", leggeva "82% idonea" e l'impianto veniva comunque

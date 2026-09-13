@@ -14,6 +14,7 @@ NEEDS QGIS. Run with:
         geocad_uav\\tests\\test_natural.py
 """
 
+import gc
 import math
 import os
 import sys
@@ -381,8 +382,121 @@ check_true("la relazione riporta le impostazioni naturaliformi",
            "DISTRIBUZIONE NATURALIFORME" in report)
 check_true("...e l'esito", "ESITO NATURALIFORME" in report)
 
+# --------------------------------------------------------------------------
+# N7 - the catalogue, which is where a species' own distance comes from
+# --------------------------------------------------------------------------
+print("\n== N7: il catalogo delle specie, dal pannello ==")
+
+
+def _count_by_species(plants) -> dict:
+    counts = {}
+    for record in plants:
+        key = cp.species_of(record)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+import tempfile                                                  # noqa: E402
+
+CATALOG_DIR = tempfile.mkdtemp(prefix="geocad_cat_")
+catalog_path = os.path.join(CATALOG_DIR, "specie.gpkg")
+spx.SpeciesCatalog.create(catalog_path, [
+    spx.Species(key="leccio", name="Leccio", min_distance_m=7.0),
+    spx.Species(key="pino", name="Pino", min_distance_m=3.0),
+], overwrite=True)
+print("        catalogo scritto: {0:,} byte".format(
+    os.path.getsize(catalog_path)))
+
+check_true("prima di aprirlo il catalogo e' vuoto",
+           scheme.state.catalog.count == 0
+           or "vuoto" in scheme.catalog_label.text())
+opened = scheme.open_catalog(path=catalog_path)
+print("        {0}".format(scheme.catalog_label.text()))
+check_true("il pannello apre il catalogo", opened is not None)
+check("...e il progetto ne ha due specie", state.catalog.count, 2)
+check_true("...che compaiono nel menu a tendina",
+           scheme.species_key.findData("leccio") >= 0
+           and scheme.species_key.findData("pino") >= 0)
+check_true("...e il pannello dice quante hanno una distanza propria",
+           "2 con una distanza minima" in scheme.catalog_label.text())
+check("la distanza del leccio e' quella scritta a catalogo",
+      state.catalog.get("leccio").min_distance_m, 7.0)
+
+state.shares = []
+for key, percent in (("leccio", 50.0), ("pino", 50.0)):
+    scheme.species_key.setCurrentIndex(scheme.species_key.findData(key))
+    scheme.species_percent.setValue(percent)
+    scheme.on_add_species()
+scheme.refresh()
+check("la tabella ha una riga per specie", scheme.species_table.rowCount(), 2)
+check_true("...e mostra il nome del catalogo, non il codice",
+           scheme.species_table.item(0, 0).text() == "Leccio")
+check_true("...e la distanza minima della specie",
+           scheme.species_table.item(0, 2).text() == "7")
+
+print("\n-- la distanza si corregge in tabella --")
+scheme.species_table.item(0, 2).setText("9.5")
+check("il catalogo ha preso il valore digitato",
+      state.catalog.get("leccio").min_distance_m, 9.5, 1e-9)
+scheme.species_table.item(0, 2).setText("7")
+check("...e si puo' rimettere com'era",
+      state.catalog.get("leccio").min_distance_m, 7.0, 1e-9)
+scheme.species_table.item(0, 2).setText("non un numero")
+check("una sciocchezza digitata non tocca il catalogo",
+      state.catalog.get("leccio").min_distance_m, 7.0, 1e-9)
+
+print("\n-- e il naturaliforme la usa davvero --")
+state.set_area(AREA, CRS, "Lotto catalogo")
+scheme.plant_distance.setValue(4.0)
+scheme.row_distance.setValue(4.0)
+scheme.apply_scheme()
+natural.glade_count.setValue(0)
+natural.irregularity.setValue(0.0)
+natural.min_distance.setValue(0.0)
+natural.apply_settings()
+plan = workspace.context.generate_panel.preview()
+before_species = _count_by_species(plan.plants)
+print("        prima: {0}".format(before_species))
+outcome = nt.naturalise(plan.plants, nt.NaturalSettings(min_distance_m=0.5),
+                         4.0, catalog=state.catalog)
+after_species = _count_by_species(outcome.plants)
+print("        dopo:  {0}".format(after_species))
+check_true("il leccio, che chiede 7 m su un sesto di 4, viene diradato",
+           after_species.get("leccio", 0) < before_species.get("leccio", 0))
+check_true("...ma non sparisce: le specie esigenti sono servite per prime",
+           after_species.get("leccio", 0) > 0)
+worst = nt.measure_min_distance(
+    [p for p in outcome.plants if cp.species_of(p) == "leccio"])
+print("        distanza minima fra lecci: {0:.2f} m".format(worst))
+check_true("...e fra due lecci restano i 7 m che il catalogo chiede",
+           worst >= 7.0 - 1e-6)
+# A leccio needing 7 m needs it from any neighbour, so a pino at 4 m is in
+# its way: on a 4 m scheme the pino has nowhere left. That is the right
+# answer, and the outcome has to say it out loud rather than hand back a
+# stand quietly missing half its mix.
+check_true("la specie che non trova piu' posto viene dichiarata",
+           any("pino" in text for text in outcome.warnings))
+print("        avviso: {0}".format(outcome.warnings[0]))
+
+print("\n-- il catalogo si risalva --")
+again_path = os.path.join(CATALOG_DIR, "specie_bis.gpkg")
+written_catalog = scheme.save_catalog(path=again_path)
+check_true("il catalogo e' stato scritto", bool(written_catalog)
+           and os.path.exists(written_catalog))
+reopened = spx.SpeciesCatalog.open(written_catalog)
+check("...con le stesse specie", reopened.count, 2)
+check("...e le stesse distanze", reopened.get("leccio").min_distance_m, 7.0)
+
 
 print("\n" + "=" * 78)
+# A SpeciesCatalog holds a QgsVectorLayer opened on a GeoPackage that the
+# project never adopted. Collected after exitQgis() it is a
+# use-after-teardown that takes the process down with every check passed.
+workspace.unmount()
+reopened = opened = None
+state.catalog = None
+workspace = state = scheme = natural = plan = outcome = None
+gc.collect()
 QgsProject.instance().removeAllMapLayers()
 QGS.exitQgis()
 if SKIPS:

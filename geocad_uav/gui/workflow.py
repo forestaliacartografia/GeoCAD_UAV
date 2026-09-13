@@ -1759,9 +1759,9 @@ class SchemePanel(Panel):
         # -- the species ---------------------------------------------------
         species = QWidget()
         species_layout = QVBoxLayout(species)
-        self.species_table = QTableWidget(0, 2)
+        self.species_table = QTableWidget(0, 3)
         self.species_table.setHorizontalHeaderLabels(
-            [tr("Specie"), tr("%")])
+            [tr("Specie"), tr("%"), tr("Distanza minima (m)")])
         self.species_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         species_layout.addWidget(self.species_table)
@@ -1781,6 +1781,16 @@ class SchemePanel(Panel):
         species_layout.addLayout(row)
         self.total_label = QLabel(DASH)
         species_layout.addWidget(self.total_label)
+
+        catalogue = QHBoxLayout()
+        self.open_catalog_button = QPushButton(tr("Apri catalogo..."))
+        self.save_catalog_button = QPushButton(tr("Salva catalogo..."))
+        catalogue.addWidget(self.open_catalog_button)
+        catalogue.addWidget(self.save_catalog_button)
+        species_layout.addLayout(catalogue)
+        self.catalog_label = QLabel(tr("catalogo vuoto"))
+        self.catalog_label.setWordWrap(True)
+        species_layout.addWidget(self.catalog_label)
         self.tabs.addTab(species, tr("Specie"))
 
         for widget in (self.plant_distance, self.row_distance, self.margin,
@@ -1789,6 +1799,9 @@ class SchemePanel(Panel):
         self.pattern.currentIndexChanged.connect(self.apply_scheme)
         self.add_species.clicked.connect(self.on_add_species)
         self.remove_species.clicked.connect(self.on_remove_species)
+        self.open_catalog_button.clicked.connect(self.open_catalog)
+        self.save_catalog_button.clicked.connect(self.save_catalog)
+        self.species_table.itemChanged.connect(self.on_table_edited)
         state.changed.connect(self.refresh)
         self.reload_catalog()
 
@@ -1802,9 +1815,99 @@ class SchemePanel(Panel):
         return spin
 
     def reload_catalog(self) -> None:
+        current = self.species_key.currentText()
         self.species_key.clear()
-        for record in self.state.catalog.all():
+        records = self.state.catalog.all()
+        for record in records:
             self.species_key.addItem(record.name or record.key, record.key)
+        if current:
+            self.species_key.setEditText(current)
+        with_distance = sum(1 for record in records
+                            if record.min_distance_m > 0.0)
+        if not records:
+            self.catalog_label.setText(tr("catalogo vuoto"))
+        else:
+            self.catalog_label.setText(tr(
+                "{0} specie in catalogo, {1} con una distanza minima "
+                "propria").format(len(records), with_distance))
+        self.refresh()
+
+    # -- the catalogue -----------------------------------------------------
+
+    def open_catalog(self, *_args, path: str = ""):
+        """Read a species catalogue an operator prepared, as a GeoPackage.
+
+        Without one, a species typed into the combo is a key and a name and
+        nothing else -- no minimum distance, no elevation band, no slope
+        limit. The naturaliform pass enforces each species' own distance,
+        and until there is a catalogue it has nothing to enforce.
+        """
+        if not path:
+            path, _filter = QFileDialog.getOpenFileName(
+                self, tr("Apri il catalogo delle specie"), "",
+                "GeoPackage (*.gpkg)")
+        if not path:
+            return None
+        try:
+            catalog = species_mod.SpeciesCatalog.open(path)
+        except GeoCadError as exc:
+            self.warn(exc)
+            self.catalog_label.setText(exc.formatted())
+            return None
+        self.state.catalog = catalog
+        self.reload_catalog()
+        self.state.refresh_status()
+        return catalog
+
+    def save_catalog(self, *_args, path: str = "") -> str:
+        """Write the catalogue out, so the next project starts with it."""
+        records = self.state.catalog.all()
+        if not records:
+            self.warn(GeoCadError(
+                "empty catalogue",
+                user_message=tr("Non c'e' ancora nessuna specie da "
+                                "salvare.")))
+            return ""
+        if not path:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, tr("Salva il catalogo delle specie"), "specie.gpkg",
+                "GeoPackage (*.gpkg)")
+        if not path:
+            return ""
+        try:
+            written = species_mod.SpeciesCatalog.create(path, records,
+                                                        overwrite=True)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return ""
+        self.say(tr("Catalogo salvato in {0}").format(
+            getattr(written, "path", path) or path))
+        return getattr(written, "path", path) or path
+
+    def on_table_edited(self, item) -> bool:
+        """The minimum distance typed in the table goes into the catalogue."""
+        if item is None or item.column() != 2:
+            return False
+        key_item = self.species_table.item(item.row(), 0)
+        if key_item is None:
+            return False
+        key = key_item.data(Qt.ItemDataRole.UserRole) or key_item.text()
+        try:
+            distance = float(str(item.text()).replace(",", ".") or 0.0)
+        except ValueError:
+            self.refresh()
+            return False
+        try:
+            record = self.state.catalog.get(str(key))
+        except GeoCadError:
+            return False
+        if abs(record.min_distance_m - distance) < 1e-9:
+            return False
+        record.min_distance_m = max(0.0, distance)
+        self.state.catalog.update(record)
+        self.state.checkpoint()
+        self.state.refresh_status()
+        return True
 
     def apply_scheme(self, *_args) -> None:
         """Rebuild the spec from the widgets. Nothing is generated here."""
@@ -1859,16 +1962,36 @@ class SchemePanel(Panel):
     def refresh(self) -> None:
         self.density_label.setText("{0:,.0f} piante/ha".format(
             self.state.density_per_ha()))
+        # Filling the table fires itemChanged for every cell written, and
+        # the handler writes back into the catalogue: blocked, or typing one
+        # number would rewrite the rest.
+        self.species_table.blockSignals(True)
         self.species_table.setRowCount(len(self.state.shares))
         keys = [key for key, _percent in self.state.shares]
         for row, (key, percent) in enumerate(self.state.shares):
-            item = QTableWidgetItem(key)
+            try:
+                record = self.state.catalog.get(key)
+            except GeoCadError:
+                record = None
+            item = QTableWidgetItem(record.name if record is not None
+                                    and record.name else key)
+            item.setData(Qt.ItemDataRole.UserRole, key)
             # The colour is the one the layer will use: same module, same
             # golden-angle sequence, same order.
             item.setIcon(swatch(symbology_mod.palette(keys)[key]))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.species_table.setItem(row, 0, item)
-            self.species_table.setItem(row, 1,
-                                       QTableWidgetItem("{0:g}".format(percent)))
+            share_item = QTableWidgetItem("{0:g}".format(percent))
+            share_item.setFlags(share_item.flags()
+                                & ~Qt.ItemFlag.ItemIsEditable)
+            self.species_table.setItem(row, 1, share_item)
+            distance = record.min_distance_m if record is not None else 0.0
+            distance_item = QTableWidgetItem("{0:g}".format(distance))
+            distance_item.setToolTip(tr(
+                "Distanza minima propria della specie: la usa il passaggio "
+                "naturaliforme. Zero significa nessuna richiesta."))
+            self.species_table.setItem(row, 2, distance_item)
+        self.species_table.blockSignals(False)
         total = sum(percent for _key, percent in self.state.shares)
         self.total_label.setText(tr("Totale: {0:g} %").format(total))
 
