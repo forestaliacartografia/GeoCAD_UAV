@@ -187,7 +187,8 @@ def layers_extent(layers, margin: float = EXTENT_MARGIN):
     return box
 
 
-def build_layout(project, spec: LayoutSpec, layers, extent, name: str):
+def build_layout(project, spec: LayoutSpec, layers, extent, name: str,
+                 crs=None):
     """Compose the sheet. Returns the ``QgsPrintLayout``, not yet registered.
 
     ``layers`` are drawn, in the order given, in the map frame and in the
@@ -228,6 +229,12 @@ def build_layout(project, spec: LayoutSpec, layers, extent, name: str):
     layout.addLayoutItem(item_map)
     _place(item_map, size, FRAME[ITEM_MAP])
     item_map.setLayers(drawn)
+    # The frame has to be in the project's own CRS, not in whatever the QGIS
+    # project happens to be set to. A UTM extent handed to a frame declared
+    # in degrees comes out at 1:213,000,000 -- a sheet showing the planet
+    # with the parcel as one pixel, and no error anywhere.
+    if crs is not None and crs.isValid():
+        item_map.setCrs(crs)
     item_map.zoomToExtent(extent)
     if spec.scale and spec.scale > 0.0:
         item_map.setScale(float(spec.scale))

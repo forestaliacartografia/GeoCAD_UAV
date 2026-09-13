@@ -97,7 +97,10 @@ check_true("...leggibile", "Componi" in messages[-1])
 # --------------------------------------------------------------------------
 print("\n== K2: la tavola prende i layer del progetto ==")
 state.set_area(AREA, CRS32632, "Lotto Sant'Angelo")
-QgsProject.instance().setCrs(CRS32632)
+# Deliberately NOT the project's CRS: a QGIS project left on EPSG:4326 with
+# a reforestation project in UTM is the ordinary case, and a map frame that
+# followed the QGIS one would draw the parcel as one pixel of the planet.
+QgsProject.instance().setCrs(QgsCoordinateReferenceSystem("EPSG:4326"))
 scheme.plant_distance.setValue(6.0)
 scheme.row_distance.setValue(6.0)
 scheme.species_key.setCurrentText("quercia")
@@ -177,6 +180,11 @@ check_true("l'area di progetto ci sta tutta",
 check_true("...con un margine, non tagliata al vivo",
            extent.width() > AREA.boundingBox().width() * 1.02)
 check_true("la scala e' un numero vero", item_map.scale() > 0.0)
+check_text("il riquadro e' nel sistema del progetto, non in quello di QGIS",
+           item_map.crs().authid(), "EPSG:32632")
+print("        scala: 1:{0:,.0f}".format(item_map.scale()))
+check_true("...e la scala e' quella di un lotto, non del pianeta",
+           100.0 < item_map.scale() < 50_000.0)
 
 # --------------------------------------------------------------------------
 # K3 - a scale asked for is the scale set

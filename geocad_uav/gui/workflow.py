@@ -613,7 +613,7 @@ class ProjectState(QObject):
         extent = carto_mod.layers_extent(layers)
         layout = carto_mod.build_layout(
             QgsProject.instance(), spec, layers, extent,
-            name or spec.title or tr("Rimboschimento"))
+            name or spec.title or tr("Rimboschimento"), crs=self.crs)
         carto_mod.register(QgsProject.instance(), layout)
         self.layout = layout
         self.layout_spec = spec

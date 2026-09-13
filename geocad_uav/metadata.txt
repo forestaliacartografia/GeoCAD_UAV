@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.23.0
+version=1.24.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,21 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.23.0
+changelog=1.24.0
+    - Prova di accettazione: venti operazioni in fila, in una sessione
+      sola, dall'interfaccia vuota alla relazione scritta, ciascuna
+      superata solo se produce qualcosa che si vede -- un numero in un
+      pannello, una feature sulla mappa, un file su disco. Comprende
+      l'interrogazione del catasto vero, che viene saltata dichiarando il
+      motivo quando il servizio non risponde.
+    - Corretto: la tavola usciva a scala assurda (misurata 1:213.173.398)
+      quando il progetto QGIS non era nello stesso sistema di riferimento
+      del progetto di rimboschimento. Il riquadro della mappa seguiva il
+      CRS del progetto QGIS, e un'estensione UTM in un riquadro dichiarato
+      in gradi da' un foglio che mostra il pianeta con la particella
+      grande un pixel, senza alcun errore da nessuna parte. Adesso il
+      riquadro prende il sistema del progetto di rimboschimento.
+    1.23.0
     - Il progetto si salva e si riapre. Fino a ieri ore di lavoro -- area
       rilevata sul catasto, vincoli misurati, zone tagliate, specie
       decise, impianto generato e poi corretto pianta per pianta --
