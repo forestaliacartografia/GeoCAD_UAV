@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.15.0
+version=1.16.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,26 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.15.0
+changelog=1.16.0
+    - Impianto naturaliforme: radure vere, irregolarita' controllata e
+      distanza minima garantita. Le prime due rendono il sesto meno
+      regolare, la terza garantisce che meno regolare non diventi
+      sbagliato.
+    - Le radure si collocano con un seme: lo stesso progetto stampato
+      domani ha le stesse radure. Dove non c'e' spazio se ne collocano
+      meno e lo si dice, invece di sovrapporle.
+    - L'irregolarita' dirada e basta: non inventa mai una posizione
+      fuori dal sesto, quindi non puo' violare quello che l'operatore
+      ha impostato.
+    - La distanza minima rispetta quella di ciascuna specie, non solo
+      una soglia unica, e viene applicata partendo dalle specie piu'
+      esigenti: prese in ordine d'impianto, una specie che chiede 7 m
+      su un sesto di 4 m perdeva ogni confronto e spariva del tutto.
+      Misurato: 132 assegnate, 0 sopravvissute prima, 68 dopo.
+    - Su un impianto diradato la verifica non segnala piu' la distanza
+      media: i vuoti la alzano per costruzione, e segnalarli sarebbe
+      denunciare come difetto la funzione appena chiesta.
+    1.15.0
     - Le zone vengono piantate davvero. Fino a ieri il pannello le
       raccoglieva e il generatore piantava tutta l'area con un solo
       sesto: chi leggeva il pannello ci credeva, ed era peggio che non

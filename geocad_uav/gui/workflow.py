@@ -52,6 +52,7 @@ from ..forest.reforestation import area as area_mod
 from ..forest.reforestation import composition as composition_mod
 from ..forest.reforestation import constraints as constraints_mod
 from ..forest.reforestation import density as density_mod
+from ..forest.reforestation import natural as natural_mod
 from ..forest.reforestation import orient as orient_mod
 from ..forest.reforestation import spacing as spacing_mod
 from ..forest.reforestation import species as species_mod
@@ -160,6 +161,9 @@ class ProjectState(QObject):
         self.spec = spacing_mod.SlopeSpacing(plant_distance_m=3.0,
                                              row_distance_m=3.0)
         self.zones = zones_mod.ZoneSet()        # sub-areas, each planted alone
+        self.natural = natural_mod.NaturalSettings()
+        self.natural_outcome = None
+        self.glades = []
         self.result = None                      # SlopeGridResult
         self.composition = None
         self.cadastre = None                    # CadastralResult
@@ -174,6 +178,8 @@ class ProjectState(QObject):
         #: Set when the operator actually chose a scheme. The spec always
         #: holds a default, and a default nobody looked at is not a decision.
         self.scheme_chosen = False
+        #: Set when the operator asked for glades and they were placed.
+        self.glades_placed = False
         #: The step being looked at. ACTIVE is *where the operator is*, and
         #: DONE is *what the model holds*: two different things, so the one
         #: the operator is standing on keeps its marker until it earns a
@@ -859,6 +865,29 @@ class SchemePanel(Panel):
         form.addRow(tr("Sfalsamento casuale"), self.jitter)
         self.density_label = QLabel(DASH)
         form.addRow(tr("Densita'"), self.density_label)
+
+        natural = QGroupBox(tr("Naturaliforme"))
+        natural_form = QFormLayout(natural)
+        self.glade_count = QSpinBox()
+        self.glade_count.setRange(0, 200)
+        self.glade_radius = self._spin(10.0, " m")
+        self.glade_margin = self._spin(5.0, " m")
+        self.irregularity = QDoubleSpinBox()
+        self.irregularity.setRange(0.0, natural_mod.MAX_AMPLITUDE * 100.0)
+        self.irregularity.setSuffix(" %")
+        self.min_distance = self._spin(0.0, " m")
+        self.natural_seed = QSpinBox()
+        self.natural_seed.setRange(0, 999999)
+        natural_form.addRow(tr("Radure"), self.glade_count)
+        natural_form.addRow(tr("Raggio radura"), self.glade_radius)
+        natural_form.addRow(tr("Distacco dal bordo"), self.glade_margin)
+        natural_form.addRow(tr("Irregolarita'"), self.irregularity)
+        natural_form.addRow(tr("Distanza minima"), self.min_distance)
+        natural_form.addRow(tr("Seme"), self.natural_seed)
+        self.natural_label = QLabel(tr("nessuna"))
+        self.natural_label.setWordWrap(True)
+        natural_form.addRow(tr("Esito"), self.natural_label)
+        form.addRow(natural)
         self.tabs.addTab(scheme, tr("Sesto"))
 
         # -- the species ---------------------------------------------------
@@ -889,7 +918,11 @@ class SchemePanel(Panel):
         self.tabs.addTab(species, tr("Specie"))
 
         for widget in (self.plant_distance, self.row_distance, self.margin,
-                       self.azimuth, self.jitter):
+                       self.azimuth, self.jitter, self.glade_radius,
+                       self.glade_margin, self.irregularity,
+                       self.min_distance):
+            widget.valueChanged.connect(self.apply_scheme)
+        for widget in (self.glade_count, self.natural_seed):
             widget.valueChanged.connect(self.apply_scheme)
         self.pattern.currentIndexChanged.connect(self.apply_scheme)
         self.add_species.clicked.connect(self.on_add_species)
@@ -924,6 +957,18 @@ class SchemePanel(Panel):
                 custom_offsets=(0.0, 0.5)
                 if self.pattern.currentData() == spacing_mod.PATTERN_CUSTOM
                 else ())
+        except GeoCadError as exc:
+            self.warn(exc)
+            return
+        try:
+            self.state.natural = natural_mod.NaturalSettings(
+                glade_count=self.glade_count.value(),
+                glade_radius_m=self.glade_radius.value(),
+                glade_margin_m=self.glade_margin.value(),
+                glade_gap_m=self.glade_margin.value(),
+                amplitude=self.irregularity.value() / 100.0,
+                min_distance_m=self.min_distance.value(),
+                seed=self.natural_seed.value())
         except GeoCadError as exc:
             self.warn(exc)
             return
@@ -973,6 +1018,13 @@ class SchemePanel(Panel):
                                        QTableWidgetItem("{0:g}".format(percent)))
         total = sum(percent for _key, percent in self.state.shares)
         self.total_label.setText(tr("Totale: {0:g} %").format(total))
+        outcome = self.state.natural_outcome
+        if outcome is None or not outcome.removed_total:
+            self.natural_label.setText(tr("nessuna"))
+        else:
+            self.natural_label.setText(tr(
+                "{0:,} piante tolte, minima misurata {1:.2f} m").format(
+                    outcome.removed_total, outcome.measured_min_distance_m))
 
 
 class OrientationPanel(Panel):
@@ -1064,6 +1116,7 @@ class GeneratePanel(Panel):
                 self.warn(exc)
                 return None
             self.state.composition = None
+            self.naturalise(result, geometry)
             self.state.result = result
             self.state.verified = False
             self.state.anomalies = []
@@ -1078,11 +1131,52 @@ class GeneratePanel(Panel):
         mix = self.state.mix()
         if mix is not None:
             self.state.composition = composition_mod.assign(result.plants, mix)
+        self.naturalise(result, geometry)
         self.state.result = result
         self.state.verified = False
         self.state.anomalies = []
         self.state.refresh_status()
         return result
+
+    def naturalise(self, result, geometry) -> None:
+        """Open the glades and thin the stand, in place on the plan.
+
+        Runs on whatever the generator produced -- one area or many zones --
+        because the passes work on plants, not on polygons. The plan's own
+        plant list is replaced by the survivors, so everything downstream
+        (layer, validation, report) sees the stand that will actually be
+        planted.
+        """
+        settings = self.state.natural
+        self.state.natural_outcome = None
+        self.state.glades = []
+        if settings is None or not settings.is_active or not result.plants:
+            return
+        glades = []
+        if settings.glade_count and geometry is not None:
+            try:
+                glades = natural_mod.generate_glades(geometry, settings)
+            except GeoCadError as exc:
+                self.warn(exc)
+                glades = []
+        outcome = natural_mod.naturalise(
+            result.plants, settings, self.state.spec.plant_distance_m,
+            glades=glades, catalog=self.state.catalog)
+        result.plants = outcome.plants
+        if hasattr(result, "per_zone"):
+            counts = {}
+            for record in outcome.plants:
+                name = zones_mod.zone_of(record)
+                counts[name] = counts.get(name, 0) + 1
+            for name, entry in result.per_zone.items():
+                entry["plants"] = counts.get(name, 0)
+                area = entry.get("area_m2", 0.0)
+                entry["density_per_ha"] = (
+                    entry["plants"] / (area / M2_PER_HA) if area > 0.0
+                    else 0.0)
+        self.state.natural_outcome = outcome
+        self.state.glades = glades
+        self.state.glades_placed = bool(glades)
 
     def generate(self):
         """Commit the preview to a real PointZ layer, coloured by species."""
@@ -1226,12 +1320,28 @@ class VerifyPanel(Panel):
                     tr("{0} piante dentro un'area esclusa").format(
                         len(inside_exclusion)))
 
+        # The mean spacing is a check on a *regular* stand. Once the
+        # naturaliform pass has taken plants out, the gaps left behind pull
+        # the mean up by design, and flagging that would be reporting the
+        # feature as a fault. What still has to hold there is the minimum,
+        # checked below.
+        thinned = (self.state.natural_outcome is not None
+                   and self.state.natural_outcome.removed_total > 0)
         wanted = self.state.spec.effective_real_spacing[0]
         measured = result.mean_real_spacing()
-        if measured and abs(measured - wanted) > 0.05 * wanted:
+        if not thinned and measured and abs(measured - wanted) > 0.05 * wanted:
             anomalies.append(
                 tr("Distanza media {0:.2f} m contro {1:.2f} m richiesti")
                 .format(measured, wanted))
+
+        floor = (self.state.natural.min_distance_m
+                 if self.state.natural is not None else 0.0)
+        if floor > 0.0:
+            measured = natural_mod.measure_min_distance(result.plants)
+            if math.isfinite(measured) and measured < floor - 1e-6:
+                anomalies.append(
+                    tr("Distanza minima {0:.2f} m contro {1:.2f} m "
+                       "richiesti").format(measured, floor))
 
         if self.state.shares:
             mix = self.state.mix()
@@ -1347,6 +1457,12 @@ class OutputsPanel(Panel):
                                                      "per_zone"):
             lines.append("")
             lines.extend(self.state.result.describe())
+        if self.state.natural is not None and self.state.natural.is_active:
+            lines.append("")
+            lines.extend(self.state.natural.describe())
+        if self.state.natural_outcome is not None:
+            lines.append("")
+            lines.extend(self.state.natural_outcome.describe())
         if self.state.composition is not None:
             lines.append("")
             lines.extend(self.state.composition.describe())
