@@ -63,6 +63,7 @@ from ..forest.reforestation import terrain as terrain_mod
 from ..forest.reforestation import zones as zones_mod
 from ..io import cadastre as cadastre_mod
 from ..io import cartography as carto_mod
+from ..io import documents as docs_mod
 from . import map_layers as map_layers_mod
 from .map_layers import ProjectLayers
 
@@ -2295,7 +2296,7 @@ class CartographyPanel(Panel):
 
 
 class OutputsPanel(Panel):
-    """Step 11: the plants layer, written out."""
+    """Step 13: what leaves the plugin -- the layer, and the relazione."""
 
     #: Driver per format, as OGR names them. One table, no branching.
     FORMATS = (
@@ -2309,20 +2310,39 @@ class OutputsPanel(Panel):
 
     def __init__(self, state, parent=None):
         super().__init__(tr("Elaborati"), state, parent)
-        form = QFormLayout()
+
+        layers_box = QGroupBox(tr("Dati"))
+        layers_form = QFormLayout(layers_box)
         self.format_combo = QComboBox()
         for label, driver, suffix in self.FORMATS:
             self.format_combo.addItem(label, (driver, suffix))
-        form.addRow(tr("Formato"), self.format_combo)
-        self.layout.addLayout(form)
+        layers_form.addRow(tr("Formato"), self.format_combo)
         self.export_button = QPushButton(tr("Esporta piante"))
-        self.report_button = QPushButton(tr("Relazione tecnica"))
-        self.layout.addWidget(self.export_button)
-        self.layout.addWidget(self.report_button)
+        layers_form.addRow(self.export_button)
+        self.layout.addWidget(layers_box)
+
+        report_box = QGroupBox(tr("Relazione"))
+        report_form = QFormLayout(report_box)
+        self.author_edit = QLineEdit()
+        self.author_edit.setPlaceholderText(tr("Redatto da"))
+        self.document_combo = QComboBox()
+        for key, label, _suffix, _writer in docs_mod.FORMATS:
+            self.document_combo.addItem(label, key)
+        report_form.addRow(tr("Autore"), self.author_edit)
+        report_form.addRow(tr("Formato"), self.document_combo)
+        buttons = QHBoxLayout()
+        self.report_button = QPushButton(tr("Anteprima"))
+        self.write_button = QPushButton(tr("Scrivi relazione"))
+        buttons.addWidget(self.report_button)
+        buttons.addWidget(self.write_button)
+        report_form.addRow(buttons)
+        self.layout.addWidget(report_box)
+
         self.report = QTextBrowser()
         self.layout.addWidget(self.report)
         self.export_button.clicked.connect(self.export)
         self.report_button.clicked.connect(self.build_report)
+        self.write_button.clicked.connect(self.write_document)
 
     def export(self, path: str = "") -> str:
         from qgis.core import (QgsCoordinateTransformContext,   # noqa: PLC0415
@@ -2354,68 +2374,180 @@ class OutputsPanel(Panel):
             return ""
         return result[2] if len(result) > 2 and result[2] else path
 
-    def build_report(self) -> str:
-        """The technical report, assembled from what each module says."""
-        lines = [tr("RELAZIONE TECNICA - PROGETTO DI RIMBOSCHIMENTO"), ""]
-        if self.state.area is not None:
-            lines.extend(self.state.area.summary())
-            lines.append("")
-        if self.state.cadastre is not None:
-            lines.extend(self.state.cadastre.describe())
-            lines.append("")
-        lines.extend(self.state.constraints.describe())
-        lines.append("")
-        if self.state.terrain is not None:
-            lines.extend(self.state.terrain.describe())
-            lines.append("")
-        lines.extend(self.state.spec.describe())
-        lines.append("")
-        if self.state.along_contours:
-            # The lattice density formula does not apply: what sets the
-            # distance between rows here is the contour interval, so the
+    def document(self) -> "docs_mod.Report":
+        """The report as blocks: the one thing all three writers read.
+
+        Assembled from what each module says about itself, exactly as the
+        text report always was, plus the tables that only make sense as
+        tables. Built once and written three ways, so the PDF, the Word file
+        and the workbook cannot disagree by a rounding.
+        """
+        state = self.state
+        report = docs_mod.Report(
+            title=tr("RELAZIONE TECNICA - PROGETTO DI RIMBOSCHIMENTO"),
+            subtitle=(state.area.label if state.area is not None else ""),
+            author=self.author_edit.text().strip(),
+            date=docs_mod.today())
+        if state.area is not None:
+            report.lines(state.area.summary())
+        if state.cadastre is not None:
+            report.lines(state.cadastre.describe())
+            if state.cadastre.shares:
+                report.table(
+                    tr("Particelle catastali"),
+                    (tr("Comune"), tr("Belfiore"), tr("Foglio"),
+                     tr("Particella"), tr("Sup. catastale (ha)"),
+                     tr("Sup. interessata (ha)"), tr("%")),
+                    [(row["comune"], row["belfiore"], row["foglio"],
+                      row["particella"],
+                      round(row["superficie_catastale_m2"] / M2_PER_HA, 4),
+                      round(row["superficie_interessata_m2"] / M2_PER_HA, 4),
+                      row["percentuale"])
+                     for row in state.cadastre.rows()])
+        report.lines(state.constraints.describe())
+        breakdown = state.constraints.breakdown()
+        if breakdown:
+            report.table(
+                tr("Vincoli e fasce di rispetto"),
+                (tr("Vincolo"), tr("Fascia (m)"), tr("Elementi"),
+                 tr("Superficie (ha)")),
+                [(label, distance, count, round(m2 / M2_PER_HA, 4))
+                 for _key, label, distance, count, m2 in breakdown])
+        if state.terrain is not None:
+            report.lines(state.terrain.describe())
+        report.lines(state.spec.describe())
+        if state.along_contours:
+            # The lattice density formula does not apply: between contour
+            # rows the distance is set by the interval and the slope, so the
             # report gives the interval and the measured result instead of a
             # number derived from a row distance nobody used.
-            lines.extend(curves_mod.describe(self.state.contours,
-                                             self.state.contour_interval_m))
-            lines.append("  Densita' risultante: {0:,.0f} piante/ha".format(
-                self.state.result.density_per_ha()
-                if self.state.result is not None
-                else self.state.density_per_ha()))
+            report.lines(curves_mod.describe(state.contours,
+                                             state.contour_interval_m))
+            report.text("  " + tr("Densita' risultante: {0:,.0f} piante/ha")
+                        .format(state.result.density_per_ha()
+                                if state.result is not None
+                                else state.density_per_ha()))
         else:
-            lines.extend(density_mod.describe(
-                self.state.spec.pattern, self.state.spec.plant_distance_m,
-                self.state.spec.row_distance_m))
-            if self.state.contours:
-                lines.append("")
-                lines.extend(curves_mod.describe(
-                    self.state.contours, self.state.contour_interval_m))
-        if len(self.state.zones):
-            lines.append("")
-            lines.extend(self.state.zones.describe())
-        if self.state.result is not None and hasattr(self.state.result,
-                                                     "per_zone"):
-            lines.append("")
-            lines.extend(self.state.result.describe())
-        if self.state.natural is not None and self.state.natural.is_active:
-            lines.append("")
-            lines.extend(self.state.natural.describe())
-        if self.state.natural_outcome is not None:
-            lines.append("")
-            lines.extend(self.state.natural_outcome.describe())
-        if self.state.composition is not None:
-            lines.append("")
-            lines.extend(self.state.composition.describe())
-        if self.state.layout is not None:
-            lines.append("")
-            lines.extend(carto_mod.describe(self.state.layout_spec,
-                                            self.state.layout))
-        if self.state.anomalies:
-            lines.append("")
-            lines.append(tr("ANOMALIE"))
-            lines.extend("  - " + text for text in self.state.anomalies)
-        text = "\n".join(lines)
+            report.lines(density_mod.describe(
+                state.spec.pattern, state.spec.plant_distance_m,
+                state.spec.row_distance_m))
+            if state.contours:
+                report.lines(curves_mod.describe(state.contours,
+                                                 state.contour_interval_m))
+        if len(state.zones):
+            report.lines(state.zones.describe())
+            report.table(
+                tr("Zone"),
+                (tr("Zona"), tr("Superficie (ha)"), tr("Sesto"),
+                 tr("Densita' (piante/ha)")),
+                [(zone.name, round(zone.area_ha, 4),
+                  "--" if zone.spec is None else "{0:g} x {1:g} m".format(
+                      zone.spec.plant_distance_m, zone.spec.row_distance_m),
+                  round(zone.density_per_ha(), 1))
+                 for zone in state.zones])
+        if state.result is not None and hasattr(state.result, "per_zone"):
+            report.lines(state.result.describe())
+        if state.natural is not None and state.natural.is_active:
+            report.lines(state.natural.describe())
+        if state.natural_outcome is not None:
+            report.lines(state.natural_outcome.describe())
+        if state.composition is not None:
+            report.lines(state.composition.describe())
+        # The table comes from the plants, not from the Composition object:
+        # a plan generated zone by zone assigns species per zone and leaves
+        # state.composition empty, and the mix is still on the ground.
+        columns, rows = self.composition_table()
+        if rows:
+            report.table(tr("Composizione"), columns, rows)
+        if state.scenarios:
+            report.table(
+                tr("Scenari a confronto"),
+                (tr("Scenario"), tr("Sesto"), tr("Densita' (piante/ha)"),
+                 tr("Piante")),
+                [(row["name"], row.get("sesto", ""),
+                  round(row["density"], 1), row["plants"])
+                 for row in state.scenarios])
+        if state.layout is not None:
+            report.lines(carto_mod.describe(state.layout_spec, state.layout))
+        if state.anomalies:
+            report.heading(tr("ANOMALIE"), level=2)
+            for text in state.anomalies:
+                report.text("  - " + text)
+        if state.result is not None and state.result.plants:
+            report.table(tr("Piante"), *self.plants_table(), sheet_only=True)
+        return report
+
+    def composition_table(self):
+        """Species, how many, what came out and what was asked for."""
+        state = self.state
+        achieved = composition_mod.achieved_percentages(
+            state.result.plants if state.result is not None else [])
+        wanted = {}
+        mix = state.mix()
+        if mix is not None:
+            wanted = {key: 100.0 * value
+                      for key, value in mix.weights().items()}
+        counts = state.composition.counts if state.composition else {}
+        keys = sorted(set(counts) | set(achieved) | set(wanted))
+        rows = []
+        for key in keys:
+            record = None
+            try:
+                record = state.catalog.get(key)
+            except GeoCadError:
+                record = None
+            rows.append((record.name if record is not None and record.name
+                         else key,
+                         counts.get(key, 0),
+                         round(achieved.get(key, 0.0), 2),
+                         round(wanted.get(key, 0.0), 2)))
+        return ((tr("Specie"), tr("Piante"), tr("% effettiva"),
+                 tr("% richiesta")), rows)
+
+    def plants_table(self):
+        """Every plant, for the workbook. Not for the prose."""
+        rows = []
+        for record in self.state.result.plants:
+            rows.append((record.plant_id, record.row_id, record.seq_in_row,
+                         zones_mod.zone_of(record),
+                         composition_mod.species_of(record),
+                         round(record.x, 3), round(record.y, 3),
+                         None if record.z is None else round(record.z, 3),
+                         None if record.slope_deg is None
+                         else round(record.slope_deg, 2),
+                         None if record.aspect_deg is None
+                         else round(record.aspect_deg, 2)))
+        return ((tr("ID"), tr("Fila"), tr("Progressivo"), tr("Zona"),
+                 tr("Specie"), "X", "Y", "Z", tr("Pendenza"),
+                 tr("Esposizione")), rows)
+
+    def build_report(self) -> str:
+        """The technical report as text, shown in the panel."""
+        text = docs_mod.as_text(self.document())
         self.report.setPlainText(text)
         return text
+
+    def write_document(self, key: str = "", path: str = "") -> str:
+        """Write the report in the chosen format. Returns the path."""
+        key = key or str(self.document_combo.currentData() or "pdf")
+        suffix = docs_mod.suffix_for(key)
+        if not path:
+            from qgis.PyQt.QtWidgets import QFileDialog          # noqa: PLC0415
+
+            path, _filter = QFileDialog.getSaveFileName(
+                self, tr("Salva la relazione"), "relazione" + suffix,
+                "*" + suffix)
+        if not path:
+            return ""
+        if suffix and not path.lower().endswith(suffix):
+            path += suffix
+        try:
+            written = docs_mod.write(self.document(), path, key)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return ""
+        self.say(tr("Relazione scritta in {0}").format(written))
+        return written
 
 
 # --------------------------------------------------------------------------

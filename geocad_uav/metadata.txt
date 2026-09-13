@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.20.0
+version=1.21.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,30 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.20.0
+changelog=1.21.0
+    - La relazione tecnica si scrive in PDF, in Word (.docx) e in Excel
+      (.xlsx). Una sola relazione, costruita dal modello, e tre
+      scrittori: i numeri sui tre file non possono divergere di un
+      arrotondamento perche' sono gli stessi numeri.
+    - La relazione porta ora tabelle vere: particelle catastali, vincoli,
+      zone, composizione e scenari a confronto. L'elenco delle piante,
+      una riga per pianta, sta soltanto nel foglio di calcolo: in un PDF
+      sarebbero quaranta pagine illeggibili.
+    - PDF attraverso QTextDocument e QPdfWriter, che PyQt porta con se':
+      nessuna libreria da installare. Riaperto e riletto in prova.
+    - Foglio di calcolo con openpyxl, che QGIS distribuisce. Riletto con
+      la stessa libreria: un numero scritto come numero torna come
+      numero e si puo' sommare.
+    - Il documento Word e' scritto come pacchetto Open Packaging
+      Conventions: QGIS non distribuisce una libreria Word e il formato
+      e' stato composto a mano sui tipi di contenuto e sulle relazioni
+      letti da un .docx prodotto da Microsoft Word, con la
+      documentazione Microsoft del documento minimo alla mano. Provato
+      aprendolo con Microsoft Word, che ne rilegge testo, tabelle e
+      proprieta'. Contiene testo, titoli e tabelle: nessuna immagine,
+      nessuna intestazione, nessun campo, perche' non sono stati
+      verificati.
+    1.20.0
     - Cartografia: la tavola di progetto, come dodicesimo step. Non uno
       screenshot della mappa, ma un QgsPrintLayout vero, con titolo,
       sottotitolo, legenda, scala grafica, freccia del nord e una nota
