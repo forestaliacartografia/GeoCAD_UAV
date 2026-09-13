@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.14.0
+version=1.15.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,22 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.14.0
+changelog=1.15.0
+    - Le zone vengono piantate davvero. Fino a ieri il pannello le
+      raccoglieva e il generatore piantava tutta l'area con un solo
+      sesto: chi leggeva il pannello ci credeva, ed era peggio che non
+      offrire le zone. Adesso ogni zona ha il suo sesto, la sua
+      composizione e il suo orientamento, e viene generata da sola.
+    - Suddivisione in fasce: si taglia la superficie utile in N strisce
+      che corrono lungo le file, cosi' nessuna macchina deve
+      attraversare un confine a meta' fila.
+    - Una zona entra ritagliata sull'area e su quelle gia' presenti:
+      non puo' piantare fuori progetto ne' sopra un'altra zona. La
+      superficie che non appartiene a nessuna zona viene dichiarata,
+      non piantata di nascosto ne' persa in silenzio.
+    - Ogni pianta porta il nome della sua zona, nel layer e nella
+      relazione; identificativi e file sono unici su tutto il piano.
+    1.14.0
     - Nuovo spazio di lavoro per il rimboschimento: a sinistra le
       undici fasi del progetto con lo stato di ciascuna, a destra solo
       i comandi della fase in corso, e in mezzo la mappa, che torna a

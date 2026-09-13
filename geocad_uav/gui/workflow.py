@@ -57,6 +57,7 @@ from ..forest.reforestation import spacing as spacing_mod
 from ..forest.reforestation import species as species_mod
 from ..forest.reforestation import symbology as symbology_mod
 from ..forest.reforestation import terrain as terrain_mod
+from ..forest.reforestation import zones as zones_mod
 from ..io import cadastre as cadastre_mod
 
 M2_PER_HA = 10_000.0
@@ -158,7 +159,7 @@ class ProjectState(QObject):
         self.shares = []                        # [(key, percent)]
         self.spec = spacing_mod.SlopeSpacing(plant_distance_m=3.0,
                                              row_distance_m=3.0)
-        self.zones = []                         # [{"name":..., "spec":...}]
+        self.zones = zones_mod.ZoneSet()        # sub-areas, each planted alone
         self.result = None                      # SlopeGridResult
         self.composition = None
         self.cadastre = None                    # CadastralResult
@@ -207,7 +208,7 @@ class ProjectState(QObject):
         has_features = any(rule.n_features
                            for rule in self.constraints.rules.values())
         self.set_status("constraints", DONE if has_features else NOT_STARTED)
-        self.set_status("zones", DONE if self.zones else NOT_STARTED)
+        self.set_status("zones", DONE if len(self.zones) else NOT_STARTED)
         self.set_status("species", DONE if self.shares else NOT_STARTED)
         self.set_status("scheme", DONE if self.scheme_chosen else NOT_STARTED)
         self.set_status("orientation",
@@ -248,6 +249,9 @@ class ProjectState(QObject):
         self.crs = crs
         self.cadastre = None
         self.result = None
+        # Zones belong to a surface: a new area is a new project, and zones
+        # cut from the old one would be planting somewhere else.
+        self.zones = zones_mod.ZoneSet()
         self.apply_constraints()
 
     def apply_constraints(self) -> None:
@@ -257,6 +261,7 @@ class ProjectState(QObject):
             return
         self.area.clear_exclusions()
         self.constraints.apply_to(self.area)
+        self.zones.container = self.area.utile()
         self.refresh_status()
 
     def mix(self) -> Optional[composition_mod.Mix]:
@@ -676,64 +681,152 @@ class ConstraintsPanel(Panel):
 
 
 class ZonesPanel(Panel):
-    """Step 4: sub-areas, each with its own scheme."""
+    """Step 4: sub-areas, each planted with its own scheme and its own mix.
+
+    A zone here is not a note to self: the generator plants each one
+    separately, and what this table shows -- surface, scheme, density,
+    species -- is what step 8 will produce for it.
+    """
 
     def __init__(self, state, parent=None):
         super().__init__(tr("Zone di impianto"), state, parent)
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            [tr("Zona"), tr("Superficie"), tr("Sesto"), tr("Densita'")])
+            [tr("Zona"), tr("Superficie"), tr("Sesto"), tr("Densita'"),
+             tr("Specie")])
         self.table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
         self.layout.addWidget(self.table)
 
         buttons = QHBoxLayout()
-        self.add_button = QPushButton(tr("Aggiungi zona"))
+        self.add_button = QPushButton(tr("Zona sull'area"))
         self.remove_button = QPushButton(tr("Rimuovi"))
         buttons.addWidget(self.add_button)
         buttons.addWidget(self.remove_button)
         self.layout.addLayout(buttons)
+
+        bands = QHBoxLayout()
+        self.band_count = QSpinBox()
+        self.band_count.setRange(2, 50)
+        self.band_count.setValue(3)
+        self.split_button = QPushButton(tr("Dividi in fasce"))
+        bands.addWidget(QLabel(tr("Fasce")))
+        bands.addWidget(self.band_count)
+        bands.addWidget(self.split_button, 1)
+        self.layout.addLayout(bands)
+
+        self.apply_button = QPushButton(
+            tr("Applica sesto e specie correnti alla zona scelta"))
+        self.layout.addWidget(self.apply_button)
+        self.problems = QLabel("")
+        self.problems.setWordWrap(True)
+        self.layout.addWidget(self.problems)
         self.layout.addStretch(1)
 
         self.add_button.clicked.connect(self.add_zone)
         self.remove_button.clicked.connect(self.remove_zone)
+        self.split_button.clicked.connect(self.split)
+        self.apply_button.clicked.connect(self.apply_current)
         state.changed.connect(self.refresh)
 
-    def add_zone(self) -> bool:
-        """A zone over the whole usable surface, with today's scheme."""
-        geometry = self.state.usable_geometry()
-        if geometry is None:
+    # -- building the zones ------------------------------------------------
+
+    def _next_name(self) -> str:
+        return "Zona {0}".format(chr(ord("A") + len(self.state.zones)))
+
+    def add_zone(self, geometry=None) -> bool:
+        """A zone over whatever is left of the usable surface.
+
+        With a geometry it is that shape, clipped; without one it is the
+        surface no other zone has taken, which is what "add a zone" means
+        when there are none yet.
+        """
+        container = self.state.usable_geometry()
+        if container is None:
             self.warn(GeoCadError(
                 "no area", user_message=tr("Definisci prima l'area.")))
             return False
-        self.state.zones.append({
-            "name": "Zona {0}".format(chr(ord("A") + len(self.state.zones))),
-            "geometry": QgsGeometry(geometry),
-            "spec": self.state.spec,
-        })
+        shape = geometry if isinstance(geometry, QgsGeometry) else None
+        if shape is None:
+            shape = self.state.zones.uncovered() or QgsGeometry(container)
+        try:
+            self.state.zones.add(zones_mod.Zone(
+                name=self._next_name(), geometry=QgsGeometry(shape),
+                spec=self.state.spec, shares=tuple(self.state.shares)))
+        except GeoCadError as exc:
+            self.warn(exc)
+            return False
         self.state.refresh_status()
         return True
+
+    def split(self) -> int:
+        """Cut the usable surface into bands that run along the rows."""
+        container = self.state.usable_geometry()
+        if container is None:
+            self.warn(GeoCadError(
+                "no area", user_message=tr("Definisci prima l'area.")))
+            return 0
+        try:
+            bands = zones_mod.split_bands(
+                container, self.band_count.value(),
+                self.state.spec.row_azimuth_deg, self.state.spec)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return 0
+        self.state.zones.clear()
+        self.state.zones.container = container
+        added = 0
+        for band in bands:
+            band.shares = tuple(self.state.shares)
+            try:
+                self.state.zones.add(band)
+                added += 1
+            except GeoCadError:
+                continue
+        self.state.refresh_status()
+        return added
 
     def remove_zone(self) -> bool:
         row = self.table.currentRow()
-        if row < 0 or row >= len(self.state.zones):
+        names = self.state.zones.names()
+        if row < 0 or row >= len(names):
             return False
-        self.state.zones.pop(row)
+        self.state.zones.remove(names[row])
         self.state.refresh_status()
         return True
 
+    def apply_current(self) -> bool:
+        """Give the selected zone the scheme and mix set in step 5 and 6."""
+        row = self.table.currentRow()
+        names = self.state.zones.names()
+        if row < 0 or row >= len(names):
+            return False
+        zone = self.state.zones.get(names[row])
+        zone.spec = self.state.spec
+        zone.shares = tuple(self.state.shares)
+        self.state.refresh_status()
+        return True
+
+    # -- what it shows -----------------------------------------------------
+
     def refresh(self) -> None:
-        self.table.setRowCount(len(self.state.zones))
-        for row, zone in enumerate(self.state.zones):
-            spec = zone["spec"]
-            values = (zone["name"], ha(zone["geometry"].area()),
-                      "{0:g} x {1:g} m".format(spec.plant_distance_m,
-                                               spec.row_distance_m),
-                      "{0:,.0f}/ha".format(density_mod.density_from_spacing(
-                          spec.pattern, spec.plant_distance_m,
-                          spec.row_distance_m)))
+        zones = list(self.state.zones)
+        self.table.setRowCount(len(zones))
+        for row, zone in enumerate(zones):
+            spec = zone.spec
+            values = (
+                zone.name, ha(zone.area_m2),
+                "--" if spec is None else "{0:g} x {1:g} m".format(
+                    spec.plant_distance_m, spec.row_distance_m),
+                "{0:,.0f}/ha".format(zone.density_per_ha()),
+                ", ".join("{0} {1:g}%".format(k, p) for k, p in zone.shares)
+                or "--")
             for column, value in enumerate(values):
                 self.table.setItem(row, column, QTableWidgetItem(str(value)))
+        problems = self.state.zones.validate()
+        self.problems.setText("\n".join("! " + text for text in problems))
 
 
 class SchemePanel(Panel):
@@ -951,12 +1044,31 @@ class GeneratePanel(Panel):
         state.changed.connect(self.refresh)
 
     def preview(self):
-        """Run the generator and keep the result; no layer is created."""
+        """Run the generator and keep the result; no layer is created.
+
+        With zones defined, each one is generated with its own scheme and
+        its own mix and the pieces are kept apart; without them the whole
+        usable surface is one scheme. The panel does not choose differently
+        for the two cases -- the plan object answers the same questions.
+        """
         geometry = self.state.usable_geometry()
         if geometry is None:
             self.warn(GeoCadError(
                 "no area", user_message=tr("Definisci prima l'area.")))
             return None
+        if len(self.state.zones):
+            try:
+                result = zones_mod.plant(self.state.zones,
+                                         terrain=self.state.terrain)
+            except GeoCadError as exc:
+                self.warn(exc)
+                return None
+            self.state.composition = None
+            self.state.result = result
+            self.state.verified = False
+            self.state.anomalies = []
+            self.state.refresh_status()
+            return result
         try:
             result = spacing_mod.generate(geometry, self.state.spec,
                                           terrain=self.state.terrain)
@@ -1228,6 +1340,13 @@ class OutputsPanel(Panel):
         lines.extend(density_mod.describe(
             self.state.spec.pattern, self.state.spec.plant_distance_m,
             self.state.spec.row_distance_m))
+        if len(self.state.zones):
+            lines.append("")
+            lines.extend(self.state.zones.describe())
+        if self.state.result is not None and hasattr(self.state.result,
+                                                     "per_zone"):
+            lines.append("")
+            lines.extend(self.state.result.describe())
         if self.state.composition is not None:
             lines.append("")
             lines.extend(self.state.composition.describe())

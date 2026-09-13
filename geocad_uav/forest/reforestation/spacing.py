@@ -308,37 +308,38 @@ class SlopeGridResult:
 
     def mean_plan_spacing(self) -> float:
         """Mean planimetric distance between consecutive plants of a row."""
-        gaps = []
-        by_row = {}
-        for plant in self.plants:
-            by_row.setdefault(plant.row_id, []).append(plant)
-        for plants in by_row.values():
-            plants.sort(key=lambda p: p.seq_in_row)
-            for first, second in zip(plants, plants[1:]):
-                gaps.append(math.hypot(second.x - first.x,
-                                       second.y - first.y))
-        return sum(gaps) / len(gaps) if gaps else 0.0
+        return mean_spacing(self.plants, with_z=False)
 
     def mean_real_spacing(self) -> float:
         """The same distance measured on the ground, Z included."""
-        gaps = []
-        by_row = {}
-        for plant in self.plants:
-            by_row.setdefault(plant.row_id, []).append(plant)
-        for plants in by_row.values():
-            plants.sort(key=lambda p: p.seq_in_row)
-            for first, second in zip(plants, plants[1:]):
-                dz = 0.0
-                if first.z is not None and second.z is not None:
-                    dz = second.z - first.z
-                gaps.append(math.sqrt((second.x - first.x) ** 2
-                                      + (second.y - first.y) ** 2 + dz * dz))
-        return sum(gaps) / len(gaps) if gaps else 0.0
+        return mean_spacing(self.plants, with_z=True)
 
     def density_per_ha(self) -> float:
         if self.usable_area_m2 <= 0.0:
             return 0.0
         return self.count / (self.usable_area_m2 / 10_000.0)
+
+
+def mean_spacing(plants, with_z: bool = False) -> float:
+    """Mean distance between consecutive plants of the same row.
+
+    On the map with ``with_z=False``, on the ground with it True. Written
+    once because a plan generated zone by zone measures itself the same way
+    a single-area plan does, and two copies of this would drift.
+    """
+    by_row = {}
+    for plant in plants:
+        by_row.setdefault(plant.row_id, []).append(plant)
+    gaps = []
+    for row in by_row.values():
+        row.sort(key=lambda p: p.seq_in_row)
+        for first, second in zip(row, row[1:]):
+            dz = 0.0
+            if with_z and first.z is not None and second.z is not None:
+                dz = second.z - first.z
+            gaps.append(math.sqrt((second.x - first.x) ** 2
+                                  + (second.y - first.y) ** 2 + dz * dz))
+    return sum(gaps) / len(gaps) if gaps else 0.0
 
 
 # --------------------------------------------------------------------------
@@ -517,7 +518,10 @@ def generate(usable_geometry, spec: SlopeSpacing, terrain=None,
     for plant in plants:
         plant.row_id = renumber[plant.row_id]
 
-    if stepper.steps_without_slope:
+    if terrain is not None and stepper.steps_without_slope:
+        # Only worth saying when there *is* a DEM: with none at all the
+        # sentence above already says so, and "the DEM does not cover the
+        # area" about an absent DEM reads as a second, different fault.
         warnings.append(
             "{0} passi calcolati senza pendenza: il DEM non copre tutta "
             "l'area.".format(stepper.steps_without_slope))
@@ -566,16 +570,20 @@ def point_features(result: SlopeGridResult, fields=None, zone: str = ""):
     from qgis.core import QgsFeature                            # noqa: PLC0415
 
     from .composition import species_of                        # noqa: PLC0415
+    from .zones import zone_of                                 # noqa: PLC0415
 
     out = []
     for record in result.plants:
         feature = QgsFeature(fields) if fields is not None else QgsFeature()
         feature.setGeometry(point_geometry(record))
         if fields is not None:
+            # A plant that knows its own zone wins over the caller's label:
+            # a plan generated zone by zone would otherwise come out with
+            # every point stamped with the same name.
             for name, value in (("plant_id", record.plant_id),
                                 ("row_id", record.row_id),
                                 ("seq_in_row", record.seq_in_row),
-                                ("zona", zone),
+                                ("zona", zone_of(record) or zone),
                                 ("specie", species_of(record)),
                                 ("z", record.z),
                                 ("slope_deg", record.slope_deg),
