@@ -375,13 +375,57 @@ done(18, "generare la cartografia",
 # 19-20. the data and the relazione
 # --------------------------------------------------------------------------
 outputs = context.outputs_panel
-gpkg = outputs.export(path=os.path.join(TMP, "piante.gpkg"))
+from qgis.core import QgsVectorLayer                            # noqa: E402
+
+# Every format the panel offers, written and reopened. A driver that is in
+# the combo and has never been written is a promise, not an export.
+exports = {}
+for index in range(outputs.format_combo.count()):
+    label = outputs.format_combo.itemText(index)
+    _driver, suffix, keeps, _opts = outputs.format_combo.itemData(index)
+    outputs.format_combo.setCurrentIndex(index)
+    written_path = outputs.export(
+        path=os.path.join(TMP, "piante" + suffix))
+    size = os.path.getsize(written_path) if written_path else 0
+    back = QgsVectorLayer(written_path, label, "ogr") if written_path else None
+    valid = back is not None and back.isValid()
+    count = back.featureCount() if valid else 0
+    with_geometry = 0
+    if valid:
+        with_geometry = sum(1 for feature in back.getFeatures()
+                            if feature.hasGeometry())
+    if suffix == ".csv" and written_path:
+        # A CSV is a table: OGR reads it back without geometry unless told,
+        # so what has to be there is the coordinate columns themselves.
+        with open(written_path, encoding="utf-8") as handle:
+            header = handle.readline().strip().split(",")
+            sample = handle.readline().strip().split(",")
+        has_xyz = header[:3] == ["X", "Y", "Z"]
+        with_geometry = count if (has_xyz and len(sample) > 3) else 0
+        print("          {0:<21} colonne: {1}".format(
+            "", ",".join(header[:5])))
+    exports[label] = (written_path, size, count, with_geometry, keeps)
+    print("          {0:<21} {1:>12,} byte, riletto: {2:,} feature, "
+          "{3:,} con geometria{4}".format(
+              label, size, count, with_geometry,
+              "" if keeps else "  (formato senza attributi)"))
+gpkg = exports["GeoPackage"][0]
 project_path = dock.on_save_as(path=os.path.join(TMP, "le_prata"))
+plants_written = state.result.count
+# DXF is a drawing exchange format: OGR writes the geometry and drops the
+# attribute schema, so its feature count is checked but not its columns.
+readable = [label for label, row in exports.items()
+            if row[2] == plants_written]
+geometric = [label for label, row in exports.items()
+             if row[3] == plants_written]
 done(19, "esportare i dati",
-     bool(gpkg) and os.path.exists(gpkg)
+     all(row[0] and row[1] > 0 for row in exports.values())
+     and len(readable) == len(exports)
+     and len(geometric) == len(exports)
      and bool(project_path) and os.path.exists(project_path),
-     "{0:,} byte di GeoPackage, {1:,} byte di progetto".format(
-         os.path.getsize(gpkg), os.path.getsize(project_path)))
+     "{0} formati scritti e riletti, tutti con le {1:,} piante e le loro "
+     "geometrie; progetto {2:,} byte".format(
+         len(exports), plants_written, os.path.getsize(project_path)))
 
 outputs.author_edit.setText("Cap. N. M. Mancini")
 written = {}
@@ -416,11 +460,16 @@ check_true("chiudendo, il plugin non lascia layer dietro di se'",
            len(state.layers.layers) == 0)
 
 print("\n" + "=" * 78)
-plan = natural_plan = layer = plants_layer = layout = None
+# Every QgsVectorLayer and QgsRasterLayer the project never adopted has to
+# go while QGIS is still standing: the export loop reopened six files, and
+# collecting one of those after exitQgis() is a use-after-teardown that
+# segfaults with no traceback, every check above having passed.
+plan = natural_plan = layer = plants_layer = layout = back = None
 workspace = again = state = context = dock = None
 scheme = zones_panel = natural_panel = edit_panel = carto_panel = None
 terrain_panel = constraints_panel = outputs = analysis = None
-DEM_LAYER = None
+DEM_LAYER = PARCELS = INSIDE = first = geometry = moved = None
+exports = scenarios = anomalies = report = None
 gc.collect()
 QgsProject.instance().layoutManager().clear()
 QgsProject.instance().removeAllMapLayers()

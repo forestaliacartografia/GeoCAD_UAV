@@ -2766,14 +2766,25 @@ class CartographyPanel(Panel):
 class OutputsPanel(Panel):
     """Step 13: what leaves the plugin -- the layer, and the relazione."""
 
-    #: Driver per format, as OGR names them. One table, no branching.
+    #: What each format is, and what it takes to write it properly:
+    #: label, OGR driver, suffix, whether it carries an attribute table, and
+    #: the layer options the driver needs.
+    #:
+    #: Two of these were measured, not assumed. DXF is a drawing exchange
+    #: format: OGR refuses to create a field on it, and asking anyway failed
+    #: the whole export while a perfectly good drawing had already been
+    #: written -- so the attributes are not asked for. And the CSV driver
+    #: writes *no coordinates at all* unless told: without GEOMETRY=AS_XYZ
+    #: an operator got a list of plant numbers and species with nowhere to
+    #: plant them.
     FORMATS = (
-        ("GeoPackage", "GPKG", ".gpkg"),
-        ("Shapefile", "ESRI Shapefile", ".shp"),
-        ("GeoJSON", "GeoJSON", ".geojson"),
-        ("CSV", "CSV", ".csv"),
-        ("DXF", "DXF", ".dxf"),
-        ("KML", "KML", ".kml"),
+        ("GeoPackage", "GPKG", ".gpkg", True, []),
+        ("Shapefile", "ESRI Shapefile", ".shp", True, []),
+        ("GeoJSON", "GeoJSON", ".geojson", True, []),
+        ("CSV (X, Y, Z)", "CSV", ".csv", True,
+         ["GEOMETRY=AS_XYZ", "SEPARATOR=COMMA"]),
+        ("DXF (solo geometrie)", "DXF", ".dxf", False, []),
+        ("KML", "KML", ".kml", True, []),
     )
 
     def __init__(self, state, parent=None):
@@ -2782,8 +2793,9 @@ class OutputsPanel(Panel):
         layers_box = QGroupBox(tr("Dati"))
         layers_form = QFormLayout(layers_box)
         self.format_combo = QComboBox()
-        for label, driver, suffix in self.FORMATS:
-            self.format_combo.addItem(label, (driver, suffix))
+        for label, driver, suffix, attributes, layer_options in self.FORMATS:
+            self.format_combo.addItem(
+                label, (driver, suffix, attributes, list(layer_options)))
         layers_form.addRow(tr("Formato"), self.format_combo)
         self.export_button = QPushButton(tr("Esporta piante"))
         layers_form.addRow(self.export_button)
@@ -2822,7 +2834,8 @@ class OutputsPanel(Panel):
                 "nothing to export",
                 user_message=tr("Genera prima l'impianto.")))
             return ""
-        driver, suffix = self.format_combo.currentData()
+        (driver, suffix, keeps_attributes,
+         layer_options) = self.format_combo.currentData()
         if not path:
             from qgis.PyQt.QtWidgets import QFileDialog         # noqa: PLC0415
 
@@ -2833,14 +2846,28 @@ class OutputsPanel(Panel):
             return ""
         options = QgsVectorFileWriter.SaveVectorOptions()
         options.driverName = driver
+        if layer_options:
+            options.layerOptions = list(layer_options)
+        if not keeps_attributes:
+            # Not attributes=[]: an empty list means "all of them". This is
+            # the switch that means none, and without it the driver refuses
+            # each field in turn and the whole export is reported failed.
+            options.skipAttributeCreation = True
         result = QgsVectorFileWriter.writeAsVectorFormatV3(
             layer, path, QgsCoordinateTransformContext(), options)
         if result[0] != QgsVectorFileWriter.NoError:
             self.warn(GeoCadError(
                 "export failed: {0}".format(result),
-                user_message=tr("Esportazione non riuscita.")))
+                user_message=tr("Esportazione non riuscita."),
+                hint=str(result[1])))
             return ""
-        return result[2] if len(result) > 2 and result[2] else path
+        written = result[2] if len(result) > 2 and result[2] else path
+        if not keeps_attributes:
+            self.say(tr("{0}: il formato non porta attributi. Scritte le "
+                        "geometrie delle {1:,} piante; specie, quote e "
+                        "identificativi restano negli altri formati.").format(
+                            driver, layer.featureCount()))
+        return written
 
     def document(self) -> "docs_mod.Report":
         """The report as blocks: the one thing all three writers read.

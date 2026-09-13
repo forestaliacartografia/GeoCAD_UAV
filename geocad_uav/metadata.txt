@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.24.0
+version=1.25.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,22 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.24.0
+changelog=1.25.0
+    - Tutti e sei i formati di esportazione vengono ora scritti e riletti
+      nella prova: prima soltanto il GeoPackage era mai stato provato, e
+      due degli altri non funzionavano.
+    - Corretto: l'esportazione in DXF non produceva alcun file. Il DXF e'
+      un formato di disegno e OGR rifiuta di creargli dei campi; il
+      pannello leggeva quel rifiuto come esportazione fallita e buttava
+      via un disegno gia' scritto correttamente. Adesso gli attributi non
+      vengono chiesti, il disegno viene scritto (misurato: 9.359 piante
+      rilette) e all'operatore viene detto che le specie e le quote
+      restano negli altri formati.
+    - Corretto: l'esportazione in CSV non scriveva le coordinate. Il
+      driver CSV non le scrive se non gliele si chiede: l'operatore
+      otteneva un elenco di numeri di pianta e di specie senza un posto
+      dove piantarle. Adesso il CSV porta le colonne X, Y, Z.
+    1.24.0
     - Prova di accettazione: venti operazioni in fila, in una sessione
       sola, dall'interfaccia vuota alla relazione scritta, ciascuna
       superata solo se produce qualcosa che si vede -- un numero in un
