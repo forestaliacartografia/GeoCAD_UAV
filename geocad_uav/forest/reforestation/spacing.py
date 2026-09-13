@@ -617,6 +617,134 @@ def point_features(result: SlopeGridResult, fields=None, zone: str = ""):
     return out
 
 
+def plants_from_layer(layer, terrain=None, zone: str = ""):
+    """The plants as the layer holds them *now*, after an operator edited it.
+
+    The inverse of :func:`point_features`. Once a plant can be moved, added
+    or deleted on the map, the layer is the truth and the generator's memory
+    is history: every number an operator is then shown -- the count, the
+    density, the mix, the anomalies -- has to be measured on this.
+
+    A plant that was moved is re-sampled on the DEM: its elevation, slope and
+    aspect belong to where it is now, not to where it was generated. A plant
+    that was digitised has no attributes at all, so it is given the next free
+    id and marked as an added row; its species stays empty until someone
+    assigns one, which is what makes it visible in the composition readout
+    instead of silently counting as the majority species.
+
+    Returns ``(records, added)`` -- the records in layer order, and how many
+    of them the layer had no ``plant_id`` for.
+    """
+    from .composition import SPECIES_ATTRIBUTE                  # noqa: PLC0415
+    from .zones import ZONE_ATTRIBUTE                           # noqa: PLC0415
+
+    records = []
+    added = 0
+    if layer is None:
+        return records, added
+    fields = layer.fields()
+    has = {name: fields.indexOf(name) >= 0 for name, _kind in PLANT_FIELDS}
+    known_ids = set()
+    added_row = ADDED_ROW_ID
+    for feature in layer.getFeatures():
+        value = feature["plant_id"] if has.get("plant_id") else None
+        if value is not None:
+            try:
+                known_ids.add(int(value))
+            except (TypeError, ValueError):
+                pass
+    next_id = (max(known_ids) + 1) if known_ids else 1
+
+    for index, feature in enumerate(layer.getFeatures()):
+        geometry = feature.geometry()
+        if geometry is None or geometry.isEmpty():
+            continue
+        vertex = geometry.constGet()
+        try:
+            x, y = float(vertex.x()), float(vertex.y())
+        except (AttributeError, TypeError):
+            point = geometry.asPoint()
+            x, y = float(point.x()), float(point.y())
+
+        def _value(name):
+            return feature[name] if has.get(name) else None
+
+        raw_id = _value("plant_id")
+        try:
+            plant_id = int(raw_id)
+        except (TypeError, ValueError):
+            plant_id = next_id
+            next_id += 1
+            added += 1
+        row_id = _int_or(_value("row_id"), None)
+        if row_id is None:
+            # A row of its own, so that two plants digitised at opposite
+            # ends of the parcel are not measured as consecutive positions
+            # in one very strange row.
+            row_id = added_row
+            added_row -= 1
+        record = PlantingRecord(
+            plant_id=plant_id,
+            row_id=row_id,
+            seq_in_row=_int_or(_value("seq_in_row"), index),
+            x=x, y=y)
+        z = _float_or(_value("z"), None)
+        slope = _float_or(_value("slope_deg"), None)
+        aspect = _float_or(_value("aspect_deg"), None)
+        if terrain is not None:
+            # Re-read the ground: a plant that was dragged 40 m downhill has
+            # a different slope, and keeping the old one would defend the
+            # plan with a number from before the edit.
+            measured_slope, measured_aspect, measured_z = _sample(terrain,
+                                                                  x, y)
+            if math.isfinite(measured_z):
+                z = float(measured_z)
+            if math.isfinite(measured_slope):
+                slope = float(measured_slope)
+            if math.isfinite(measured_aspect):
+                aspect = float(measured_aspect)
+        record.z = z
+        record.slope_deg = slope
+        record.aspect_deg = aspect
+        setattr(record, SPECIES_ATTRIBUTE, str(_value("specie") or ""))
+        setattr(record, ZONE_ATTRIBUTE, str(_value("zona") or zone or ""))
+        records.append(record)
+    return records, added
+
+
+#: First row id given to a plant an operator digitised by hand; the next
+#: one gets -2, and so on. Negative so they can never collide with a
+#: generated row, and one each so a hand-placed plant is never measured as
+#: the neighbour of another hand-placed plant.
+ADDED_ROW_ID = -1
+
+
+def added_plants(plants) -> int:
+    """How many of these plants were placed by hand rather than generated."""
+    return sum(1 for record in plants if record.row_id <= ADDED_ROW_ID)
+
+
+def _int_or(value, fallback):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _float_or(value, fallback):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if math.isfinite(number) else fallback
+
+
+def _sample(terrain, x, y):
+    """(slope, aspect, z) at a point, whatever kind of terrain this is."""
+    stepper = SlopeStepper(terrain, STEP_DIRECTIONAL)
+    return stepper.sample(x, y)
+
+
 def plants_layer(result: SlopeGridResult, crs_authid: str,
                  name: str = "Piante", zone: str = "",
                  apply_symbology: bool = True):

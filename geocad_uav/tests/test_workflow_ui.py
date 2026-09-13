@@ -114,13 +114,14 @@ check_true("il dock del flusso e' un QDockWidget",
            workspace.workflow.inherits("QDockWidget"))
 check_true("...e contiene un QListWidget",
            isinstance(workspace.workflow.list, QListWidget))
-check("gli step sono undici", workspace.workflow.list.count(), 11)
+check("gli step sono dodici", workspace.workflow.list.count(), 12)
 labels = [workspace.workflow.list.item(i).text()
           for i in range(workspace.workflow.list.count())]
 print("        {0}".format(labels))
 for expected in ("1. Area", "2. Terreno", "3. Vincoli", "4. Zone",
                  "5. Specie", "6. Sesti", "7. Orientamento", "8. Genera",
-                 "9. Ottimizza", "10. Verifica", "11. Elaborati"):
+                 "9. Ottimizza", "10. Verifica", "11. Editing",
+                 "12. Elaborati"):
     check_true("lo step '{0}' c'e'".format(expected), expected in labels)
 
 check_true("il dock del contesto e' un QDockWidget",
@@ -147,8 +148,8 @@ check("lo step Specie apre la scheda Specie",
 workspace.workflow.list.setCurrentRow(5)
 check("lo step Sesti apre la scheda Sesto",
       context.scheme_panel.tabs.currentIndex(), wf.SchemePanel.TAB_SCHEME)
-check("le altre nove pagine sono distinte",
-      len({v for k, v in seen.items() if k not in ("species", "scheme")}), 9)
+check("le altre dieci pagine sono distinte",
+      len({v for k, v in seen.items() if k not in ("species", "scheme")}), 10)
 
 # --------------------------------------------------------------------------
 # U2 - the status bar, and the states of the steps

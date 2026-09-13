@@ -32,6 +32,7 @@ from qgis.PyQt.QtWidgets import QMainWindow                     # noqa: E402
 from geocad_uav import plugin as plugin_mod                     # noqa: E402
 from geocad_uav.cad import tools as cad_tools                   # noqa: E402
 from geocad_uav.cad.tools import base as tb                     # noqa: E402
+from geocad_uav.gui import workflow as wf                       # noqa: E402
 
 FAILURES = []
 SKIPS = []
@@ -166,9 +167,9 @@ check("the three algorithm launchers went to the menu",
 print("\n== U2: toggle shows and hides the dock ==")
 # v1.14.0: the workflow dock and the context dock joined the old one.
 check("three docks registered", len(iface.docks), 3)
-check_true("the workflow dock is on the left and lists eleven steps",
+check_true("the workflow dock is on the left and lists every step",
            plugin.workspace is not None
-           and plugin.workspace.workflow.list.count() == 11)
+           and plugin.workspace.workflow.list.count() == len(wf.STEPS))
 check_true("the context dock holds a stack of panels",
            plugin.workspace.context.stack.count() >= 10)
 dock = plugin.dock

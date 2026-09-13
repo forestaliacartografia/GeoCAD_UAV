@@ -81,7 +81,8 @@ STEPS = (
     ("generate", "8. Genera"),
     ("optimise", "9. Ottimizza"),
     ("verify", "10. Verifica"),
-    ("outputs", "11. Elaborati"),
+    ("edit", "11. Editing"),
+    ("outputs", "12. Elaborati"),
 )
 
 #: Visual state of one step. Derived from the model, never set by a widget
@@ -184,6 +185,10 @@ class ProjectState(QObject):
         self.cadastre = None                    # CadastralResult
         self.cadastre_task = None               # the query in flight
         self.plants_layer = None
+        #: How many plants the operator placed by hand, and whether the plan
+        #: on the layer has diverged from the one the generator produced.
+        self.added_plants = 0
+        self.edited = False
         self.scenarios = []
         self.anomalies = []
         #: Set by the Verify panel when it actually ran. An empty anomaly
@@ -238,6 +243,7 @@ class ProjectState(QObject):
         self.set_status("generate",
                         DONE if self.result is not None else NOT_STARTED)
         self.set_status("optimise", DONE if self.scenarios else NOT_STARTED)
+        self.set_status("edit", DONE if self.edited else NOT_STARTED)
         if self.result is None or not self.verified:
             self.set_status("verify", NOT_STARTED)
         else:
@@ -337,6 +343,142 @@ class ProjectState(QObject):
         return density_mod.density_from_spacing(
             self.spec.pattern, self.spec.plant_distance_m,
             self.spec.row_distance_m)
+
+    def sync_plants_from_layer(self):
+        """Take the plan back from the layer the operator edited.
+
+        Once a plant can be moved, added or deleted on the map, the layer is
+        the plan and the generator's output is history. Everything an
+        operator is shown afterwards -- the count, the density, the mix, the
+        anomalies, the export -- is re-derived from here, so nothing they
+        read is a number from before the edit.
+
+        Returns ``(count, added)``, or ``None`` when there is nothing to
+        take back.
+        """
+        layer = self.plants_layer
+        if layer is None or self.result is None:
+            return None
+        records, added = spacing_mod.plants_from_layer(
+            layer, terrain=self.terrain)
+        # "Edited" has to include a plant that only moved: the count is the
+        # same, the ids are the same, and the plan is not.
+        def _signature(plants):
+            return {record.plant_id: (round(record.x, 4), round(record.y, 4),
+                                      composition_mod.species_of(record))
+                    for record in plants}
+
+        changed = _signature(self.result.plants) != _signature(records)
+        self.result.plants = records
+        self.added_plants = spacing_mod.added_plants(records)
+        self.composition = composition_mod.from_records(
+            records, layout=(self.composition.layout
+                             if self.composition is not None
+                             else composition_mod.LAYOUT_UNIFORM))
+        self.edited = self.edited or changed
+        self.verified = False
+        self.refresh_status()
+        return len(records), added
+
+    def set_species_on(self, feature_ids, key: str) -> int:
+        """Give the chosen species to the plants an operator selected."""
+        layer = self.plants_layer
+        if layer is None or not feature_ids or not key:
+            return 0
+        index = layer.fields().indexOf("specie")
+        if index < 0:
+            return 0
+        started = not layer.isEditable()
+        if started:
+            layer.startEditing()
+        changed = 0
+        for feature_id in feature_ids:
+            if layer.changeAttributeValue(feature_id, index, key):
+                changed += 1
+        if started:
+            layer.commitChanges()
+        if changed:
+            self.edited = True
+            symbology_mod.apply_species_symbology(layer)
+            layer.triggerRepaint()
+        return changed
+
+    def validate(self) -> list:
+        """Check the plan that is actually there, against what was asked.
+
+        On the project and not inside the Verify panel, because the
+        Editing panel has to be able to ask the same question after an
+        operator moves a plant, and two copies of these checks would
+        drift apart the first time one of them was corrected.
+
+        Every check is measured on ``result.plants`` as they stand: after
+        an edit those are the records read back off the layer.
+        """
+        anomalies = []
+        result = self.result
+        geometry = self.usable_geometry()
+        if result is None or geometry is None:
+            self.anomalies = []
+            self.verified = False
+            self.refresh_status()
+            return []
+
+        outside = [p for p in result.plants
+                   if not geometry.intersects(QgsGeometry.fromWkt(
+                       "POINT({0} {1})".format(p.x, p.y)))]
+        if outside:
+            anomalies.append(tr("{0} piante fuori dalla superficie utile")
+                             .format(len(outside)))
+
+        excluded = (self.area.esclusa()
+                    if self.area is not None else None)
+        if excluded is not None:
+            inside_exclusion = [p for p in result.plants
+                                if excluded.intersects(QgsGeometry.fromWkt(
+                                    "POINT({0} {1})".format(p.x, p.y)))]
+            if inside_exclusion:
+                anomalies.append(
+                    tr("{0} piante dentro un'area esclusa").format(
+                        len(inside_exclusion)))
+
+        # The mean spacing is a check on a *regular* stand. Once the
+        # naturaliform pass has taken plants out, the gaps left behind pull
+        # the mean up by design, and flagging that would be reporting the
+        # feature as a fault. What still has to hold there is the minimum,
+        # checked below.
+        thinned = (self.natural_outcome is not None
+                   and self.natural_outcome.removed_total > 0)
+        wanted = self.spec.effective_real_spacing[0]
+        measured = result.mean_real_spacing()
+        if not thinned and measured and abs(measured - wanted) > 0.05 * wanted:
+            anomalies.append(
+                tr("Distanza media {0:.2f} m contro {1:.2f} m richiesti")
+                .format(measured, wanted))
+
+        floor = (self.natural.min_distance_m
+                 if self.natural is not None else 0.0)
+        if floor > 0.0:
+            measured = natural_mod.measure_min_distance(result.plants)
+            if math.isfinite(measured) and measured < floor - 1e-6:
+                anomalies.append(
+                    tr("Distanza minima {0:.2f} m contro {1:.2f} m "
+                       "richiesti").format(measured, floor))
+
+        if self.shares:
+            mix = self.mix()
+            achieved = composition_mod.achieved_percentages(result.plants)
+            for key, percent in mix.weights().items():
+                got = achieved.get(key, 0.0)
+                if abs(got - 100.0 * percent) > 1.0:
+                    anomalies.append(
+                        tr("{0}: {1:.1f} % invece di {2:.1f} %").format(
+                            key, got, 100.0 * percent))
+
+        self.anomalies = anomalies
+        self.verified = True
+        self.refresh_status()
+        return anomalies
+
 
     # -- the contours ------------------------------------------------------
 
@@ -1641,82 +1783,260 @@ class VerifyPanel(Panel):
         self.run_button.clicked.connect(self.run)
 
     def run(self) -> list:
-        """Every check is measured against the real geometry."""
-        anomalies = []
-        result = self.state.result
-        geometry = self.state.usable_geometry()
-        if result is None or geometry is None:
+        """Ask the project to check itself, and show the answer."""
+        if self.state.result is None or self.state.usable_geometry() is None:
             self.verdict.setText(tr("Genera prima l'impianto."))
             self.state.verified = False
-            return anomalies
+            return []
+        anomalies = self.state.validate()
+        self.show_verdict(anomalies)
+        return anomalies
 
-        outside = [p for p in result.plants
-                   if not geometry.intersects(QgsGeometry.fromWkt(
-                       "POINT({0} {1})".format(p.x, p.y)))]
-        if outside:
-            anomalies.append(tr("{0} piante fuori dalla superficie utile")
-                             .format(len(outside)))
-
-        excluded = (self.state.area.esclusa()
-                    if self.state.area is not None else None)
-        if excluded is not None:
-            inside_exclusion = [p for p in result.plants
-                                if excluded.intersects(QgsGeometry.fromWkt(
-                                    "POINT({0} {1})".format(p.x, p.y)))]
-            if inside_exclusion:
-                anomalies.append(
-                    tr("{0} piante dentro un'area esclusa").format(
-                        len(inside_exclusion)))
-
-        # The mean spacing is a check on a *regular* stand. Once the
-        # naturaliform pass has taken plants out, the gaps left behind pull
-        # the mean up by design, and flagging that would be reporting the
-        # feature as a fault. What still has to hold there is the minimum,
-        # checked below.
-        thinned = (self.state.natural_outcome is not None
-                   and self.state.natural_outcome.removed_total > 0)
-        wanted = self.state.spec.effective_real_spacing[0]
-        measured = result.mean_real_spacing()
-        if not thinned and measured and abs(measured - wanted) > 0.05 * wanted:
-            anomalies.append(
-                tr("Distanza media {0:.2f} m contro {1:.2f} m richiesti")
-                .format(measured, wanted))
-
-        floor = (self.state.natural.min_distance_m
-                 if self.state.natural is not None else 0.0)
-        if floor > 0.0:
-            measured = natural_mod.measure_min_distance(result.plants)
-            if math.isfinite(measured) and measured < floor - 1e-6:
-                anomalies.append(
-                    tr("Distanza minima {0:.2f} m contro {1:.2f} m "
-                       "richiesti").format(measured, floor))
-
-        if self.state.shares:
-            mix = self.state.mix()
-            achieved = composition_mod.achieved_percentages(result.plants)
-            for key, percent in mix.weights().items():
-                got = achieved.get(key, 0.0)
-                if abs(got - 100.0 * percent) > 1.0:
-                    anomalies.append(
-                        tr("{0}: {1:.1f} % invece di {2:.1f} %").format(
-                            key, got, 100.0 * percent))
-
-        self.state.anomalies = anomalies
-        self.state.verified = True
-        self.state.refresh_status()
+    def show_verdict(self, anomalies) -> None:
         if anomalies:
             self.verdict.setText(
                 "<b style='color:{0}'>{1}</b>".format(
                     STATE_COLORS[WARNING],
                     tr("{0} ANOMALIE").format(len(anomalies))))
-            self.report.setPlainText("\n".join("- " + a for a in anomalies))
+            self.report.setPlainText(
+                "\n".join("- " + a for a in anomalies))
         else:
             self.verdict.setText("<b style='color:{0}'>{1}</b>".format(
                 STATE_COLORS[DONE], tr("PROGETTO CONFORME")))
-            self.report.setPlainText("\n".join((
-                tr("Area, vincoli, distanze, densita', specie e geometrie "
-                   "verificate."),)))
+            self.report.setPlainText(tr(
+                "Area, vincoli, distanze, densita', specie e geometrie "
+                "verificate."))
+
+class EditPanel(Panel):
+    """Step 11: the plan, changed on the map, and re-checked.
+
+    A generated plan is a proposal. The operator knows there is a rock where
+    plant 412 landed, that the corner by the track wants three more, and that
+    the row along the ditch should be oaks. Until they can do that on the map
+    and see the numbers follow, the plan is a picture.
+
+    The editing itself is QGIS's own: the layer is put into edit mode and the
+    standard digitising tools move, add and delete. This panel does the part
+    QGIS cannot know about -- take the plan back off the layer afterwards,
+    re-read the ground under every plant that moved, recount the mix, and run
+    the same checks the Verify step runs.
+    """
+
+    def __init__(self, state, parent=None):
+        super().__init__(tr("Editing dell'impianto"), state, parent)
+
+        form = QFormLayout()
+        self.count_label = QLabel(DASH)
+        self.added_label = QLabel(DASH)
+        self.mode_label = QLabel(tr("non modificabile"))
+        form.addRow(tr("Piante"), self.count_label)
+        form.addRow(tr("Aggiunte a mano"), self.added_label)
+        form.addRow(tr("Stato layer"), self.mode_label)
+        self.layout.addLayout(form)
+
+        self.edit_button = QPushButton(tr("Abilita modifica"))
+        self.edit_button.setCheckable(True)
+        self.layout.addWidget(self.edit_button)
+
+        tools = QGroupBox(tr("Strumenti QGIS"))
+        tools_row = QHBoxLayout(tools)
+        self.add_button = QPushButton(tr("Aggiungi"))
+        self.move_button = QPushButton(tr("Sposta"))
+        self.delete_button = QPushButton(tr("Elimina"))
+        for button in (self.add_button, self.move_button, self.delete_button):
+            button.setEnabled(False)
+            tools_row.addWidget(button)
+        self.layout.addWidget(tools)
+
+        species = QGroupBox(tr("Specie della selezione"))
+        species_form = QFormLayout(species)
+        self.species_combo = QComboBox()
+        self.assign_button = QPushButton(tr("Assegna alla selezione"))
+        species_form.addRow(tr("Specie"), self.species_combo)
+        species_form.addRow(self.assign_button)
+        self.selection_label = QLabel(tr("nessuna pianta selezionata"))
+        species_form.addRow(tr("Selezione"), self.selection_label)
+        self.layout.addWidget(species)
+
+        self.apply_button = QPushButton(tr("Applica modifiche e rivalida"))
+        self.layout.addWidget(self.apply_button)
+        self.outcome = QTextBrowser()
+        self.outcome.setMaximumHeight(150)
+        self.layout.addWidget(self.outcome)
+        self.layout.addStretch(1)
+
+        self.edit_button.toggled.connect(self.set_editing)
+        self.add_button.clicked.connect(lambda: self.trigger("AddFeature"))
+        self.move_button.clicked.connect(lambda: self.trigger("MoveFeature"))
+        self.delete_button.clicked.connect(self.delete_selected)
+        self.assign_button.clicked.connect(self.assign_species)
+        self.apply_button.clicked.connect(self.apply_edits)
+        state.changed.connect(self.refresh)
+
+    # -- the layer, and QGIS's own tools -----------------------------------
+
+    def layer(self):
+        return self.state.plants_layer
+
+    def set_editing(self, on: bool) -> bool:
+        """Put the plants layer into QGIS edit mode, or take it out.
+
+        Leaving edit mode commits: an operator who pressed the button to
+        stop editing means the changes to be kept, and a layer left dirty
+        would ask them again on the way out of QGIS.
+        """
+        layer = self.layer()
+        if layer is None:
+            self.edit_button.setChecked(False)
+            self.warn(GeoCadError(
+                "no plants layer",
+                user_message=tr("Genera prima l'impianto.")))
+            return False
+        if on and not layer.isEditable():
+            layer.startEditing()
+        elif not on and layer.isEditable():
+            layer.commitChanges()
+            self.apply_edits()
+        if self.state.iface is not None:
+            try:
+                self.state.iface.setActiveLayer(layer)
+            except (AttributeError, RuntimeError):
+                pass
+        self.refresh()
+        return bool(layer.isEditable())
+
+    def trigger(self, action_name: str) -> bool:
+        """Fire one of QGIS's digitising actions on the plants layer.
+
+        QGIS's own tools, not a second digitiser: the map tool that adds a
+        point here is the one the operator already knows, with the same
+        snapping and the same undo stack.
+        """
+        layer = self.layer()
+        iface = self.state.iface
+        if layer is None or iface is None:
+            return False
+        if not layer.isEditable():
+            layer.startEditing()
+        try:
+            iface.setActiveLayer(layer)
+            getattr(iface, "action" + action_name)().trigger()
+        except (AttributeError, RuntimeError):
+            return False
+        return True
+
+    def delete_selected(self) -> int:
+        """Remove the selected plants. Nothing selected removes nothing."""
+        layer = self.layer()
+        if layer is None:
+            return 0
+        chosen = list(layer.selectedFeatureIds())
+        if not chosen:
+            self.warn(GeoCadError(
+                "nothing selected",
+                user_message=tr("Seleziona prima le piante da eliminare.")))
+            return 0
+        started = not layer.isEditable()
+        if started:
+            layer.startEditing()
+        layer.deleteFeatures(chosen)
+        if started:
+            layer.commitChanges()
+        self.state.edited = True
+        layer.triggerRepaint()
+        self.apply_edits()
+        return len(chosen)
+
+    # -- species -----------------------------------------------------------
+
+    def reload_species(self) -> int:
+        current = self.species_combo.currentData()
+        self.species_combo.clear()
+        for key, _percent in self.state.shares:
+            try:
+                record = self.state.catalog.get(key)
+            except GeoCadError:
+                record = None       # a key the catalogue never met: show it
+            self.species_combo.addItem(
+                record.name if record is not None and record.name else key,
+                key)
+        if current is not None:
+            index = self.species_combo.findData(current)
+            if index >= 0:
+                self.species_combo.setCurrentIndex(index)
+        return self.species_combo.count()
+
+    def assign_species(self) -> int:
+        layer = self.layer()
+        if layer is None:
+            return 0
+        chosen = list(layer.selectedFeatureIds())
+        if not chosen:
+            self.warn(GeoCadError(
+                "nothing selected",
+                user_message=tr("Seleziona prima le piante da cambiare.")))
+            return 0
+        key = self.species_combo.currentData()
+        if not key:
+            self.warn(GeoCadError(
+                "no species chosen",
+                user_message=tr("Scegli prima una specie fra quelle del "
+                                "progetto.")))
+            return 0
+        changed = self.state.set_species_on(chosen, str(key))
+        self.apply_edits()
+        return changed
+
+    # -- take the plan back ------------------------------------------------
+
+    def apply_edits(self) -> list:
+        """Read the layer, recount, and run the project's own checks."""
+        synced = self.state.sync_plants_from_layer()
+        if synced is None:
+            self.outcome.setPlainText(tr("Nessun impianto da modificare."))
+            return []
+        anomalies = self.state.validate()
+        self.show_outcome(synced, anomalies)
         return anomalies
+
+    def show_outcome(self, synced, anomalies) -> None:
+        count, added = synced
+        lines = [tr("{0:,} piante sul layer, {1:,} aggiunte a mano").format(
+            count, added)]
+        achieved = composition_mod.achieved_percentages(
+            self.state.result.plants if self.state.result else [])
+        for key in sorted(achieved):
+            lines.append("  {0}: {1:.1f} %".format(key, achieved[key]))
+        if anomalies:
+            lines.append("")
+            lines.append(tr("ANOMALIE"))
+            lines.extend("  - " + text for text in anomalies)
+        else:
+            lines.append("")
+            lines.append(tr("Nessuna anomalia dopo la modifica."))
+        self.outcome.setPlainText("\n".join(lines))
+
+    def refresh(self) -> None:
+        layer = self.layer()
+        self.count_label.setText(
+            "{0:,}".format(self.state.result.count) if self.state.result
+            else DASH)
+        self.added_label.setText("{0:,}".format(self.state.added_plants))
+        editable = bool(layer is not None and layer.isEditable())
+        self.mode_label.setText(tr("in modifica") if editable
+                                else tr("non modificabile"))
+        if self.edit_button.isChecked() != editable:
+            self.edit_button.blockSignals(True)
+            self.edit_button.setChecked(editable)
+            self.edit_button.blockSignals(False)
+        for button in (self.add_button, self.move_button, self.delete_button):
+            button.setEnabled(editable)
+        self.edit_button.setEnabled(layer is not None)
+        selected = len(layer.selectedFeatureIds()) if layer is not None else 0
+        self.selection_label.setText(
+            tr("{0:,} piante selezionate").format(selected) if selected
+            else tr("nessuna pianta selezionata"))
+        self.reload_species()
 
 
 class OutputsPanel(Panel):
@@ -1861,6 +2181,7 @@ class ContextDock(QDockWidget):
         self.generate_panel = GeneratePanel(state)
         self.optimise_panel = OptimisePanel(state)
         self.verify_panel = VerifyPanel(state)
+        self.edit_panel = EditPanel(state)
         self.outputs_panel = OutputsPanel(state)
 
         #: step key -> (page, tab index or None). Specie and Sesti share the
@@ -1876,13 +2197,15 @@ class ContextDock(QDockWidget):
             "generate": (self.generate_panel, None),
             "optimise": (self.optimise_panel, None),
             "verify": (self.verify_panel, None),
+            "edit": (self.edit_panel, None),
             "outputs": (self.outputs_panel, None),
         }
         for panel in (self.area_panel, self.terrain_panel,
                       self.constraints_panel, self.zones_panel,
                       self.scheme_panel, self.orientation_panel,
                       self.generate_panel, self.optimise_panel,
-                      self.verify_panel, self.outputs_panel):
+                      self.verify_panel, self.edit_panel,
+                      self.outputs_panel):
             holder = QScrollArea()
             holder.setWidgetResizable(True)
             holder.setWidget(panel)

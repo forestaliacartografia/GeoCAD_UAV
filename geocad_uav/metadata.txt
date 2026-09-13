@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.18.0
+version=1.19.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,30 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.18.0
+changelog=1.19.0
+    - Editing interattivo dell'impianto, come undicesimo step del flusso.
+      Un piano generato e' una proposta: l'operatore sa che dove e'
+      finita la pianta 412 c'e' un masso, che l'angolo verso la pista ne
+      vuole tre in piu' e che la fila lungo il fosso va a querce.
+    - Si modifica con gli strumenti di QGIS, non con un secondo
+      digitalizzatore: il layer entra in modifica e i comandi Aggiungi,
+      Sposta ed Elimina sono quelli che l'operatore gia' conosce, con lo
+      stesso snap e lo stesso annulla.
+    - Dopo ogni modifica il progetto riprende il piano dal layer. Una
+      pianta spostata viene riletta sul DEM: quota, pendenza ed
+      esposizione sono quelle di dove sta adesso, non di dove era stata
+      generata.
+    - Una pianta aggiunta a mano prende un identificativo libero e una
+      fila propria, e resta senza specie finche' qualcuno gliela assegna:
+      si vede nella composizione invece di contare in silenzio come
+      specie maggioritaria.
+    - Cambio specie sulla selezione, con ricolorazione del layer e
+      ricalcolo delle percentuali effettive.
+    - La validazione e' passata dal pannello Verifica al progetto, cosi'
+      che l'Editing possa chiedere lo stesso giudizio: due copie degli
+      stessi controlli avrebbero divergito alla prima correzione. I due
+      pannelli riportano ora anomalie identiche, verificato.
+    1.18.0
     - Impianto su curve di livello, dal pannello alla mappa. Il modulo
       calcolava le file a quota costante da M04 e nessun operatore
       poteva arrivarci: nell'interfaccia non esisteva la parola curva.

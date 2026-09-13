@@ -298,6 +298,25 @@ def _by_group(records, group_size: int, seed: int) -> list:
     return out
 
 
+def from_records(plants, layout: str = LAYOUT_UNIFORM) -> Composition:
+    """The composition a set of plants already carries.
+
+    :func:`assign` decides; this one only reads. It exists because once an
+    operator can change a plant's species on the map, the composition shown
+    afterwards has to be the one on the ground and not the one that was
+    decided -- and counting it in two places would let the two disagree.
+    """
+    counts = {}
+    assigned = {}
+    for record in plants:
+        key = species_of(record)
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        assigned[record.plant_id] = key
+    return Composition(counts=counts, assigned=assigned, layout=layout)
+
+
 def achieved_percentages(plants) -> dict:
     """What a set of already-assigned plants actually contains."""
     counts = {}
