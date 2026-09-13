@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.22.0
+version=1.23.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,36 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.22.0
+changelog=1.23.0
+    - Il progetto si salva e si riapre. Fino a ieri ore di lavoro -- area
+      rilevata sul catasto, vincoli misurati, zone tagliate, specie
+      decise, impianto generato e poi corretto pianta per pianta --
+      finivano con la chiusura di QGIS.
+    - Il file (.gcuav) contiene le decisioni e il risultato che hanno
+      prodotto. Le geometrie escono in WKT col loro sistema di
+      riferimento accanto; le piante escono come record, perche' un
+      impianto corretto a mano non si riottiene rigenerandolo e un file
+      che rigenerasse in silenzio un impianto diverso sarebbe peggio di
+      nessun file.
+    - Il DEM non viene scritto nel file: e' un raster, puo' pesare
+      centinaia di megabyte e ha un percorso. Il percorso viene salvato e
+      riletto; se il file si e' spostato il progetto si apre senza
+      terreno e lo dichiara, invece di aprirsi con un terreno che non e'
+      quello su cui il piano e' stato fatto.
+    - Barra del progetto sopra gli step: Nuovo, Apri, Salva, Salva con
+      nome, Annulla, Ripeti, Aggiorna, Impostazioni, con le scorciatoie
+      consuete.
+    - Annulla e Ripeti lavorano su istantanee dell'intero progetto e
+      annullano un'azione dell'operatore, non un carattere digitato:
+      un'area presa, dei vincoli applicati, delle zone tagliate, un
+      impianto generato, una modifica confermata.
+    - Un piano riaperto, o ripristinato con Annulla, torna sulla mappa
+      come layer: prima il piano c'era e il layer no, oppure restavano
+      disegnate le piante di un piano che non esisteva piu'.
+    - Un file danneggiato, di un altro programma o di una versione di
+      formato piu' recente viene rifiutato dicendo quale, invece di
+      essere letto a meta'.
+    1.22.0
     - L'impianto naturaliforme e' uno step del flusso, il nono, con un
       pannello suo. Stava dentro una scheda del Sesto, dove tre
       lavorazioni diverse (radure, diradamento casuale, distanza minima)

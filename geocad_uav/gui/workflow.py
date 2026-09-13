@@ -30,14 +30,18 @@ maps a row to a page and, where it matters, to a tab.
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from typing import Optional
 
-from qgis.core import (Qgis, QgsCoordinateReferenceSystem, QgsGeometry,
-                       QgsProject, QgsWkbTypes)
+from qgis.core import (Qgis, QgsApplication,
+                       QgsCoordinateReferenceSystem, QgsGeometry, QgsProject,
+                       QgsWkbTypes)
 from qgis.PyQt.QtCore import QObject, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QIcon, QPixmap
 from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
+                                 QFileDialog, QToolBar,
                                  QDockWidget, QDoubleSpinBox, QFormLayout,
                                  QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                  QLineEdit, QListWidget, QListWidgetItem,
@@ -64,6 +68,7 @@ from ..forest.reforestation import zones as zones_mod
 from ..io import cadastre as cadastre_mod
 from ..io import cartography as carto_mod
 from ..io import documents as docs_mod
+from ..io import project_file as project_mod
 from . import map_layers as map_layers_mod
 from .map_layers import ProjectLayers
 
@@ -72,6 +77,10 @@ M2_PER_HA = 10_000.0
 #: Grown around the project before a DEM window is read, so the slope at the
 #: very edge comes from real neighbours and not from the padding.
 DEM_MARGIN_M = 50.0
+
+#: How many operator actions can be taken back. Snapshots are the whole
+#: project serialised, so this is a memory budget as much as a policy.
+UNDO_DEPTH = 25
 
 #: The workflow, in order. ``key`` is what the state reports status against.
 STEPS = (
@@ -220,7 +229,178 @@ class ProjectState(QObject):
         #: the operator is standing on keeps its marker until it earns a
         #: better one.
         self.current_step = STEPS[0][0]
+        #: Where the project was last written, and whether it has changed
+        #: since. Both are what a Save button has to know.
+        self.path = ""
+        self.dirty = False
+        #: Snapshots of the whole project, the last one being what is on
+        #: screen now. One entry per operator action, not per keystroke:
+        #: undo should take back a decision, not half of one.
+        self._undo = []
+        self._redo = []
         self._status = {key: NOT_STARTED for key, _label in STEPS}
+
+    # -- the project as a whole --------------------------------------------
+
+    def clear(self) -> None:
+        """Empty the project, keeping nothing but the catalogue.
+
+        The catalogue stays because it is a reference table, not a decision:
+        an operator starting a second project in the same session should not
+        have to retype the species they added to the first.
+        """
+        self.layers.remove_all()
+        if self.terrain is not None:
+            self.terrain.release()
+        self.area = None
+        self.crs = None
+        self.terrain = None
+        self.contours = []
+        self.contour_interval_m = curves_mod.DEFAULT_INTERVAL_M
+        self.constraints = constraints_mod.ConstraintSet()
+        self.shares = []
+        self.spec = spacing_mod.SlopeSpacing(plant_distance_m=3.0,
+                                             row_distance_m=3.0)
+        self.zones = zones_mod.ZoneSet()
+        self.natural = natural_mod.NaturalSettings()
+        self.natural_outcome = None
+        self.glades = []
+        self.result = None
+        self.composition = None
+        self.cadastre = None
+        self.plants_layer = None
+        self.added_plants = 0
+        self.edited = False
+        self.layout = None
+        self.layout_spec = carto_mod.LayoutSpec()
+        self.scenarios = []
+        self.anomalies = []
+        self.verified = False
+        self.orientation_applied = False
+        self.scheme_chosen = False
+        self.glades_placed = False
+        self.path = ""
+        self.dirty = False
+        self._undo = []
+        self._redo = []
+        self.refresh_status()
+
+    # -- taking it back ----------------------------------------------------
+
+    def snapshot(self) -> str:
+        """The project as one comparable string."""
+        return json.dumps(project_mod.to_dict(self), sort_keys=True,
+                          ensure_ascii=False)
+
+    def checkpoint(self) -> bool:
+        """Remember the project as it stands, if it actually changed.
+
+        Called at the operator's actions -- an area taken, constraints
+        applied, zones cut, a stand generated, an edit committed -- and not
+        at every spin box, so that one press of Undo takes back one thing
+        the operator did.
+        """
+        current = self.snapshot()
+        if self._undo and self._undo[-1] == current:
+            return False
+        self._undo.append(current)
+        del self._undo[:-UNDO_DEPTH]
+        self._redo = []
+        self.dirty = True
+        self.changed.emit()
+        return True
+
+    def reset_history(self) -> None:
+        self._undo = [self.snapshot()]
+        self._redo = []
+
+    @property
+    def can_undo(self) -> bool:
+        return len(self._undo) >= 2
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+    def _restore(self, snapshot: str) -> None:
+        project_mod.from_dict(self, json.loads(snapshot))
+        self.materialise_plants()
+        self.draw()
+        self.refresh_status()
+
+    def materialise_plants(self):
+        """Put the plan on the map as a layer, or take the old one away.
+
+        A project read from a file, or stepped back to with Undo, has a plan
+        and no layer. Without this the operator sees the area and the zones
+        come back while the plants they had generated stay exactly as they
+        were -- or, worse, the plants of a plan that no longer exists stay
+        drawn over the one that does.
+        """
+        previous = self.plants_layer
+        self.plants_layer = None
+        self.layers.remove("plants")
+        if previous is not None:
+            try:
+                QgsProject.instance().removeMapLayer(previous.id())
+            except (AttributeError, RuntimeError):
+                pass
+        if self.result is None or not self.result.plants or self.crs is None:
+            return None
+        layer = spacing_mod.plants_layer(self.result, self.crs.authid(),
+                                         name=tr("Piante"),
+                                         zone=tr("Progetto"))
+        QgsProject.instance().addMapLayer(layer)
+        self.plants_layer = layer
+        self.layers.adopt("plants", layer)
+        self.layers.refresh_canvas()
+        return layer
+
+    def undo(self) -> bool:
+        """Go back one action. The plants layer is redrawn from the plan."""
+        if not self.can_undo:
+            return False
+        # clear() empties the history, so the stacks are taken out of the
+        # way and put back around the restore.
+        undo, redo = self._undo, self._redo
+        current = undo.pop()
+        self._restore(undo[-1])
+        redo.append(current)
+        self._undo, self._redo = undo, redo
+        self.dirty = True
+        self.changed.emit()
+        return True
+
+    def redo(self) -> bool:
+        if not self.can_redo:
+            return False
+        undo, redo = self._undo, self._redo
+        snapshot = redo.pop()
+        self._restore(snapshot)
+        undo.append(snapshot)
+        self._undo, self._redo = undo, redo
+        self.dirty = True
+        self.changed.emit()
+        return True
+
+    def save_to(self, path: str) -> str:
+        """Write the project, and remember where."""
+        written = project_mod.save(self, path)
+        self.path = written
+        self.dirty = False
+        self.refresh_status()
+        return written
+
+    def load_from(self, path: str) -> "list[str]":
+        """Read a project, draw it, and remember where it came from."""
+        warnings = project_mod.load(self, path)
+        self.path = path
+        self.dirty = False
+        self.reset_history()
+        self.materialise_plants()
+        self.draw()
+        self.refresh_status()
+        return warnings
 
     # -- status ------------------------------------------------------------
 
@@ -271,6 +451,12 @@ class ProjectState(QObject):
                         else NOT_STARTED)
         self.changed.emit()
 
+    def touch(self) -> None:
+        """Mark the project as changed since it was last written."""
+        if not self.dirty:
+            self.dirty = True
+            self.changed.emit()
+
     # -- surfaces ----------------------------------------------------------
 
     @property
@@ -303,6 +489,7 @@ class ProjectState(QObject):
         # cut from the old one would be planting somewhere else.
         self.zones = zones_mod.ZoneSet()
         self.apply_constraints()
+        self.checkpoint()
 
     def apply_constraints(self) -> None:
         """Re-derive the usable surface from the constraints as they stand."""
@@ -557,6 +744,7 @@ class ProjectState(QObject):
         self.contours = rows
         self.contour_interval_m = float(interval_m)
         self.draw()
+        self.checkpoint()
         self.refresh_status()
         return rows
 
@@ -593,6 +781,7 @@ class ProjectState(QObject):
         self.layers.draw_parcels(self.cadastre)
         self.layers.refresh_canvas()
         self.cadastralDataReady.emit(data)
+        self.checkpoint()
         self.refresh_status()
 
 
@@ -600,8 +789,32 @@ class ProjectState(QObject):
 # Left dock: the workflow
 # --------------------------------------------------------------------------
 
+#: The project commands, above the steps: label, method, shortcut, tooltip.
+#: A table rather than seven near-identical blocks of widget code.
+PROJECT_COMMANDS = (
+    ("new", "Nuovo", "on_new", "Ctrl+N",
+     "Svuota il progetto e ricomincia"),
+    ("open", "Apri", "on_open", "Ctrl+O",
+     "Apre un progetto di rimboschimento"),
+    ("save", "Salva", "on_save", "Ctrl+S",
+     "Salva il progetto dove e' stato aperto"),
+    ("save_as", "Salva con nome", "on_save_as", "Ctrl+Shift+S",
+     "Salva il progetto in un nuovo file"),
+    (None, None, None, None, None),
+    ("undo", "Annulla", "on_undo", "Ctrl+Z",
+     "Annulla l'ultima operazione sul progetto"),
+    ("redo", "Ripeti", "on_redo", "Ctrl+Y",
+     "Ripete l'operazione annullata"),
+    (None, None, None, None, None),
+    ("refresh", "Aggiorna", "on_refresh", "F5",
+     "Ridisegna il progetto sulla mappa"),
+    ("settings", "Impostazioni", "on_settings", "",
+     "Apre le impostazioni del plugin"),
+)
+
+
 class WorkflowDock(QDockWidget):
-    """The eleven steps, with the state each one is in."""
+    """The steps, the state each one is in, and the project commands."""
 
     stepChanged = pyqtSignal(int)
 
@@ -609,6 +822,19 @@ class WorkflowDock(QDockWidget):
         super().__init__(tr("Rimboschimento"), parent)
         self.setObjectName("GeoCadWorkflowDock")
         self.state = state
+        self.actions = {}
+        self.toolbar = QToolBar(tr("Progetto"))
+        self.toolbar.setObjectName("GeoCadProjectToolbar")
+        for key, label, method, shortcut, tip in PROJECT_COMMANDS:
+            if key is None:
+                self.toolbar.addSeparator()
+                continue
+            action = self.toolbar.addAction(tr(label))
+            action.setToolTip(tr(tip))
+            if shortcut:
+                action.setShortcut(shortcut)
+            action.triggered.connect(getattr(self, method))
+            self.actions[key] = action
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
         self.list.setSelectionMode(
@@ -621,14 +847,147 @@ class WorkflowDock(QDockWidget):
         self.list.setCurrentRow(0)
         self.list.currentRowChanged.connect(self.stepChanged.emit)
 
+        self.file_label = QLabel(tr("progetto non salvato"))
+        self.file_label.setWordWrap(True)
+
         holder = QWidget()
         layout = QVBoxLayout(holder)
         layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.toolbar)
         layout.addWidget(self.list)
+        layout.addWidget(self.file_label)
         self.setWidget(holder)
         self.setMinimumWidth(150)
 
         state.statusChanged.connect(self.set_status)
+        state.changed.connect(self.refresh_commands)
+        self.refresh_commands()
+
+    # -- the project commands ----------------------------------------------
+
+    def refresh_commands(self) -> None:
+        """What can be pressed, and what the label under the list says."""
+        self.actions["undo"].setEnabled(self.state.can_undo)
+        self.actions["redo"].setEnabled(self.state.can_redo)
+        self.actions["save"].setEnabled(bool(self.state.path)
+                                        or self.state.area is not None)
+        if not self.state.path:
+            self.file_label.setText(tr("progetto non salvato"))
+            return
+        name = os.path.basename(self.state.path)
+        self.file_label.setText(
+            (tr("{0} - modificato") if self.state.dirty else tr("{0}"))
+            .format(name))
+
+    def warn(self, error) -> None:
+        message = (error.formatted() if isinstance(error, GeoCadError)
+                   else str(error))
+        iface = self.state.iface
+        if iface is not None:
+            try:
+                iface.messageBar().pushMessage("GeoCad UAV", message,
+                                               level=Qgis.Warning, duration=6)
+                return
+            except Exception:                                   # noqa: BLE001
+                pass
+        QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
+                                               Qgis.Warning)
+
+    def confirm_discard(self) -> bool:
+        """Ask before throwing away unsaved work. True means go ahead."""
+        if not self.state.dirty:
+            return True
+        if self.state.iface is None:
+            return True                 # headless: the caller decided
+        answer = QMessageBox.question(
+            self, tr("Progetto non salvato"),
+            tr("Il progetto ha modifiche non salvate. Continuare?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        return answer == QMessageBox.StandardButton.Yes
+
+    def on_new(self, *_args) -> bool:
+        if not self.confirm_discard():
+            return False
+        self.state.clear()
+        self.state.reset_history()
+        self.refresh_commands()
+        return True
+
+    def on_open(self, *_args, path: str = ""):
+        if not self.confirm_discard():
+            return None
+        if not path:
+            path, _filter = QFileDialog.getOpenFileName(
+                self, tr("Apri un progetto"), "",
+                "GeoCad UAV (*{0})".format(project_mod.SUFFIX))
+        if not path:
+            return None
+        try:
+            warnings = self.state.load_from(path)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return None
+        for warning in warnings:
+            self.warn(GeoCadError("project warning", user_message=warning))
+        self.refresh_commands()
+        return warnings
+
+    def on_save(self, *_args) -> str:
+        if not self.state.path:
+            return self.on_save_as()
+        return self._write(self.state.path)
+
+    def on_save_as(self, *_args, path: str = "") -> str:
+        if not path:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, tr("Salva il progetto"),
+                "progetto" + project_mod.SUFFIX,
+                "GeoCad UAV (*{0})".format(project_mod.SUFFIX))
+        if not path:
+            return ""
+        return self._write(path)
+
+    def _write(self, path: str) -> str:
+        try:
+            written = self.state.save_to(path)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return ""
+        self.refresh_commands()
+        return written
+
+    def on_undo(self, *_args) -> bool:
+        done = self.state.undo()
+        self.refresh_commands()
+        return done
+
+    def on_redo(self, *_args) -> bool:
+        done = self.state.redo()
+        self.refresh_commands()
+        return done
+
+    def on_refresh(self, *_args) -> bool:
+        self.state.draw()
+        self.state.refresh_status()
+        return True
+
+    def on_settings(self, *_args) -> bool:
+        """Open the plugin dock at its Impostazioni tab."""
+        iface = self.state.iface
+        if iface is None:
+            return False
+        try:
+            for dock in iface.mainWindow().findChildren(QDockWidget):
+                if dock.objectName() != "GeoCadUavDock":
+                    continue
+                dock.setVisible(True)
+                tabs = getattr(dock, "tabs", None)
+                if tabs is not None:
+                    tabs.setCurrentIndex(tabs.count() - 1)
+                return True
+        except (AttributeError, RuntimeError):
+            return False
+        return False
 
     def set_status(self, key: str, visual: str) -> None:
         for row in range(self.list.count()):
@@ -1023,6 +1382,7 @@ class TerrainPanel(Panel):
         self.state.terrain = analysis
         self.state.contours = []
         self.state.draw()
+        self.state.checkpoint()
         self.state.refresh_status()
         return analysis
 
@@ -1137,6 +1497,7 @@ class ConstraintsPanel(Panel):
                 self.state.constraints.clear_features(key)
         self.state.apply_constraints()
         self.state.draw()
+        self.state.checkpoint()
 
     def refresh(self) -> None:
         self.usable_label.setText(ha(self.state.usable_m2)
@@ -1222,6 +1583,7 @@ class ZonesPanel(Panel):
             self.warn(exc)
             return False
         self.state.draw()
+        self.state.checkpoint()
         self.state.refresh_status()
         return True
 
@@ -1250,6 +1612,7 @@ class ZonesPanel(Panel):
             except GeoCadError:
                 continue
         self.state.draw()
+        self.state.checkpoint()
         self.state.refresh_status()
         return added
 
@@ -1260,6 +1623,7 @@ class ZonesPanel(Panel):
             return False
         self.state.zones.remove(names[row])
         self.state.draw()
+        self.state.checkpoint()
         self.state.refresh_status()
         return True
 
@@ -1395,6 +1759,7 @@ class SchemePanel(Panel):
             self.warn(exc)
             return
         self.state.scheme_chosen = True
+        self.state.checkpoint()
         self.state.refresh_status()
 
     def on_add_species(self) -> bool:
@@ -1414,6 +1779,7 @@ class SchemePanel(Panel):
             self.reload_catalog()
         self.state.shares = [s for s in self.state.shares if s[0] != key]
         self.state.shares.append((key, self.species_percent.value()))
+        self.state.checkpoint()
         self.state.refresh_status()
         return True
 
@@ -1422,6 +1788,7 @@ class SchemePanel(Panel):
         if row < 0 or row >= len(self.state.shares):
             return False
         self.state.shares.pop(row)
+        self.state.checkpoint()
         self.state.refresh_status()
         return True
 
@@ -1538,6 +1905,7 @@ class GeneratePanel(Panel):
             self.state.result = result
             self.state.verified = False
             self.state.anomalies = []
+            self.state.checkpoint()
             self.state.refresh_status()
             return result
         try:
@@ -1553,6 +1921,7 @@ class GeneratePanel(Panel):
         self.state.result = result
         self.state.verified = False
         self.state.anomalies = []
+        self.state.checkpoint()
         self.state.refresh_status()
         return result
 
@@ -1606,6 +1975,7 @@ class GeneratePanel(Panel):
         state.verified = False
         state.anomalies = []
         state.layers.draw_contours(state.contours)
+        state.checkpoint()
         state.refresh_status()
         return result
 
@@ -2149,6 +2519,7 @@ class EditPanel(Panel):
             self.outcome.setPlainText(tr("Nessun impianto da modificare."))
             return []
         anomalies = self.state.validate()
+        self.state.checkpoint()
         self.show_outcome(synced, anomalies)
         return anomalies
 
