@@ -371,6 +371,52 @@ check_true("the panel source names no exporter",
 check_true("no simulator either",
            "simulat" not in source.lower())
 
+# --------------------------------------------------------------------------
+# R3 - the azimuth sweep, from the button
+# --------------------------------------------------------------------------
+print("\n== R3: the measured azimuth is reachable ==")
+check_true("there is a button for it",
+           any("ottimizza" in label.lower() for label in labels))
+
+panel.azimuth.setValue(0.0)
+panel.azimuth_note.setVisible(False)
+applied = panel.apply_optimised_azimuth()
+print("        azimuth applied: {0}".format(applied))
+check_true("pressing it answers with an azimuth", applied is not None)
+check("...and the spin box is set to it", panel.azimuth.value(),
+      applied % 360.0, 1e-9)
+# isVisible() is False for every child of a window that was never shown,
+# so the question a test can actually ask is whether the label was hidden.
+check_true("...and the panel says what it measured",
+           not panel.azimuth_note.isHidden()
+           and "orientamenti" in panel.azimuth_note.text())
+print("        nota: {0}".format(panel.azimuth_note.text()))
+
+# The engine, called independently on the same AOI with the same spacing.
+own_survey = panel.survey_geometry()
+own_drone = panel.current_drone()
+own_budget = pg.build_speed_budget(own_survey, panel.speed_ms(),
+                                   own_drone.v_max_ms)
+own_az, _note, own_scores = sv.optimise_azimuth(
+    panel.extent.geometry(), own_budget.effective,
+    d_side_m=own_survey.d_side_m, d_front_m=own_survey.d_front_m,
+    footprint_across_m=own_survey.footprint_across_m,
+    footprint_along_m=own_survey.footprint_along_m,
+    turn_radius_m=own_drone.turn_radius_m)
+check("the panel took the engine's answer, not one of its own",
+      applied, own_az, 1e-9)
+check_true("the panel implements no sweep of its own",
+           "def optimise_azimuth" not in source
+           and "def sweep_azimuths" not in source
+           and "def score_azimuth" not in source)
+
+# A mission generated after pressing it is flown at that azimuth.
+panel.generate()
+check_true("a route was generated", panel.last_mission is not None)
+if panel.last_mission is not None:
+    check("...and it is flown at the measured azimuth",
+          panel.last_mission.azimuth_deg, applied % 180.0, 1e-6)
+
 panel.teardown()
 
 print("\n" + "=" * 78)

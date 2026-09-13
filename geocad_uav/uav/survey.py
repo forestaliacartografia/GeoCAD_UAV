@@ -20,12 +20,14 @@ from typing import Optional
 
 import numpy as np
 
+from ..core import constants as K
 from ..core.planar import StripFrame, normalize_azimuth
 
 # Strip orientation strategies.
 AZIMUTH_LONGEST_SIDE = "longest_side"      # fewest turns (default)
 AZIMUTH_ACROSS_SLOPE = "across_slope"      # along the contours, steadiest GSD
 AZIMUTH_ALONG_WIND = "along_wind"          # least lateral drift
+AZIMUTH_OPTIMISED = "optimised"            # swept and measured, see below
 AZIMUTH_MANUAL = "manual"
 
 # Flight patterns.
@@ -33,6 +35,13 @@ PATTERN_BOUSTROPHEDON = "boustrophedon"    # adjacent strips, U-turns
 PATTERN_INTERLACED = "interlaced"          # skip-strip, for a wide turn radius
 
 DEFAULT_MIN_PHOTOS_PER_POINT = 3
+
+#: Sweep resolution of the azimuth optimiser, and the refinement around the
+#: winner. 5 deg over a half turn is 36 layouts; the refinement then walks
+#: the 1 deg neighbourhood of the best, which is finer than an operator can
+#: fly and far finer than the wind will let them hold.
+AZIMUTH_SWEEP_STEP_DEG = 5.0
+AZIMUTH_REFINE_STEP_DEG = 1.0
 
 
 class RoutingError(ValueError):
@@ -241,6 +250,11 @@ def choose_azimuth(geom, strategy: str = AZIMUTH_LONGEST_SIDE,
       out of the imagery and makes the ground speed symmetric on the two
       directions of travel.
     * ``manual`` -- an explicit azimuth.
+
+    ``optimised`` is deliberately *not* handled here: measuring orientations
+    needs the strip spacing and the footprint, which this function is not
+    given. :func:`optimise_azimuth` does that work and its answer arrives
+    here as ``manual``.
     """
     if strategy == AZIMUTH_MANUAL:
         if manual_azimuth_deg is None:
@@ -265,6 +279,15 @@ def choose_azimuth(geom, strategy: str = AZIMUTH_LONGEST_SIDE,
                 "perpendicular to the dominant slope ({0:.0f} deg), i.e. along "
                 "the contours".format(slope_az))
 
+    if strategy == AZIMUTH_OPTIMISED:
+        # Reached only when nobody solved it first. The sweep needs the strip
+        # spacing and the footprint, which this function is not given, so
+        # mission.build_mission runs the optimiser before it plans and hands
+        # the answer down as a manual azimuth.
+        raise RoutingError(
+            "the optimised strategy must be resolved by optimise_azimuth() "
+            "before plan_route() is called")
+
     if strategy == AZIMUTH_LONGEST_SIDE:
         az, ratio = _azimuth_from_obb(geom)
         note = "along the longest side of the oriented bounding box"
@@ -273,6 +296,118 @@ def choose_azimuth(geom, strategy: str = AZIMUTH_LONGEST_SIDE,
         return az, note
 
     raise RoutingError("unknown azimuth strategy {0!r}".format(strategy))
+
+
+# --------------------------------------------------------------------------
+# Azimuth by measurement
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AzimuthScore:
+    """One candidate orientation, and what flying it would cost.
+
+    ``time_s`` is the same estimate the mission itself reports -- track
+    length over ground speed, plus one turn penalty per strip change -- so
+    the number the optimiser minimises is the number the operator later
+    reads on the mission, not a private score that only this function
+    understands.
+    """
+
+    azimuth_deg: float
+    n_strips: int
+    n_turns: int
+    survey_length_m: float
+    transit_length_m: float
+    time_s: float
+
+    @property
+    def total_length_m(self) -> float:
+        return self.survey_length_m + self.transit_length_m
+
+
+def score_azimuth(plan: RoutePlan, v_ms: float) -> AzimuthScore:
+    """Cost one already-planned orientation."""
+    if v_ms <= 0:
+        raise RoutingError("v_ms must be > 0, got {0!r}".format(v_ms))
+    survey = plan.survey_length_m()
+    transit = plan.transit_length_m()
+    return AzimuthScore(
+        azimuth_deg=plan.azimuth_deg,
+        n_strips=plan.n_strips,
+        n_turns=plan.n_turns,
+        survey_length_m=survey,
+        transit_length_m=transit,
+        time_s=(survey + transit) / float(v_ms)
+                + K.TURN_PENALTY_S * plan.n_turns)
+
+
+def sweep_azimuths(aoi_geom, v_ms: float, step_deg: float,
+                   candidates=None, **route_kwargs):
+    """Lay the strips out at each orientation and cost every one.
+
+    ``route_kwargs`` are :func:`plan_route`'s, minus the azimuth: the same
+    spacing, buffer, pattern and turn radius the mission will be flown with,
+    so the comparison is between orientations and nothing else.
+    """
+    if step_deg <= 0:
+        raise RoutingError("step_deg must be > 0, got {0!r}".format(step_deg))
+    if candidates is None:
+        n = max(int(math.ceil(180.0 / float(step_deg))), 1)
+        candidates = [i * float(step_deg) for i in range(n)]
+    route_kwargs.pop("azimuth_strategy", None)
+    route_kwargs.pop("manual_azimuth_deg", None)
+    route_kwargs.pop("wind_from_deg", None)
+    scores = []
+    for azimuth in candidates:
+        plan = plan_route(aoi_geom, azimuth_strategy=AZIMUTH_MANUAL,
+                          manual_azimuth_deg=float(azimuth), **route_kwargs)
+        if not plan.legs:
+            continue        # an orientation that clips away to nothing
+        scores.append(score_azimuth(plan, v_ms))
+    if not scores:
+        raise RoutingError("no orientation produced a single strip")
+    return scores
+
+
+def optimise_azimuth(aoi_geom, v_ms: float,
+                     step_deg: float = AZIMUTH_SWEEP_STEP_DEG,
+                     refine_step_deg: float = AZIMUTH_REFINE_STEP_DEG,
+                     **route_kwargs):
+    """The orientation that costs the least flying. ``(azimuth, note, scores)``.
+
+    Strips are laid out at every ``step_deg`` over a half turn -- a half
+    turn is all there is, since flying a strip north-to-south or
+    south-to-north covers the same ground -- and each layout is costed on
+    its real clipped geometry. The winner is then refined at
+    ``refine_step_deg`` inside its own bracket.
+
+    What this minimises, in order: the flight time, and on a tie the number
+    of turns. Fewer turns is not a tie-break for elegance -- a turn is where
+    the aircraft leaves the strip, the shot rhythm breaks and the wind gets
+    a chance to push the next line out of place.
+    """
+    scores = sweep_azimuths(aoi_geom, v_ms, step_deg, **route_kwargs)
+    best = min(scores, key=lambda s: (s.time_s, s.n_turns, s.azimuth_deg))
+
+    if refine_step_deg > 0 and refine_step_deg < step_deg:
+        low = best.azimuth_deg - step_deg + refine_step_deg
+        n = max(int(round((2.0 * step_deg - refine_step_deg)
+                          / refine_step_deg)), 1)
+        around = [low + i * refine_step_deg for i in range(n)]
+        around = [normalize_azimuth(a, 180.0) for a in around]
+        refined = sweep_azimuths(aoi_geom, v_ms, refine_step_deg,
+                                 candidates=around, **route_kwargs)
+        scores = scores + refined
+        best = min(scores, key=lambda s: (s.time_s, s.n_turns, s.azimuth_deg))
+
+    worst = max(scores, key=lambda s: s.time_s)
+    saved = worst.time_s - best.time_s
+    note = ("swept {0} orientations: {1:.0f} deg is the cheapest at "
+            "{2:.0f} strips, {3:.0f} turns and {4:.0f} s, {5:.0f} s less "
+            "than the worst orientation tried".format(
+                len(scores), best.azimuth_deg, best.n_strips, best.n_turns,
+                best.time_s, saved))
+    return best.azimuth_deg, note, scores
 
 
 def _azimuth_from_obb(geom):

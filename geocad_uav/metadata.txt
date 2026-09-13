@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.30.0
+version=1.31.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,21 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.31.0
+    - L'azimut delle strisciate si puo' misurare invece che indovinarlo.
+      Il tasto "Ottimizza" della scheda UAV prova ogni orientamento a
+      passi di 5 gradi su mezzo giro, dispone le strisciate sull'area
+      vera e sceglie quello che costa meno volo. Su un rettangolo da' la
+      stessa risposta del lato piu' lungo; su un blocco concavo no: sul
+      caso di prova risparmia il 36 % del tempo e quasi meta' delle
+      virate.
+    - Un progetto di rimboschimento sa gia' tutto quello che serve a
+      volarci sopra. uav.forest_link legge la superficie utile, le
+      esclusioni e l'orientamento dei filari e ne ricava i parametri di
+      volo con i valori forestali: sovrapposizione 85/75 dal preset
+      "complex_terrain", terrain following sempre acceso, nessuna
+      maggiorazione per la vegetazione aggiunta di nascosto.
 
 changelog=1.30.0
     - La particella si legge dove si disegna. La scheda CAD porta un

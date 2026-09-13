@@ -296,6 +296,9 @@ class Mission:
     footprints: "list[Any]" = field(default_factory=list)
     #: Terrain vs flight elevation along the whole route.
     profile: "list[dict]" = field(default_factory=list)
+    #: Every orientation the azimuth sweep costed, when one was run. Empty
+    #: when the azimuth was chosen any other way.
+    azimuth_scores: "list[Any]" = field(default_factory=list)
 
     stats: MissionStats = field(default_factory=MissionStats)
     warnings: "list[str]" = field(default_factory=list)

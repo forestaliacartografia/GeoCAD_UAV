@@ -136,9 +136,20 @@ class UavPanel(QWidget):
         azimuth_buttons = QHBoxLayout()
         self.azimuth_from_map = QPushButton(tr("Da due click"))
         self.azimuth_from_edge = QPushButton(tr("Parallelo a un lato"))
+        self.azimuth_optimise = QPushButton(tr("Ottimizza"))
+        self.azimuth_optimise.setToolTip(tr(
+            "Prova ogni orientamento a passi di 5 gradi su mezzo giro, "
+            "dispone le strisciate sull'area vera e sceglie quello che costa "
+            "meno tempo di volo. Sul rettangolo dara' la stessa risposta del "
+            "lato piu' lungo; sulle aree concave no."))
         azimuth_buttons.addWidget(self.azimuth_from_map)
         azimuth_buttons.addWidget(self.azimuth_from_edge)
+        azimuth_buttons.addWidget(self.azimuth_optimise)
         flight_form.addRow(azimuth_buttons)
+        self.azimuth_note = QLabel()
+        self.azimuth_note.setWordWrap(True)
+        self.azimuth_note.setVisible(False)
+        flight_form.addRow(self.azimuth_note)
         layout.addWidget(flight_box)
 
         self.summary = QTextBrowser()
@@ -169,7 +180,8 @@ class UavPanel(QWidget):
         for button, slot in ((self.generate_button, self.generate),
                              (self.confirm_button, self.confirm),
                              (self.azimuth_from_map, self._pick_azimuth),
-                             (self.azimuth_from_edge, self._azimuth_from_edge)):
+                             (self.azimuth_from_edge, self._azimuth_from_edge),
+                             (self.azimuth_optimise, self.apply_optimised_azimuth)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
 
@@ -251,6 +263,51 @@ class UavPanel(QWidget):
         value = self.longest_side_azimuth()
         if value is not None:
             self.azimuth.setValue(value)
+            self.azimuth_note.setVisible(False)
+
+    def apply_optimised_azimuth(self, *_args):
+        """Sweep the orientations on the real AOI and take the cheapest.
+
+        The strips are laid out for every candidate with the spacing this
+        panel is already set to, so the comparison is between orientations
+        and nothing else; the saving shown is against the orientation the
+        sweep found worst, which is what a bad guess would have cost.
+
+        Returns the azimuth, or None when there is nothing to measure.
+        """
+        geometry = self.extent.geometry()
+        if geometry is None:
+            self._notify_user(tr(
+                "Nessuna area definita: l'azimut si misura sull'area, non "
+                "sul rettangolo dello schermo."))
+            return None
+        try:
+            survey = self.survey_geometry()
+            drone = self.current_drone()
+            budget = pg.build_speed_budget(survey, self.speed_ms(),
+                                           drone.v_max_ms)
+            azimuth, note, scores = sv.optimise_azimuth(
+                geometry, budget.effective,
+                d_side_m=survey.d_side_m, d_front_m=survey.d_front_m,
+                footprint_across_m=survey.footprint_across_m,
+                footprint_along_m=survey.footprint_along_m,
+                turn_radius_m=drone.turn_radius_m)
+        except (GeoCadError, ValueError) as exc:
+            self._notify_user(tr("Ottimizzazione non riuscita: {0}")
+                              .format(exc))
+            return None
+
+        best = min(scores, key=lambda item: item.time_s)
+        worst = max(scores, key=lambda item: item.time_s)
+        self.azimuth.setValue(azimuth % 360.0)
+        self.azimuth_note.setText(tr(
+            "Azimut {0:.0f} deg su {1} orientamenti provati: {2} strisciate, "
+            "{3} virate, {4} di volo stimati. L'orientamento peggiore ne "
+            "costava {5}.").format(
+                azimuth, len(scores), best.n_strips, best.n_turns,
+                format_duration(best.time_s), format_duration(worst.time_s)))
+        self.azimuth_note.setVisible(True)
+        return azimuth
 
     # -- readiness ---------------------------------------------------------
 

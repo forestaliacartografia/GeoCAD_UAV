@@ -61,6 +61,8 @@ class MissionParams:
 
     azimuth_strategy: str = sv.AZIMUTH_LONGEST_SIDE
     manual_azimuth_deg: Optional[float] = None
+    #: Sweep resolution when the strategy is ``optimised``.
+    azimuth_sweep_step_deg: float = sv.AZIMUTH_SWEEP_STEP_DEG
     wind_from_deg: Optional[float] = None
     pattern: str = sv.PATTERN_BOUSTROPHEDON
     double_grid: bool = False
@@ -144,12 +146,30 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
         pattern=params.pattern, turn_radius_m=params.drone.turn_radius_m,
         lead_in_m=params.lead_in_m)
 
+    strategy = params.azimuth_strategy
+    manual_azimuth = params.manual_azimuth_deg
+    azimuth_scores = []
+    if strategy == sv.AZIMUTH_OPTIMISED and not params.double_grid:
+        # Solved here and not inside plan_route: the sweep needs the strip
+        # spacing and the footprint, which only exist once the
+        # photogrammetric geometry above has been solved.
+        manual_azimuth, note, azimuth_scores = sv.optimise_azimuth(
+            aoi_geom, budget.effective,
+            step_deg=params.azimuth_sweep_step_deg, **route_kwargs)
+        strategy = sv.AZIMUTH_MANUAL
+        assumptions.append("Azimut ottimizzato: {0}.".format(note))
+    elif strategy == sv.AZIMUTH_OPTIMISED:
+        strategy = sv.AZIMUTH_LONGEST_SIDE
+        warnings.append(
+            "Doppia griglia: l'ottimizzazione dell'azimut non si applica, "
+            "le due passate sono ortogonali per definizione.")
+
     if params.double_grid:
         plans = sv.plan_double_grid(aoi_geom, **route_kwargs)
     else:
         plans = [sv.plan_route(
-            aoi_geom, azimuth_strategy=params.azimuth_strategy,
-            manual_azimuth_deg=params.manual_azimuth_deg,
+            aoi_geom, azimuth_strategy=strategy,
+            manual_azimuth_deg=manual_azimuth,
             wind_from_deg=params.wind_from_deg, **route_kwargs)]
     for plan in plans:
         warnings.extend(plan.warnings)
@@ -271,6 +291,7 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
         geoid_undulation_m=params.geoid_undulation_m,
         waypoints=all_waypoints, photos=all_photos, lines=lines,
         footprints=footprints, profile=profile_rows, stats=stats,
+        azimuth_scores=azimuth_scores,
         warnings=warnings, assumptions=assumptions)
     return mission
 
