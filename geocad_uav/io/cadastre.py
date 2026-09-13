@@ -574,6 +574,11 @@ class ParcelShare:
     comune: object = None                       # belfiore.Comune
     parcel_area_m2: float = 0.0
     intersection_area_m2: float = 0.0
+    #: The parcel and the part of it the project takes, both in the CRS the
+    #: caller asked with -- the project's own. Kept because a cadastral
+    #: answer an operator cannot see on the map is a table, not a result.
+    geometry: object = None                     # QgsGeometry
+    intersection: object = None                 # QgsGeometry
 
     @property
     def percent_of_parcel(self) -> float:
@@ -807,10 +812,20 @@ def interpolate_cadastral_data(project_geometry, project_crs, parcels,
         if area <= 0.0:
             continue
         pieces.append(overlap)
+        # Back into the caller's CRS: the areas were measured in the metric
+        # one, but what goes on the map has to line up with the project.
+        shown, shown_overlap = shape, overlap
+        if project_crs != metric:
+            shown = crs_svc.transform_geometry(QgsGeometry(shape), metric,
+                                               project_crs)
+            shown_overlap = crs_svc.transform_geometry(QgsGeometry(overlap),
+                                                       metric, project_crs)
         shares.append(ParcelShare(parcel=parcel,
                                   comune=register.resolve(parcel.comune_code),
                                   parcel_area_m2=float(shape.area()),
-                                  intersection_area_m2=area))
+                                  intersection_area_m2=area,
+                                  geometry=shown,
+                                  intersection=shown_overlap))
 
     shares.sort(key=lambda share: -share.intersection_area_m2)
     covered = 0.0

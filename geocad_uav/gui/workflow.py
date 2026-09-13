@@ -60,6 +60,7 @@ from ..forest.reforestation import symbology as symbology_mod
 from ..forest.reforestation import terrain as terrain_mod
 from ..forest.reforestation import zones as zones_mod
 from ..io import cadastre as cadastre_mod
+from .map_layers import ProjectLayers
 
 M2_PER_HA = 10_000.0
 
@@ -151,6 +152,9 @@ class ProjectState(QObject):
     def __init__(self, iface=None, parent=None):
         super().__init__(parent)
         self.iface = iface
+        #: The project on the map. Every geometry the model holds is drawn
+        #: here, and nowhere else: a panel never adds a layer of its own.
+        self.layers = ProjectLayers(iface)
         self.area = None                        # ReforestationArea
         self.crs = None                         # QgsCoordinateReferenceSystem
         self.terrain = None                     # TerrainAnalysis
@@ -167,6 +171,7 @@ class ProjectState(QObject):
         self.result = None                      # SlopeGridResult
         self.composition = None
         self.cadastre = None                    # CadastralResult
+        self.cadastre_task = None               # the query in flight
         self.plants_layer = None
         self.scenarios = []
         self.anomalies = []
@@ -268,7 +273,18 @@ class ProjectState(QObject):
         self.area.clear_exclusions()
         self.constraints.apply_to(self.area)
         self.zones.container = self.area.utile()
+        self.draw()
         self.refresh_status()
+
+    def draw(self) -> None:
+        """Put the model on the map. Called whenever the model changes."""
+        if self.crs is not None:
+            self.layers.set_crs(self.crs)
+        self.layers.draw_area(self.area)
+        self.layers.draw_zones(self.zones)
+        self.layers.draw_glades(self.glades)
+        self.layers.draw_parcels(self.cadastre)
+        self.layers.refresh_canvas()
 
     def mix(self) -> Optional[composition_mod.Mix]:
         if not self.shares:
@@ -297,12 +313,25 @@ class ProjectState(QObject):
             raise GeoCadError(
                 "no project area for the cadastral query",
                 user_message="Definisci prima l'area di progetto.")
+        # A task handed to the manager is not kept alive by it: the only
+        # owner is Python, and the button that starts the query drops the
+        # return value the moment it is made. Without this reference the
+        # task is collected before it runs and the panel sits on
+        # "interrogazione in corso..." for ever.
+        if self.cadastre_task is not None:
+            try:
+                self.cadastre_task.cancel()     # a finished task ignores it
+            except RuntimeError:
+                pass
         task = cadastre_mod.area_task(geometry, self.crs, transport=transport)
         task.cadastralDataReady.connect(self._on_cadastre)
+        self.cadastre_task = task
         return task
 
     def _on_cadastre(self, data: dict) -> None:
         self.cadastre = data.get("result")
+        self.layers.draw_parcels(self.cadastre)
+        self.layers.refresh_canvas()
         self.cadastralDataReady.emit(data)
         self.refresh_status()
 
@@ -424,9 +453,24 @@ class AreaPanel(Panel):
         cad_form.addRow(tr("Superficie cat."), self.cadastral_area_label)
         cad_form.addRow(tr("Superficie progetto"), self.project_area_label)
         cad_form.addRow(tr("Stato"), self.cadastre_status_label)
-        self.details_button = QPushButton(tr("Dettagli particelle"))
+        buttons_row = QHBoxLayout()
+        self.details_button = QPushButton(tr("Dettagli"))
         self.details_button.setEnabled(False)
-        cad_form.addRow(self.details_button)
+        self.show_button = QPushButton(tr("Visualizza particelle"))
+        self.show_button.setEnabled(False)
+        buttons_row.addWidget(self.details_button)
+        buttons_row.addWidget(self.show_button)
+        cad_form.addRow(buttons_row)
+
+        self.parcel_table = QTableWidget(0, 4)
+        self.parcel_table.setHorizontalHeaderLabels(
+            [tr("Comune"), tr("Foglio"), tr("Particella"), tr("%")])
+        self.parcel_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.parcel_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.parcel_table.setMaximumHeight(160)
+        cad_form.addRow(self.parcel_table)
         self.layout.addWidget(cadastre)
         self.layout.addStretch(1)
 
@@ -434,6 +478,8 @@ class AreaPanel(Panel):
         self.draw_button.clicked.connect(self.start_drawing)
         self.query_button.clicked.connect(self.query_cadastre)
         self.details_button.clicked.connect(self.show_details)
+        self.show_button.clicked.connect(self.show_parcels)
+        self.parcel_table.itemSelectionChanged.connect(self.on_parcel_picked)
         state.changed.connect(self.refresh)
         state.cadastralDataReady.connect(self.on_cadastral_data)
 
@@ -508,9 +554,45 @@ class AreaPanel(Panel):
         self.project_area_label.setText("{0:,.2f} ha".format(
             float(data.get("superficie_interessata_ha") or 0.0)))
         status = str(data.get("stato") or "")
+        # Never an empty table with no reason: the status line says what the
+        # service answered, and the message says why when it is not OK.
+        label = cadastre_mod.STATUS_LABELS.get(status, status or DASH)
+        message = str(data.get("messaggio") or "")
         self.cadastre_status_label.setText(
-            cadastre_mod.STATUS_LABELS.get(status, status or DASH))
+            "{0} - {1}".format(label, message) if message else label)
+        self.cadastre_status_label.setToolTip(
+            "\n".join([message] + list(data.get("avvisi") or [])))
         self.details_button.setEnabled(bool(data.get("righe")))
+        self.show_button.setEnabled(bool(data.get("righe")))
+        self.fill_parcel_table(data.get("righe") or [])
+        if data.get("righe"):
+            self.show_parcels()
+
+    def fill_parcel_table(self, rows) -> int:
+        """One row per parcel, in the order the result puts them."""
+        self.parcel_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (row.get("comune", ""), row.get("foglio", ""),
+                      row.get("particella", ""),
+                      "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
+            for column, value in enumerate(values):
+                self.parcel_table.setItem(index, column,
+                                          QTableWidgetItem(str(value)))
+        return len(rows)
+
+    def show_parcels(self) -> int:
+        """Draw the parcels on the canvas and frame them."""
+        drawn = self.state.layers.draw_parcels(self.state.cadastre)
+        if drawn:
+            self.state.layers.zoom_to("parcels")
+        return drawn
+
+    def on_parcel_picked(self) -> bool:
+        """A row chosen in the table is a parcel shown on the map."""
+        row = self.parcel_table.currentRow()
+        if row < 0:
+            return False
+        return self.state.layers.select("parcels", row)
 
     def show_details(self):
         result = self.state.cadastre
@@ -680,6 +762,7 @@ class ConstraintsPanel(Panel):
             if not check.isChecked():
                 self.state.constraints.clear_features(key)
         self.state.apply_constraints()
+        self.state.draw()
 
     def refresh(self) -> None:
         self.usable_label.setText(ha(self.state.usable_m2)
@@ -764,6 +847,7 @@ class ZonesPanel(Panel):
         except GeoCadError as exc:
             self.warn(exc)
             return False
+        self.state.draw()
         self.state.refresh_status()
         return True
 
@@ -791,6 +875,7 @@ class ZonesPanel(Panel):
                 added += 1
             except GeoCadError:
                 continue
+        self.state.draw()
         self.state.refresh_status()
         return added
 
@@ -800,6 +885,7 @@ class ZonesPanel(Panel):
         if row < 0 or row >= len(names):
             return False
         self.state.zones.remove(names[row])
+        self.state.draw()
         self.state.refresh_status()
         return True
 
@@ -1177,6 +1263,8 @@ class GeneratePanel(Panel):
         self.state.natural_outcome = outcome
         self.state.glades = glades
         self.state.glades_placed = bool(glades)
+        self.state.layers.draw_glades(glades)
+        self.state.layers.refresh_canvas()
 
     def generate(self):
         """Commit the preview to a real PointZ layer, coloured by species."""
@@ -1189,6 +1277,8 @@ class GeneratePanel(Panel):
             name=tr("Piante"), zone=tr("Progetto"))
         QgsProject.instance().addMapLayer(layer)
         self.state.plants_layer = layer
+        self.state.layers.adopt("plants", layer)
+        self.state.layers.refresh_canvas()
         self.state.refresh_status()
         return layer
 
@@ -1626,6 +1716,7 @@ class Workspace(QObject):
                                  self.context)
 
     def unmount(self) -> None:
+        self.state.layers.remove_all()
         self.status.remove()
         if self.iface is None:
             return

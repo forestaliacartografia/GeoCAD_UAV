@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.16.0
+version=1.17.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,29 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.16.0
+changelog=1.17.0
+    - Il progetto si vede sulla mappa. Area, superficie utile, aree
+      escluse, zone, radure e piante diventano layer veri sulla tela,
+      aggiornati a ogni modifica e rimossi tutti insieme quando il
+      plugin si chiude: niente piu' progetto che esiste solo nelle
+      etichette di un pannello.
+    - Le particelle catastali si vedono e si scelgono. La risposta del
+      WFS porta adesso anche le geometrie, riportate nel sistema di
+      riferimento del progetto: [Visualizza particelle] le disegna,
+      e scegliere una riga della tabella seleziona ed evidenzia la
+      particella corrispondente sulla mappa.
+    - La tabella delle particelle elenca comune, foglio, particella e
+      percentuale di ciascuna, al posto del solo conteggio.
+    - Un'interrogazione catastale che non riesce lo dice: accanto allo
+      stato compare il motivo, e una tabella vuota non resta mai senza
+      spiegazione.
+    - Corretto: l'interrogazione avviata dal pulsante non arrivava mai
+      a termine. Il task veniva raccolto dal garbage collector appena
+      creato, perche' il gestore dei task di QGIS non ne mantiene un
+      riferimento e il pulsante scartava quello restituito: il pannello
+      restava su "interrogazione in corso..." all'infinito. Adesso il
+      progetto tiene il riferimento fino all'interrogazione successiva.
+    1.16.0
     - Impianto naturaliforme: radure vere, irregolarita' controllata e
       distanza minima garantita. Le prime due rendono il sesto meno
       regolare, la terza garantisce che meno regolare non diventi

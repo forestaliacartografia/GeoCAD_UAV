@@ -252,9 +252,12 @@ failing = context.area_panel.query_cadastre(dead)
 check_true("anche il fallimento e' un task", failing is not None)
 check_true("...che risponde",
            pump(lambda: context.area_panel.query_button.isEnabled()))
-check_text("lo stato dice che non e' riuscita",
-           context.area_panel.cadastre_status_label.text(),
-           cs.STATUS_LABELS[cs.STATUS_ERROR])
+# Since 1.17.0 the status line carries the reason too, so that an empty
+# table is never left unexplained: the label still leads it.
+failed_status = context.area_panel.cadastre_status_label.text()
+check_true("lo stato dice che non e' riuscita",
+           failed_status.startswith(cs.STATUS_LABELS[cs.STATUS_ERROR]))
+check_true("...e dice anche perche'", "raggiungibile" in failed_status)
 check_true("il progetto e' ancora li'", state.area is not None)
 check_text("...e la sua superficie non e' cambiata",
            state.status("area"), wf.DONE)
