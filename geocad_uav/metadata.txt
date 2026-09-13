@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.28.0
+version=1.29.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,33 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.28.0
+changelog=1.29.0
+    - Disegnando un Quadrato, un Rettangolo o un Poligono col CAD, la
+      tabella degli attributi si compila da sola: Area e Perimetro
+      subito, alla posa della figura, e Comune, Foglio e Particella poco
+      dopo, scritti da un task in background sullo stesso identificativo
+      di feature. L'interfaccia non aspetta niente.
+    - L'interrogazione catastale e' accesa per impostazione predefinita.
+      Era opzionale e spenta: il meccanismo c'era e non partiva mai da
+      solo. L'interruttore resta, per chi lavora senza rete o fuori dal
+      territorio italiano.
+    - Il layer CAD nasce con le cinque colonne (Area, Perimetro, Comune,
+      Foglio, Particella), non le fa crescere se per caso una chiamata di
+      rete riesce: una colonna che compare soltanto a cose fatte e' una
+      colonna che nessuno sa di dover guardare.
+    - La colonna Area e' in metri quadri, non piu' in ettari, e si chiama
+      Area. Il perimetro si chiama Perimetro. E' una rinomina delle
+      colonne visibili: nessun dato perso, nessuna conversione aggiunta
+      -- anzi, una tolta.
+    - Quando il servizio non risponde, rifiuta, o non ha particelle su
+      quel terreno (Trento e Bolzano tengono il proprio catasto), le tre
+      colonne dicono "N/D". Lasciate vuote sarebbero indistinguibili da
+      un'interrogazione mai partita.
+    - La colonna Comune porta il nome del comune, non il codice Belfiore:
+      una colonna intitolata Comune che dice G478 non dice niente. Il
+      codice resta nell'etichetta della particella e nel record
+      parametrico.
+    1.28.0
     - Un solo pulsante sulla toolbar di QGIS, "Suite GeoCad
       Rimboschimento", e apre la dashboard. Erano cinque: il pulsante del
       dock piu' le tre forme CAD e l'interruttore parametrico. Le quattro

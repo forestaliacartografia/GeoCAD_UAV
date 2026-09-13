@@ -539,14 +539,22 @@ class BaseCadTool:
     def request_cadastre(self, layer, geometry, attributes):
         """Ask the Agenzia delle Entrate which parcel this shape sits on.
 
-        Off unless the operator turned it on, and never on the commit's own
-        thread: a government WFS answering in two seconds would be two
-        seconds of frozen canvas per polygon. The task writes the three
-        columns onto the feature when it comes back, and says nothing at all
-        when the point is in no parcel -- Trento and Bolzano keep their own
-        cadastre, and "not in this service" is an answer, not a failure.
+        Started by :meth:`commit` on every geometry, and never on the
+        commit's own thread: a government WFS answering in two seconds would
+        be two seconds of frozen canvas per polygon. The feature is already
+        on the layer with its Area and its Perimetro by then; the task fills
+        Comune, Foglio and Particella in behind it, on the feature id the
+        commit recorded.
 
-        Returns the task, or None when nothing was asked.
+        Whatever comes back, the three columns get written. A timeout, a
+        refusal, or ground the service holds no parcel for -- Trento and
+        Bolzano keep their own cadastre -- all write "N/D". Left empty they
+        would be indistinguishable from a lookup that never ran, and the
+        operator would have no way to tell "nobody asked" from "asked, and
+        there is nothing here".
+
+        Returns the task, or None when the lookup is switched off or there
+        is nothing to ask about.
         """
         self.cadastre_warning = ""
         self.cadastre_task = None
@@ -572,13 +580,12 @@ class BaseCadTool:
         from ...io import cadastre as cad_svc                   # noqa: PLC0415
 
         def _apply(parcel, error):
-            if error:
-                self.cadastre_warning = error
-                return
-            if parcel is None:
-                return
+            self.cadastre_warning = error or ""
             feature_id = lf.feature_id_by_cad_id(layer, cad_id)
             if feature_id is None:
+                return                  # the operator deleted it meanwhile
+            if parcel is None or parcel.is_empty:
+                lf.write_cadastre_unavailable(layer, feature_id)
                 return
             lf.write_cadastre(layer, feature_id, parcel)
 

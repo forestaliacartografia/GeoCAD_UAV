@@ -2090,20 +2090,20 @@ first = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
 
 names = {f.name() for f in at_layer.fields()}
 check_true("cad_id was added to the layer", lf.CAD_ID_FIELD in names)
-check_true("area_ha was added", lf.AREA_HA_FIELD in names)
-check_true("perimeter_m was added", lf.PERIMETER_FIELD in names)
+check_true("Area was added", lf.AREA_FIELD in names)
+check_true("Perimetro was added", lf.PERIMETER_FIELD in names)
 check_true("cad_params is still there", pa.PARAMS_FIELD in names)
 
 written = newest(at_layer)
-print("        cad_id {0}, area_ha {1}, perimeter_m {2}".format(
-    written[lf.CAD_ID_FIELD], written[lf.AREA_HA_FIELD],
+print("        cad_id {0}, Area {1} m2, Perimetro {2} m".format(
+    written[lf.CAD_ID_FIELD], written[lf.AREA_FIELD],
     written[lf.PERIMETER_FIELD]))
 check("cad_id is 1 on the first feature", written[lf.CAD_ID_FIELD], 1)
-check("area_ha is 1500 m2 in hectares", written[lf.AREA_HA_FIELD], 0.15, 1e-9)
-check("perimeter_m is 2*(50+30)", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
+check("Area is 1500 m2", written[lf.AREA_FIELD], 1500.0, 1e-9)
+check("Perimetro is 2*(50+30)", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
 check("the area column agrees with the engine's measure()",
-      written[lf.AREA_HA_FIELD],
-      round(written.geometry().area() / 10_000.0, 2), 1e-9)
+      written[lf.AREA_FIELD],
+      round(written.geometry().area(), 2), 1e-9)
 
 at_session.set_origin(OX + 200, OY)
 at_session.submit("50")
@@ -2112,7 +2112,7 @@ at_session.submit("0d")
 second = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
 second = newest(at_layer)
 check("the second feature takes cad_id 2", second[lf.CAD_ID_FIELD], 2)
-check("...with the same area", second[lf.AREA_HA_FIELD], 0.15, 1e-9)
+check("...with the same area", second[lf.AREA_FIELD], 1500.0, 1e-9)
 check("two features on the layer", at_layer.featureCount(), 2)
 
 print("\n== AT2: circle r = 10 ==")
@@ -2126,12 +2126,13 @@ ci_written = newest(ci_layer)
 
 engine_area = ci_written.geometry().area()
 engine_perimeter = ci_written.geometry().length()
-print("        area {0:.6f} m2 -> {1} ha, perimeter {2:.6f} m".format(
-    engine_area, ci_written[lf.AREA_HA_FIELD], engine_perimeter))
-check("area_ha is the measured area, not pi r^2",
-      ci_written[lf.AREA_HA_FIELD], round(engine_area / 10_000.0, 2), 1e-9)
-check("area_ha rounds to 0.03 ha", ci_written[lf.AREA_HA_FIELD], 0.03, 1e-9)
-check("perimeter_m is the measured perimeter, not 2 pi r",
+print("        area {0:.6f} m2 -> {1}, perimeter {2:.6f} m".format(
+    engine_area, ci_written[lf.AREA_FIELD], engine_perimeter))
+check("Area is the measured area, not pi r^2",
+      ci_written[lf.AREA_FIELD], round(engine_area, 2), 1e-9)
+check_true("...and it is a real area, short of pi r^2",
+           0.0 < ci_written[lf.AREA_FIELD] < math.pi * 100.0)
+check("Perimetro is the measured perimeter, not 2 pi r",
       ci_written[lf.PERIMETER_FIELD], round(engine_perimeter, 3), 1e-9)
 check_true("...which is shorter than the true circumference",
            ci_written[lf.PERIMETER_FIELD] < 2.0 * math.pi * 10.0)
@@ -2146,7 +2147,7 @@ ln_session.submit("100")
 ln_session.submit("0d")
 ln_feature = ln.commit(ln_layer, WORK_CRS, ln_layer.crs())
 ln_written = newest(ln_layer)
-check("area_ha is 0.00 for a line", ln_written[lf.AREA_HA_FIELD], 0.0)
+check("Area is 0.00 for a line", ln_written[lf.AREA_FIELD], 0.0)
 check("perimeter_m carries the length", ln_written[lf.PERIMETER_FIELD],
       100.0, 1e-6)
 check("cad_id is 1", ln_written[lf.CAD_ID_FIELD], 1)
@@ -2183,8 +2184,8 @@ seed_session.submit("0d")
 eighth = seed_tool.commit(seeded, WORK_CRS, seeded.crs())
 check("the new feature takes cad_id 8",
       newest(seeded)[lf.CAD_ID_FIELD], 8)
-check("area_ha of a 20 x 20", newest(seeded)[lf.AREA_HA_FIELD],
-      0.04, 1e-9)
+check("Area of a 20 x 20", newest(seeded)[lf.AREA_FIELD],
+      400.0, 1e-9)
 
 print("\n== AT5: a layer that refuses new columns still gets the geometry ==")
 
@@ -2244,7 +2245,7 @@ print("        {0}".format(ro_tool.attribute_warning))
 
 check_true("a layer that accepts them says so instead",
            lf.ensure_cad_fields(scratch_layer("Polygon", "cad_attrs_ok"))
-           == [lf.CAD_ID_FIELD, lf.AREA_HA_FIELD, lf.PERIMETER_FIELD])
+           == [lf.CAD_ID_FIELD, lf.AREA_FIELD, lf.PERIMETER_FIELD])
 
 print("\n== AT6: the shapes from 1.4.0 and 1.4.1 still commit ==")
 mixed = scratch_layer("Polygon", "cad_attrs_mixed")
@@ -2261,10 +2262,10 @@ for index, (session, submissions) in enumerate((
     stored = newest(mixed)
     expected_ids.append(stored[lf.CAD_ID_FIELD])
     check_true("{0} wrote an area".format(session.title),
-               stored[lf.AREA_HA_FIELD] > 0.0)
-    check("{0}: area_ha matches its own geometry".format(session.title),
-          stored[lf.AREA_HA_FIELD],
-          round(stored.geometry().area() / 10_000.0, 2), 1e-9)
+               stored[lf.AREA_FIELD] > 0.0)
+    check("{0}: Area matches its own geometry".format(session.title),
+          stored[lf.AREA_FIELD],
+          round(stored.geometry().area(), 2), 1e-9)
 check_true("the ids are 1 and 2 in order", expected_ids == [1, 2])
 check("two features", mixed.featureCount(), 2)
 check("no canvas.refresh() was added by the attribute work",
@@ -2400,10 +2401,10 @@ check("a sweep of 0 is read as a full turn, not as nothing",
 
 print("\n== AR4: the arc carries the CAD attributes ==")
 ar4 = newest(ar_layer)
-print("        cad_id {0}, area_ha {1}, perimeter_m {2}".format(
-    ar4[lf.CAD_ID_FIELD], ar4[lf.AREA_HA_FIELD], ar4[lf.PERIMETER_FIELD]))
+print("        cad_id {0}, Area {1} m2, Perimetro {2} m".format(
+    ar4[lf.CAD_ID_FIELD], ar4[lf.AREA_FIELD], ar4[lf.PERIMETER_FIELD]))
 check("cad_id is 1", ar4[lf.CAD_ID_FIELD], 1)
-check("an arc has no area", ar4[lf.AREA_HA_FIELD], 0.0)
+check("an arc has no area", ar4[lf.AREA_FIELD], 0.0)
 check("perimeter_m is the measured length, not the true arc",
       ar4[lf.PERIMETER_FIELD], round(measured, 3), 1e-9)
 ar_record = pa.read_record(ar4)
@@ -2580,14 +2581,14 @@ written = newest(atv_layer)
 print("        visible: {0}".format(visible_fields(atv_layer)))
 print("        hidden : {0}".format(hidden_fields(atv_layer)))
 check("cad_id is 1", written[lf.CAD_ID_FIELD], 1)
-check("area_ha is 0.15", written[lf.AREA_HA_FIELD], 0.15, 1e-9)
+check("Area is 1500 m2", written[lf.AREA_FIELD], 1500.0, 1e-9)
 check("perimeter_m is 160.000", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
 check("exactly three columns are visible", len(visible_fields(atv_layer)), 3)
 check_true("...and they are the three that mean something",
            set(visible_fields(atv_layer))
-           == {lf.CAD_ID_FIELD, lf.AREA_HA_FIELD, lf.PERIMETER_FIELD})
+           == {lf.CAD_ID_FIELD, lf.AREA_FIELD, lf.PERIMETER_FIELD})
 check_true("they are in reading order",
-           visible_fields(atv_layer) == [lf.CAD_ID_FIELD, lf.AREA_HA_FIELD,
+           visible_fields(atv_layer) == [lf.CAD_ID_FIELD, lf.AREA_FIELD,
                                          lf.PERIMETER_FIELD])
 
 print("\n== ATV2: the second commit takes the next id ==")
@@ -2608,7 +2609,7 @@ atv_line_session.submit("100")
 atv_line_session.submit("0d")
 atv_line.commit(atv_line_layer, WORK_CRS, atv_line_layer.crs())
 line_written = newest(atv_line_layer)
-check("area_ha is 0.00", line_written[lf.AREA_HA_FIELD], 0.0)
+check("Area is 0.00", line_written[lf.AREA_FIELD], 0.0)
 check("perimeter_m carries the length", line_written[lf.PERIMETER_FIELD],
       100.0, 1e-6)
 check("three visible columns on a line layer too",
@@ -2624,10 +2625,10 @@ atv_circle.commit(atv_circle_layer, WORK_CRS, atv_circle_layer.crs())
 circle_written = newest(atv_circle_layer)
 measured_m2 = circle_written.geometry().area()
 by_hand = math.pi * 100.0
-print("        measured {0:.6f} m2 -> {1} ha; pi r^2 would be {2:.6f}".format(
-    measured_m2, circle_written[lf.AREA_HA_FIELD], by_hand))
-check("area_ha is the measured area over 10 000, to 2 decimals",
-      circle_written[lf.AREA_HA_FIELD], round(measured_m2 / 10_000.0, 2), 1e-9)
+print("        measured {0:.6f} m2 -> {1}; pi r^2 would be {2:.6f}".format(
+    measured_m2, circle_written[lf.AREA_FIELD], by_hand))
+check("Area is the measured area, to 2 decimals",
+      circle_written[lf.AREA_FIELD], round(measured_m2, 2), 1e-9)
 check_true("the measured area really is below pi r^2",
            measured_m2 < by_hand)
 
@@ -2659,7 +2660,7 @@ index = atv6_layer.fields().indexOf(lf.CAD_ID_FIELD)
 atv6_layer.dataProvider().changeAttributeValues(
     {atv6_feature.id(): {
         index: 1,
-        atv6_layer.fields().indexOf(lf.AREA_HA_FIELD): 0.15,
+        atv6_layer.fields().indexOf(lf.AREA_FIELD): 1500.0,
         atv6_layer.fields().indexOf(lf.PERIMETER_FIELD): 160.0}})
 before = [newest(atv6_layer)[name] for name in lf.VISIBLE_CAD_FIELDS]
 
@@ -2897,9 +2898,9 @@ check("rebuild lands on the same vertices",
 check("...and the same area", dg1_rebuilt.area(), 1200.0, 1e-6)
 check("the measured area travelled with the record",
       dg1_record.params["measured_area_m2"], 1200.0, 1e-6)
-check("area_ha is the measured area over 10 000",
-      dg1_written[lf.AREA_HA_FIELD], 0.12, 1e-9)
-check("perimeter_m too", dg1_written[lf.PERIMETER_FIELD], 140.0, 1e-6)
+check("Area is the measured area in square metres",
+      dg1_written[lf.AREA_FIELD], 1200.0, 1e-9)
+check("Perimetro too", dg1_written[lf.PERIMETER_FIELD], 140.0, 1e-6)
 check("three visible columns, as everywhere else",
       len(visible_fields(dg_layer)), 3)
 

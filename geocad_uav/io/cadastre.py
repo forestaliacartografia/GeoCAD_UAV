@@ -134,11 +134,25 @@ class CadastralParcel:
                                             self.particella) if part)
 
     def as_attributes(self) -> dict:
+        """The three columns as they go into an attribute table.
+
+        The comune is the *name*, resolved locally through the Belfiore
+        table: a column headed "Comune" reading G478 tells an operator
+        nothing, and the code they might want is still in the label and in
+        the parametric record. An unresolved code falls back to itself,
+        which is better than an empty cell.
+        """
         from .layer_factory import (CAT_COMUNE_FIELD,          # noqa: PLC0415
                                     CAT_FOGLIO_FIELD,
                                     CAT_PARTICELLA_FIELD)
 
-        return {CAT_COMUNE_FIELD: self.comune_code,
+        name = ""
+        try:
+            resolved = self.comune()
+            name = resolved.label() if resolved is not None else ""
+        except Exception:                                      # noqa: BLE001
+            name = ""                   # a register that will not load
+        return {CAT_COMUNE_FIELD: name or self.comune_code,
                 CAT_FOGLIO_FIELD: self.foglio,
                 CAT_PARTICELLA_FIELD: self.particella}
 

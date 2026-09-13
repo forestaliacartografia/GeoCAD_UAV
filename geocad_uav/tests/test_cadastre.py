@@ -329,8 +329,11 @@ for name in lf.CADASTRE_FIELD_NAMES:
     check_true("la colonna {0} e' stata creata".format(name),
                layer.fields().indexOf(name) >= 0)
 written = next(layer.getFeatures())
-check_text("il comune e' sulla feature", written[lf.CAT_COMUNE_FIELD],
-           "G478")
+# v1.29.0: the column reads the name, not the Belfiore code. A column
+# headed "Comune" saying G478 tells an operator nothing; the code is still
+# in parcel.label() and in the parametric record.
+check_text("il comune e' sulla feature, col suo nome",
+           written[lf.CAT_COMUNE_FIELD], "Perugia (PG)")
 check_text("il foglio anche", written[lf.CAT_FOGLIO_FIELD], "252")
 check_text("e la particella", written[lf.CAT_PARTICELLA_FIELD], "1016")
 check_true("le tre colonne restano visibili nella tabella",
@@ -348,12 +351,17 @@ check_true("...e senza layer nemmeno",
 # --------------------------------------------------------------------------
 # C9 - nothing happens unless the operator asked for it
 # --------------------------------------------------------------------------
-print("\n== C9: la rete e' opzionale, e parte spenta ==")
+# v1.29.0: on by default. Drawing a parcel and finding Comune, Foglio and
+# Particella already filled in is the point of a cadastral CAD tool; the
+# switch is still there for an operator with no network, or off Italian
+# ground, and this checks that turning it off really stops the lookup.
+print("\n== C9: l'interrogazione parte da sola, e si puo' spegnere ==")
 check_true("cadastre/enabled esiste fra le impostazioni",
            "cadastre/enabled" in KEYS)
 settings.reset("cadastre/enabled")
-check_true("...ed e' spenta per impostazione predefinita",
-           not bool(settings.get("cadastre/enabled")))
+check_true("...ed e' accesa per impostazione predefinita",
+           bool(settings.get("cadastre/enabled")))
+settings.set("cadastre/enabled", False)
 
 commit_layer = lf.memory_layer("Polygon", "cad no net", CRS.authid(),
                                pa.METADATA_FIELDS)
@@ -366,7 +374,7 @@ session.submit("0d")
 committed = tool.commit(commit_layer, CRS, commit_layer.crs())
 check("la geometria e' stata scritta comunque",
       commit_layer.featureCount(), 1)
-check_true("nessuna interrogazione catastale e' partita",
+check_true("spenta, nessuna interrogazione catastale parte",
            tool.cadastre_task is None)
 check_true("...e nessun avviso e' stato prodotto", not tool.cadastre_warning)
 check_true("il layer non ha preso colonne catastali",
@@ -392,8 +400,8 @@ try:
         tool2.cadastre_task.cancel()
 finally:
     settings.reset("cadastre/enabled")
-check_true("l'impostazione e' tornata spenta",
-           not bool(settings.get("cadastre/enabled")))
+check_true("l'impostazione e' tornata al suo valore, che e' acceso",
+           bool(settings.get("cadastre/enabled")))
 
 # --------------------------------------------------------------------------
 # C10 - the live service, skipped when it cannot be reached

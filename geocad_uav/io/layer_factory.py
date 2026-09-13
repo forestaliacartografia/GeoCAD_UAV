@@ -106,26 +106,32 @@ def _num(value):
 # --------------------------------------------------------------------------
 
 CAD_ID_FIELD = "cad_id"
-AREA_HA_FIELD = "area_ha"
-PERIMETER_FIELD = "perimeter_m"
+#: Square metres, not hectares. A column called plainly "Area" on a CAD
+#: polygon is read as square metres, and ``primitives.measure`` already
+#: holds the value in those: this takes a conversion out rather than
+#: putting one in.
+AREA_FIELD = "Area"
+PERIMETER_FIELD = "Perimetro"
 
 #: Written on every feature the CAD tools create, on top of the parametric
 #: columns in ``cad.parametric.METADATA_FIELDS``. They exist because an
 #: operator reads the attribute table, not the JSON in ``cad_params``.
 CAD_ATTRIBUTE_FIELDS = [
     (CAD_ID_FIELD, "int"),
-    (AREA_HA_FIELD, "double"),
+    (AREA_FIELD, "double"),
     (PERIMETER_FIELD, "double"),
 ]
 
 
-#: Cadastral columns, filled from the Agenzia delle Entrate WFS. Kept out
-#: of CAD_ATTRIBUTE_FIELDS on purpose: a layer only grows them once a
-#: cadastral lookup actually runs, so a project that never turns the service
-#: on never sees three empty columns.
-CAT_COMUNE_FIELD = "cat_comune"
-CAT_FOGLIO_FIELD = "cat_foglio"
-CAT_PARTICELLA_FIELD = "cat_particella"
+#: Cadastral columns, filled from the Agenzia delle Entrate WFS by the
+#: lookup that every CAD commit starts. They are part of the CAD layer's
+#: schema and not an afterthought: an operator who draws a parcel expects
+#: to find the three of them in the attribute table, filling in by
+#: themselves, and a column that appears only once a network call succeeded
+#: is a column nobody knows to look for.
+CAT_COMUNE_FIELD = "Comune"
+CAT_FOGLIO_FIELD = "Foglio"
+CAT_PARTICELLA_FIELD = "Particella"
 
 CADASTRE_FIELDS = [
     (CAT_COMUNE_FIELD, "string"),
@@ -135,13 +141,20 @@ CADASTRE_FIELDS = [
 
 CADASTRE_FIELD_NAMES = tuple(name for name, _kind in CADASTRE_FIELDS)
 
-#: The only columns an operator should meet in the attribute table. The three
-#: CAD ones: this tuple is what a caller means by "the CAD columns", and it
-#: stays three whether or not a layer ever met the cadastral service.
-VISIBLE_CAD_FIELDS = (CAD_ID_FIELD, AREA_HA_FIELD, PERIMETER_FIELD)
+#: What the cadastral columns say when the service could not answer, or
+#: answered that there is no parcel here. Written, not left empty: an empty
+#: cell reads as "nobody asked", and the operator has to be able to tell
+#: that apart from "asked, and there is nothing".
+NOT_AVAILABLE = "N/D"
 
-#: What the visibility pass leaves showing: the CAD columns plus the
-#: cadastral ones, which are only ever present on a layer that asked for them.
+#: The five columns an operator meets in the attribute table of a CAD layer:
+#: what was drawn, how big it is, and where it is in the cadastre.
+CAD_LAYER_FIELDS = CAD_ATTRIBUTE_FIELDS + CADASTRE_FIELDS
+
+#: The CAD columns proper -- geometry measurements, not cadastral answers.
+VISIBLE_CAD_FIELDS = (CAD_ID_FIELD, AREA_FIELD, PERIMETER_FIELD)
+
+#: What the visibility pass leaves showing: the measurements and the parcel.
 ALWAYS_VISIBLE_FIELDS = VISIBLE_CAD_FIELDS + CADASTRE_FIELD_NAMES
 
 
@@ -226,12 +239,36 @@ def ensure_cad_fields(layer):
 def ensure_cadastre_fields(layer):
     """Add the cadastral columns, the same way and with the same contract.
 
-    Separate from :func:`ensure_cad_fields` because these three are only
-    meaningful once the parcel service has been asked: adding them to every
-    layer would put three columns that will stay empty in front of every
-    operator who never turns the lookup on.
+    Still separate from :func:`ensure_cad_fields`, and still called from the
+    background task: a layer the operator brought from elsewhere -- their own
+    shapefile, a parcel they already had -- has no reason to carry these
+    three until something writes them.
     """
     return _ensure(layer, CADASTRE_FIELDS)
+
+
+def write_cadastre_unavailable(layer, feature_id) -> bool:
+    """Say "N/D" in the three columns, when the service could not answer.
+
+    Called on a timeout, on a refusal, and where the service holds no parcel
+    at all -- Trento and Bolzano keep their own cadastre. Left empty, those
+    cells would be indistinguishable from a lookup that never ran.
+    """
+    if layer is None or ensure_cadastre_fields(layer) is None:
+        return False
+    try:
+        fields = layer.fields()
+        changes = {}
+        for name in CADASTRE_FIELD_NAMES:
+            index = fields.indexOf(name)
+            if index >= 0:
+                changes[index] = NOT_AVAILABLE
+        if not changes:
+            return False
+        return bool(layer.dataProvider().changeAttributeValues(
+            {int(feature_id): changes}))
+    except (AttributeError, RuntimeError):
+        return False
 
 
 def _ensure(layer, specs):
@@ -348,9 +385,8 @@ def cad_attributes(record, layer) -> dict:
 
     The numbers come from ``primitives.measure`` -- which already stored them
     in the record at build time, in the metric working CRS -- so the tool
-    never computes an area of its own and hectares are never derived from
-    degrees. Hectares are rounded to 2 decimals because that is the precision
-    a planting or forestry document is written in; metres keep 3.
+    never computes an area of its own and an area is never derived from
+    degrees. Square metres to 2 decimals, metres to 3.
     """
     params = getattr(record, "params", {}) or {}
     area_m2 = params.get("measured_area_m2")
@@ -358,7 +394,7 @@ def cad_attributes(record, layer) -> dict:
                  or params.get("measured_length_m"))
     return {
         CAD_ID_FIELD: next_cad_id(layer),
-        AREA_HA_FIELD: round(float(area_m2) / 10_000.0, 2) if area_m2 else 0.0,
+        AREA_FIELD: round(float(area_m2), 2) if area_m2 else 0.0,
         PERIMETER_FIELD: round(float(perimeter), 3) if perimeter else 0.0,
     }
 

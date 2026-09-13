@@ -66,10 +66,12 @@ KEYS = {s.key: s for s in (
 
     # -- snapping (mirrors the project's QgsSnappingConfig) -----------------
     _s("snap/enabled", BOOL, True, "Aggancio attivo per gli strumenti CAD"),
-    # Off by default: a CAD tool that called a government service on every
-    # commit without being asked would be a surprise, and every other network
-    # path in this plugin is opt-in too.
-    _s("cadastre/enabled", BOOL, False,
+    # On by default since 1.29.0. Drawing a parcel and finding Comune,
+    # Foglio and Particella already filled in is the point of a cadastral
+    # CAD tool; the lookup runs on a background task, writes "N/D" when the
+    # service cannot answer, and this switch turns it off for an operator
+    # working with no network or off Italian ground.
+    _s("cadastre/enabled", BOOL, True,
        "Interroga il catasto (Agenzia delle Entrate) a ogni geometria CAD"),
     # Empty means the table shipped in data/belfiore.csv. An operator with a
     # more recent or a locally corrected register points this at their file.
