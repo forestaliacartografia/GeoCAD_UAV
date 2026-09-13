@@ -46,7 +46,8 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                                  QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                  QLineEdit, QListWidget, QListWidgetItem,
                                  QMessageBox,
-                                 QPushButton, QScrollArea, QSpinBox,
+                                 QPushButton, QScrollArea, QSlider,
+                                 QSpinBox,
                                  QStackedWidget, QTabWidget, QTableWidget,
                                  QTableWidgetItem, QTextBrowser, QVBoxLayout,
                                  QWidget)
@@ -70,6 +71,7 @@ from ..io import cartography as carto_mod
 from ..io import documents as docs_mod
 from ..io import project_file as project_mod
 from ..uav import forest_link as forest_link_mod
+from . import mission_report as mission_report_mod
 from . import charts as charts_mod
 from . import map_layers as map_layers_mod
 from . import theme as theme_mod
@@ -163,6 +165,16 @@ CONSTRAINT_KINDS = (
 )
 
 DASH = "--"
+
+#: Positions of the simulator's time cursor. A thousand steps over a flight
+#: of any length is finer than the eye, and an integer slider is the only
+#: kind Qt has.
+SLIDER_STEPS = 1000
+
+#: The footprint overlay: a translucent fill, so two frames over the same
+#: ground read darker than one. The value is the overlap, not the colour.
+FOOTPRINT_FILL = "255,180,60,55"
+FOOTPRINT_OUTLINE = "200,120,20,120"
 
 
 def tr(text: str) -> str:
@@ -3545,6 +3557,8 @@ class ContextDock(QDockWidget):
             state.iface, lambda: self.uav_panel.last_mission)
         self.player = MissionPlayer(state.iface, self)
         self._player_connections = []
+        #: Guards the two-way link between the time cursor and the clock.
+        self._seeking = False
         flight = dict(self.uav_panel.pages())
         # One DEM download in the whole plugin, and it belongs to the
         # Terreno step. The flight step sends the operator there rather
@@ -3556,7 +3570,12 @@ class ContextDock(QDockWidget):
                                      + [self.dem_step_button])
         flight[uav_mod.STEP_SIMULATION] = (
             list(flight[uav_mod.STEP_SIMULATION]) + [self._build_player_box()])
-        flight[uav_mod.STEP_EXPORT] = [self.export_panel]
+        self.report_button = QPushButton(tr("Relazione di missione (HTML)"))
+        self.report_button.setToolTip(tr(
+            "Scrive la relazione completa: parametri, statistiche, esito "
+            "dei controlli e profilo altimetrico."))
+        self.report_button.setEnabled(False)
+        flight[uav_mod.STEP_EXPORT] = [self.export_panel, self.report_button]
 
         #: Flight step key -> (page widget, None). Kept apart from
         #: ``pages`` because these are one planner's controls, not panels
@@ -3590,7 +3609,7 @@ class ContextDock(QDockWidget):
     # -- the flight simulator ----------------------------------------------
 
     def _build_player_box(self):
-        """Transport controls over the mission the planner already built."""
+        """Transport controls, a time cursor, and the altimetric profile."""
         box = QGroupBox(tr("Simulazione del volo"))
         layout = QVBoxLayout(box)
         row = QHBoxLayout()
@@ -3604,9 +3623,31 @@ class ContextDock(QDockWidget):
                        self.rate_combo):
             row.addWidget(widget)
         layout.addLayout(row)
+
+        # The time cursor. Dragging it is the same as having played to that
+        # instant: the simulator rebuilds its whole state from the moment,
+        # exposures included.
+        self.time_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_slider.setRange(0, SLIDER_STEPS)
+        self.time_slider.setToolTip(tr(
+            "Trascina per andare a un istante del volo: quota, batteria e "
+            "fotogrammi seguono."))
+        self.time_slider.setEnabled(False)
+        layout.addWidget(self.time_slider)
+
         self.player_status = QLabel()
         self.player_status.setWordWrap(True)
         layout.addWidget(self.player_status)
+
+        self.profile_chart = charts_mod.ElevationProfile()
+        layout.addWidget(self.profile_chart)
+
+        self.footprint_button = QPushButton(tr("Mostra le impronte a terra"))
+        self.footprint_button.setToolTip(tr(
+            "Disegna l'impronta di ogni scatto proiettata sul DEM. Dove le "
+            "impronte si sovrappongono il colore si scurisce: e' la "
+            "sovrapposizione longitudinale e laterale, vista da sopra."))
+        layout.addWidget(self.footprint_button)
         return box
 
     def _wire_player(self):
@@ -3615,6 +3656,9 @@ class ContextDock(QDockWidget):
                 (self.pause_button.clicked, self.pause_mission),
                 (self.stop_button.clicked, self.stop_mission),
                 (self.rate_combo.currentIndexChanged, self._change_rate),
+                (self.time_slider.valueChanged, self._seek),
+                (self.footprint_button.clicked, self.show_footprints),
+                (self.report_button.clicked, self.write_mission_report),
                 (self.uav_panel.generate_button.clicked,
                  self.refresh_player),
                 (self.uav_panel.generate_button.clicked,
@@ -3652,18 +3696,146 @@ class ContextDock(QDockWidget):
     def _change_rate(self, *_args) -> None:
         self.player.set_rate(self.rate_combo.currentData() or 1)
 
+    def _seek(self, value) -> None:
+        """The operator dragged the cursor."""
+        if self._seeking or self.player.mission is None:
+            return
+        self._seeking = True
+        try:
+            self.player.seek(self.player.duration_s
+                             * float(value) / SLIDER_STEPS)
+        finally:
+            self._seeking = False
+
     def _on_player_tick(self, *_args) -> None:
         self.player_status.setText(self.player.summary())
+        self.profile_chart.set_cursor(
+            self.profile_chart.length_m * self.player.distance_fraction())
+        if self._seeking:
+            return
+        self._seeking = True
+        try:
+            total = self.player.duration_s
+            self.time_slider.setValue(
+                0 if total <= 0
+                else int(round(SLIDER_STEPS * self.player.t_sim / total)))
+        finally:
+            self._seeking = False
 
     def refresh_player(self, *_args) -> None:
         mission = getattr(self.uav_panel, "last_mission", None)
         self.play_button.setEnabled(mission is not None)
         self.pause_button.setEnabled(self.player.is_playing)
         self.stop_button.setEnabled(self.player.mission is not None)
+        self.footprint_button.setEnabled(mission is not None)
+        self.report_button.setEnabled(mission is not None)
+        if mission is not None and mission is not self.player.mission:
+            # Loaded here rather than on Play, so the cursor and the profile
+            # answer about the route on screen before anyone presses
+            # anything.
+            self.player.load(mission)
+        samples = self.profile_chart.set_mission(mission)
+        self.time_slider.setEnabled(mission is not None
+                                    and self.player.duration_s > 0)
+        self._seeking = True
+        try:
+            self.time_slider.setValue(0)
+        finally:
+            self._seeking = False
         if mission is None:
             self.player_status.setText(tr("Nessuna rotta caricata."))
+        elif samples < 2:
+            self.player_status.setText(tr(
+                "Rotta caricata; profilo altimetrico non disponibile."))
         else:
             self.player_status.setText(self.player.summary())
+
+    # -- what the flight leaves on the map and on disk ---------------------
+
+    def show_footprints(self, *_args):
+        """Draw the draped footprint of every exposure, one over the other.
+
+        Semi-transparent on purpose: where two frames overlap the fill
+        doubles up and the ground goes darker, so frontlap and sidelap are
+        read off the map instead of off a number. The footprints are draped
+        on the DEM by ray casting, so this is the coverage that will really
+        be flown, not the plan's flat rectangle.
+        """
+        from qgis.core import QgsFillSymbol, QgsSingleSymbolRenderer
+
+        from ..io import layer_factory as lf
+
+        mission = getattr(self.uav_panel, "last_mission", None)
+        if mission is None:
+            self.player_status.setText(tr("Genera prima la rotta."))
+            return None
+        if not mission.footprints:
+            self.player_status.setText(tr(
+                "Impronte non calcolate: accendi 'Verifica la copertura "
+                "sulle impronte a terra' nello step Sicurezza e rigenera la "
+                "rotta."))
+            return None
+
+        crs = self.uav_panel.extent.crs()
+        layer = lf.build_footprint_layer(mission,
+                                         crs.authid() if crs else "")
+        symbol = QgsFillSymbol.createSimple({
+            "color": FOOTPRINT_FILL,
+            "outline_color": FOOTPRINT_OUTLINE,
+            "outline_width": "0.2",
+        })
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        layer.setName(tr("Impronte a terra ({0} scatti)").format(
+            layer.featureCount()))
+        QgsProject.instance().addMapLayer(layer)
+        self.player_status.setText(tr(
+            "{0} impronte disegnate: dove il colore si scurisce le foto si "
+            "sovrappongono.").format(layer.featureCount()))
+        return layer
+
+    def write_mission_report(self, *_args, path: str = ""):
+        """Write the flight report the plugin could always build.
+
+        It existed only as the HTML output of a Processing algorithm, which
+        is not a place anyone working in the dashboard ever looks.
+        """
+        mission = getattr(self.uav_panel, "last_mission", None)
+        if mission is None:
+            self.player_status.setText(tr("Genera prima la rotta."))
+            return ""
+        if not path:
+            path, _filter = QFileDialog.getSaveFileName(
+                self, tr("Relazione di missione"), "missione.html",
+                tr("Pagina HTML (*.html)"))
+        if not path:
+            return ""
+        try:
+            # build_html's "geometry" is the photogrammetric geometry --
+            # footprint, spacings, GSD -- not the AOI polygon.
+            written = mission_report_mod.save_html(
+                mission, path, params=self.uav_panel.build_params(),
+                validation=self.uav_panel.last_report,
+                geometry=self.uav_panel.survey_geometry())
+        except (GeoCadError, OSError, ValueError) as exc:
+            self.warn(exc)
+            return ""
+        self.player_status.setText(tr("Relazione scritta in {0}.")
+                                   .format(written))
+        return written
+
+    def warn(self, error) -> None:
+        message = (error.formatted() if isinstance(error, GeoCadError)
+                   else str(error))
+        iface = self.state.iface
+        if iface is not None:
+            try:
+                iface.messageBar().pushMessage("GeoCad UAV", message,
+                                               level=Qgis.Warning, duration=6)
+                return
+            except Exception:                                   # noqa: BLE001
+                pass
+        QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
+                                               Qgis.Warning)
 
     def teardown(self) -> None:
         """Called from the workspace when the plugin is unloaded."""

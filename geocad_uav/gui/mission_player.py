@@ -33,6 +33,7 @@ from qgis.gui import QgsRubberBand
 from qgis.PyQt.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 
+from ..core.planar import cumulative_distance
 from ..core.units import format_duration
 from ..uav import terrain_follow as tf
 
@@ -70,7 +71,11 @@ class MissionPlayer(QObject):
         self.flashed = []
         self.message = ""
         self._xy = None
+        self._z = None
+        self._agl = None
+        self._sub = None
         self._times = None
+        self._chainage = None
         self._photo_at = None
         self._flash_left = 0
         self._marker = None
@@ -108,7 +113,11 @@ class MissionPlayer(QObject):
         self.stop()
         self.mission = None
         self._xy = None
+        self._z = None
+        self._agl = None
+        self._sub = None
         self._times = None
+        self._chainage = None
         self._photo_at = None
         if mission is None:
             self.message = tr(
@@ -134,6 +143,10 @@ class MissionPlayer(QObject):
                                                   speeds[i:i + 1])
         self._times = np.cumsum(steps)
         self._xy = xy
+        self._z = z
+        self._agl = np.array([wp.z_agl for wp in waypoints], dtype=float)
+        self._sub = np.array([wp.sub_mission for wp in waypoints], dtype=int)
+        self._chainage = cumulative_distance(xy)
         self._photo_at = [wp.kind == "photo" for wp in waypoints]
         self.mission = mission
         self.message = ""
@@ -176,6 +189,101 @@ class MissionPlayer(QObject):
         self.flash_count = 0
         self.flashed = []
         self._flash_left = 0
+
+    def seek(self, t_sim: float) -> float:
+        """Put the clock at a moment without playing. Returns where it landed.
+
+        The whole state is rebuilt from that instant rather than nudged:
+        dragging the cursor backwards has to un-take the exposures, and a
+        flash count that only ever grew would be a lie after one drag.
+        """
+        if self.mission is None or self._times is None \
+                or not self._times.size:
+            return 0.0
+        total = self.duration_s
+        moment = min(max(float(t_sim), 0.0), total)
+        self.t_sim = moment
+        index = int(np.searchsorted(self._times, moment, side="right")) - 1
+        self.index = int(min(max(index, 0), len(self._times) - 1))
+        self.flashed = [i for i in range(self.index + 1) if self._photo_at[i]]
+        self.flash_count = len(self.flashed)
+        self._flash_left = 0
+        if self._flash is not None:
+            self._flash.reset(QgsWkbTypes.PointGeometry)
+        self._move_marker()
+        self.ticked.emit(self.t_sim, self.index, self.flash_count)
+        return self.t_sim
+
+    def _fraction(self) -> float:
+        """How far into the current segment the clock is, 0..1."""
+        if self._times is None or self.index >= len(self._times) - 1:
+            return 0.0
+        span = self._times[self.index + 1] - self._times[self.index]
+        if span <= 0:
+            return 0.0
+        return min(max((self.t_sim - self._times[self.index]) / span, 0.0),
+                   1.0)
+
+    def state(self) -> dict:
+        """Where the aircraft is and what it has done, as numbers.
+
+        The battery figure is what is left of **this** leg between take-off
+        and landing, read off the sub-mission the planner already split the
+        flight into -- not a charge model. A mission the planner cut into
+        three legs is three batteries, and this says how far through the
+        current one the clock is.
+        """
+        empty = {"t_s": 0.0, "duration_s": 0.0, "distance_m": 0.0,
+                 "length_m": 0.0, "z_amsl": float("nan"),
+                 "z_agl": float("nan"), "photos": 0, "photo_total": 0,
+                 "sub_mission": 0, "sub_total": 0, "battery_left": 1.0}
+        if self.mission is None or self._times is None \
+                or not self._times.size:
+            return empty
+
+        i = self.index
+        last = len(self._times) - 1
+        fraction = self._fraction()
+        nxt = min(i + 1, last)
+
+        def blend(values):
+            return float(values[i] + fraction * (values[nxt] - values[i]))
+
+        sub = int(self._sub[i]) if self._sub is not None else 0
+        subs = sorted({int(v) for v in self._sub}) if self._sub is not None \
+            else []
+        battery = 1.0
+        if self._sub is not None and subs:
+            same = np.where(self._sub == sub)[0]
+            t0 = float(self._times[same[0]])
+            t1 = float(self._times[same[-1]])
+            if t1 > t0:
+                battery = 1.0 - min(max((self.t_sim - t0) / (t1 - t0), 0.0),
+                                    1.0)
+        return {
+            "t_s": float(self.t_sim),
+            "duration_s": float(self.duration_s),
+            "distance_m": blend(self._chainage),
+            "length_m": float(self._chainage[-1]),
+            "z_amsl": blend(self._z),
+            "z_agl": blend(self._agl),
+            "photos": int(self.flash_count),
+            "photo_total": int(self.photo_count),
+            "sub_mission": subs.index(sub) + 1 if sub in subs else 0,
+            "sub_total": len(subs),
+            "battery_left": float(battery),
+        }
+
+    def distance_fraction(self) -> float:
+        """0..1 along the flown distance -- not along the clock.
+
+        The two differ wherever the climb rate caps the ground speed, and the
+        altimetric profile has distance on its axis, so its cursor is placed
+        with this one.
+        """
+        state = self.state()
+        total = state["length_m"]
+        return 0.0 if total <= 0 else min(1.0, state["distance_m"] / total)
 
     def set_rate(self, rate: int) -> int:
         """Change the clock multiplier. Never touches the mission."""
@@ -304,11 +412,18 @@ class MissionPlayer(QObject):
         """What the operator is watching, and what it is not."""
         if self.mission is None:
             return self.message or tr("Nessuna missione caricata.")
+        state = self.state()
+        battery = tr("batteria {0}/{1} al {2:.0f} %").format(
+            state["sub_mission"], state["sub_total"],
+            100.0 * state["battery_left"]) if state["sub_total"] > 1 else \
+            tr("batteria al {0:.0f} %").format(100.0 * state["battery_left"])
         return tr(
             "t {0} / {1} percorso - {2} di missione con decolli, atterraggi "
-            "e virate - scatti {3}/{4} - {5}x").format(
+            "e virate - {3:,.0f} m - quota {4:,.0f} m s.l.m. ({5:.0f} m AGL) "
+            "- {6} - scatti {7}/{8} - {9}x").format(
                 format_duration(self.t_sim), format_duration(self.duration_s),
                 format_duration(self.mission.stats.flight_time_s),
+                state["distance_m"], state["z_amsl"], state["z_agl"], battery,
                 self.flash_count, self.photo_count, self.rate)
 
     def teardown(self):

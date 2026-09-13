@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.32.0
+version=1.33.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,24 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.33.0
+    - Profilo altimetrico nello step Simulazione: terreno e quota di volo
+      sullo stesso grafico, disegnato con QPainter. E' l'immagine che
+      mostra che il terrain following e' successo davvero, perche' le
+      due curve restano parallele; su una quota AMSL fissa la linea di
+      volo sarebbe piatta mentre il terreno si muove.
+    - Cursore temporale: si trascina e si va a un istante del volo.
+      Quota, AGL, distanza percorsa, batteria della tratta e fotogrammi
+      seguono, e tornando indietro gli scatti si dis-fanno invece di
+      restare contati.
+    - "Mostra le impronte a terra": l'impronta di ogni scatto proiettata
+      sul DEM, con riempimento traslucido. Dove due fotogrammi si
+      sovrappongono il colore raddoppia: frontlap e sidelap si leggono
+      sulla mappa invece che su un numero.
+    - "Relazione di missione (HTML)": la relazione completa esisteva gia'
+      ma usciva solo da un algoritmo di Processing, dove nessuno la
+      cercava. Ora e' un tasto dello step Export.
 
 changelog=1.32.0
     - Il pianificatore di volo e' entrato nella dashboard, come sei step

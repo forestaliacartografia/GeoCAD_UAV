@@ -73,6 +73,11 @@ def skip(label, reason):
     SKIPS.append((label, reason))
 
 
+def io_open(path):
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+
+
 # -- a hillside on disk ----------------------------------------------------
 CELL = 5.0
 NX, NY = 120, 110
@@ -449,6 +454,130 @@ else:
     state.refresh_status()
     check_true("lo step Export risulta fatto",
                state.status(up.STEP_EXPORT) in (wf.DONE, wf.ACTIVE))
+
+# --------------------------------------------------------------------------
+# W7 - the altimetric profile, the time cursor and the footprints
+# --------------------------------------------------------------------------
+print("\n== W7: profilo, cursore, impronte ==")
+if mission is None:
+    skip("W7", "nessuna rotta")
+else:
+    chart = context.profile_chart
+    samples = chart.set_mission(mission)
+    print("        campioni nel profilo: {0}, percorso {1:,.0f} m".format(
+        samples, chart.length_m))
+    check_true("il profilo ha dei campioni", samples > 100)
+    check_true("...e una lunghezza sensata",
+               chart.length_m > 0.5 * mission.stats.total_length_m)
+
+    agl = chart.agl()
+    print("        AGL nel profilo: {0:.2f} - {1:.2f} m".format(
+        float(agl.min()), float(agl.max())))
+    check_true("le due curve restano parallele: e' il terrain following",
+               float(agl.max() - agl.min()) < 1.0)
+    ground_span = float(chart.ground.max() - chart.ground.min())
+    flight_span = float(chart.flight.max() - chart.flight.min())
+    print("        terreno {0:.1f} m, volo {1:.1f} m".format(
+        ground_span, flight_span))
+    check_true("...e nessuna delle due e' piatta",
+               ground_span > 20.0 and abs(flight_span - ground_span) < 1.0)
+
+    # The same numbers the report draws: one function, two renderings.
+    import numpy as _np
+    from geocad_uav.gui import mission_report as _mr
+    rs, rg, rf = _mr.profile_series(mission)
+    check_true("il grafico e la relazione leggono la stessa serie",
+               rs.size == chart.s.size
+               and bool(_np.allclose(rg, chart.ground))
+               and bool(_np.allclose(rf, chart.flight)))
+
+    # -- the time cursor
+    context.refresh_player()
+    check_true("il cursore del tempo e' abilitato",
+               context.time_slider.isEnabled())
+    duration = context.player.duration_s
+    check_true("la simulazione ha una durata", duration > 1.0)
+
+    context.time_slider.setValue(500)
+    moment = context.player.state()
+    print("        a meta': t={0:.0f}s quota={1:,.0f} m AGL={2:.0f} m "
+          "scatti={3}/{4} batteria={5:.0f} %".format(
+              moment["t_s"], moment["z_amsl"], moment["z_agl"], moment["photos"],
+              moment["photo_total"], 100.0 * moment["battery_left"]))
+    check("trascinare il cursore porta l'orologio a meta'", moment["t_s"],
+          duration * 0.5, max(0.02 * duration, 0.5))
+    check_true("...e la quota e' quella del volo, non zero",
+               moment["z_amsl"] > 0.0)
+    check("...con l'AGL della missione", moment["z_agl"], 90.0, 1.0)
+    check_true("...e una parte degli scatti gia' fatta",
+               0 < moment["photos"] < moment["photo_total"])
+    check_true("la batteria si consuma lungo la tratta",
+               0.0 <= moment["battery_left"] < 1.0)
+    check_true("il cursore del profilo si e' mosso",
+               chart.cursor_s is not None and chart.cursor_s > 0.0)
+
+    taken_halfway = moment["photos"]
+    context.time_slider.setValue(50)
+    back = context.player.state()
+    print("        tornando indietro: t={0:.0f}s scatti={1}".format(
+        back["t_s"], back["photos"]))
+    check_true("tornando indietro l'orologio torna indietro",
+               back["t_s"] < moment["t_s"])
+    check_true("...e gli scatti si 'dis-fanno': non e' un contatore che sale",
+               back["photos"] < taken_halfway)
+    check_true("il riepilogo dice quota e batteria",
+               "s.l.m." in context.player.summary()
+               and "batteria" in context.player.summary())
+
+    # -- the footprints
+    refused = context.show_footprints()
+    print("        senza impronte: {0}".format(context.player_status.text()))
+    check_true("senza impronte calcolate lo dice invece di disegnare niente",
+               refused is None
+               and "impronte" in context.player_status.text().lower())
+
+    panel.check_coverage.setChecked(True)
+    covered = panel.generate()
+    check_true("rigenerando con la copertura accesa le impronte ci sono",
+               covered is not None and len(covered.footprints) > 0)
+    context.refresh_player()
+    layer = context.show_footprints()
+    check_true("il layer delle impronte viene creato", layer is not None)
+    if layer is not None:
+        print("        {0} impronte, layer '{1}'".format(
+            layer.featureCount(), layer.name()))
+        check("una impronta per scatto", layer.featureCount(),
+              len(covered.photos))
+        check_true("...con geometria valida e area positiva",
+                   all(f.geometry() is not None and f.geometry().area() > 0.0
+                       for f in layer.getFeatures()))
+        check_true("il riempimento e' traslucido, o le sovrapposizioni non "
+                   "si vedrebbero",
+                   int(wf.FOOTPRINT_FILL.split(",")[3]) < 255)
+        check_true("il layer e' sul progetto, non solo in memoria",
+                   QgsProject.instance().mapLayer(layer.id()) is not None)
+        # The coverage check the footprints exist for.
+        after = panel.last_report
+        coverage = [c for c in after.checks if c.code.startswith("coverage")]
+        print("        copertura: {0}".format(
+            coverage[0].detail if coverage else "assente"))
+        check_true("ora la copertura e' misurata, non 'non verificata'",
+                   bool(coverage)
+                   and "non verificat" not in coverage[0].detail)
+
+    # -- the mission report
+    report_path = os.path.join(TMP, "relazione.html")
+    written = context.write_mission_report(path=report_path)
+    check_true("la relazione viene scritta", bool(written)
+               and os.path.exists(report_path))
+    if written:
+        html = io_open(report_path)
+        print("        relazione: {0:,} caratteri".format(len(html)))
+        check_true("...e contiene il profilo altimetrico disegnato",
+                   "<svg" in html and "Profilo altimetrico" in html)
+        check_true("...e i numeri della missione",
+                   "{0}".format(len(covered.waypoints)) in html
+                   or "waypoint" in html.lower())
 
 # --------------------------------------------------------------------------
 print("\n" + "=" * 78)

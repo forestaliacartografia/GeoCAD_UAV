@@ -82,24 +82,27 @@ def _rows(pairs) -> str:
 # Elevation profile
 # --------------------------------------------------------------------------
 
-def elevation_profile_svg(mission: Mission, width: int = 900,
-                          height: int = 240) -> str:
-    """Terrain vs commanded height along the whole route, as inline SVG.
+def profile_series(mission: Mission, max_points: int = 1200):
+    """``(chainage, ground, flight)`` along the whole route, in metres.
 
-    This is the picture that shows terrain following actually happened: the two
-    curves stay parallel. On a fixed-AMSL plan the flight line would be flat
-    while the ground moves, and the gap between them (the AGL) would open and
-    close -- which is exactly the GSD and overlap collapse the mode exists to
-    prevent.
+    Each leg's profile restarts its chainage at zero, so they are stitched
+    into one continuous axis here. Samples with no DEM under them are
+    dropped rather than interpolated: a hole in the terrain model is not a
+    terrain height, and the mission already flags those waypoints.
+
+    Down-sampled to ``max_points`` keeping the extremes of each bucket, so a
+    ridge is never smoothed away. Returns three empty arrays when there is
+    no profile to draw.
     """
-    rows = mission.profile
+    empty = (np.empty(0), np.empty(0), np.empty(0))
+    rows = getattr(mission, "profile", None) or []
     if len(rows) < 2:
-        return "<p class='sub'>Profilo altimetrico non disponibile.</p>"
+        return empty
 
-    # Legs restart their chainage at 0; accumulate into one continuous axis.
     s = np.array([r["s"] for r in rows], dtype=float)
     ground = np.array([r["z_ground"] for r in rows], dtype=float)
     flight = np.array([r["z_flight"] for r in rows], dtype=float)
+
     offset = 0.0
     cumulative = np.empty_like(s)
     previous = -math.inf
@@ -111,15 +114,29 @@ def elevation_profile_svg(mission: Mission, width: int = 900,
 
     finite = np.isfinite(ground) & np.isfinite(flight)
     if not finite.any():
-        return "<p class='sub'>Profilo altimetrico non disponibile.</p>"
-    cumulative, ground, flight = cumulative[finite], ground[finite], flight[finite]
+        return empty
+    cumulative, ground, flight = (cumulative[finite], ground[finite],
+                                  flight[finite])
 
-    # Downsample for a sane SVG size; keep the extremes of each bucket so a
-    # ridge is never smoothed away.
-    max_points = 1200
-    if cumulative.size > max_points:
+    if max_points and cumulative.size > max_points:
         idx = np.linspace(0, cumulative.size - 1, max_points).astype(int)
         cumulative, ground, flight = cumulative[idx], ground[idx], flight[idx]
+    return cumulative, ground, flight
+
+
+def elevation_profile_svg(mission: Mission, width: int = 900,
+                          height: int = 240) -> str:
+    """Terrain vs commanded height along the whole route, as inline SVG.
+
+    This is the picture that shows terrain following actually happened: the two
+    curves stay parallel. On a fixed-AMSL plan the flight line would be flat
+    while the ground moves, and the gap between them (the AGL) would open and
+    close -- which is exactly the GSD and overlap collapse the mode exists to
+    prevent.
+    """
+    cumulative, ground, flight = profile_series(mission)
+    if cumulative.size < 2:
+        return "<p class='sub'>Profilo altimetrico non disponibile.</p>"
 
     pad_l, pad_r, pad_t, pad_b = 52, 12, 12, 30
     plot_w = width - pad_l - pad_r

@@ -18,8 +18,10 @@ map are the same colour by construction rather than by two tables agreeing.
 
 from __future__ import annotations
 
-from qgis.PyQt.QtCore import QRectF, Qt
-from qgis.PyQt.QtGui import QColor, QFont, QPainter, QPen
+import numpy as np
+from qgis.PyQt.QtCore import QPointF, QRectF, Qt
+from qgis.PyQt.QtGui import (QColor, QFont, QPainter, QPainterPath, QPen,
+                             QPolygonF)
 from qgis.PyQt.QtWidgets import QSizePolicy, QWidget
 
 from ..forest.reforestation import symbology as symbology_mod
@@ -160,4 +162,188 @@ class SpeciesMixChart(QWidget):
         return text + "..."
 
 
-__all__ = ["SpeciesMixChart", "ROW_H", "TOLERANCE_PCT"]
+# --------------------------------------------------------------------------
+# The altimetric profile
+# --------------------------------------------------------------------------
+
+#: Margins of the plotting area: room for the metre labels on the left and
+#: the chainage labels underneath.
+PAD_L, PAD_R, PAD_T, PAD_B = 46, 10, 10, 22
+
+#: Horizontal grid lines, and vertical ones.
+Y_TICKS = 4
+X_TICKS = 4
+
+
+class ElevationProfile(QWidget):
+    """Terrain and commanded height along the whole route.
+
+    Fed by :func:`gui.mission_report.profile_series`, which is the same
+    function the HTML report draws from -- one stitching of the per-leg
+    chainages, two renderings, so the picture in the panel and the picture
+    in the report cannot disagree.
+
+    ``set_cursor`` puts a vertical line at a distance along the route; the
+    simulator moves it while the marker walks the map.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.s = np.empty(0)
+        self.ground = np.empty(0)
+        self.flight = np.empty(0)
+        self.h_agl_m = 0.0
+        self.cursor_s = None
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(150)
+        self.setToolTip("")
+
+    # -- what it shows -----------------------------------------------------
+
+    def set_mission(self, mission) -> int:
+        """Read a mission's profile. Returns how many samples it will draw."""
+        from .mission_report import profile_series                # noqa: PLC0415
+
+        if mission is None:
+            self.s = self.ground = self.flight = np.empty(0)
+            self.h_agl_m = 0.0
+        else:
+            self.s, self.ground, self.flight = profile_series(mission)
+            self.h_agl_m = float(getattr(mission, "h_agl_m", 0.0) or 0.0)
+        self.cursor_s = None
+        self.setToolTip(self.describe())
+        self.update()
+        return int(self.s.size)
+
+    def clear(self) -> None:
+        self.set_mission(None)
+
+    def set_cursor(self, distance_m) -> None:
+        """Put the cursor at a chainage, or remove it with None."""
+        self.cursor_s = (None if distance_m is None
+                         else float(distance_m))
+        self.update()
+
+    @property
+    def length_m(self) -> float:
+        return float(self.s[-1] - self.s[0]) if self.s.size else 0.0
+
+    def agl(self):
+        """Height above ground at every sample, in metres."""
+        if not self.s.size:
+            return np.empty(0)
+        return self.flight - self.ground
+
+    def describe(self) -> str:
+        if not self.s.size:
+            return "Nessun profilo: genera prima la rotta."
+        agl = self.agl()
+        return ("Percorso {0:,.0f} m | terreno da {1:,.0f} a {2:,.0f} m "
+                "s.l.m. | AGL da {3:.1f} a {4:.1f} m".format(
+                    self.length_m, float(self.ground.min()),
+                    float(self.ground.max()), float(agl.min()),
+                    float(agl.max())))
+
+    # -- painting ----------------------------------------------------------
+
+    def _frame(self):
+        return QRectF(PAD_L, PAD_T,
+                      max(10.0, self.width() - PAD_L - PAD_R),
+                      max(10.0, self.height() - PAD_T - PAD_B))
+
+    def _scales(self):
+        """``(x_min, x_span, y_min, y_span)`` of the plotted window."""
+        x_min, x_max = float(self.s.min()), float(self.s.max())
+        y_min = float(min(self.ground.min(), self.flight.min()))
+        y_max = float(max(self.ground.max(), self.flight.max()))
+        span = max(y_max - y_min, 1.0)
+        y_min -= span * 0.08
+        y_max += span * 0.08
+        return x_min, max(x_max - x_min, 1.0), y_min, max(y_max - y_min, 1.0)
+
+    def _points(self, values, x_min, x_span, y_min, y_span, frame):
+        return [QPointF(
+            frame.left() + (float(self.s[i]) - x_min) / x_span * frame.width(),
+            frame.top() + (y_min + y_span - float(values[i])) / y_span
+            * frame.height()) for i in range(values.size)]
+
+    def paintEvent(self, event):                                # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor(theme.PALETTE["panel"]))
+        if self.s.size < 2:
+            painter.setPen(QPen(QColor(theme.PALETTE["muted"])))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "nessun profilo")
+            painter.end()
+            return
+
+        frame = self._frame()
+        x_min, x_span, y_min, y_span = self._scales()
+        small = QFont(self.font())
+        small.setPointSize(theme.FONT_SMALL)
+        painter.setFont(small)
+
+        # Grid and axis labels.
+        painter.setPen(QPen(QColor(theme.PALETTE["border"]), 1.0))
+        for k in range(Y_TICKS + 1):
+            value = y_min + y_span * k / Y_TICKS
+            y = frame.top() + (y_min + y_span - value) / y_span * frame.height()
+            painter.drawLine(QPointF(frame.left(), y),
+                             QPointF(frame.right(), y))
+            painter.setPen(QPen(QColor(theme.PALETTE["muted"])))
+            painter.drawText(QRectF(0, y - 8, PAD_L - 5, 16),
+                             int(Qt.AlignmentFlag.AlignRight
+                                 | Qt.AlignmentFlag.AlignVCenter),
+                             "{0:.0f}".format(value))
+            painter.setPen(QPen(QColor(theme.PALETTE["border"]), 1.0))
+        painter.setPen(QPen(QColor(theme.PALETTE["muted"])))
+        for k in range(X_TICKS + 1):
+            value = x_min + x_span * k / X_TICKS
+            x = frame.left() + (value - x_min) / x_span * frame.width()
+            painter.drawText(QRectF(x - 40, frame.bottom() + 2, 80, PAD_B - 2),
+                             int(Qt.AlignmentFlag.AlignCenter),
+                             "{0:,.0f} m".format(value))
+
+        ground_pts = self._points(self.ground, x_min, x_span, y_min, y_span,
+                                  frame)
+        flight_pts = self._points(self.flight, x_min, x_span, y_min, y_span,
+                                  frame)
+
+        # The ground, filled to the bottom of the frame.
+        filled = QPolygonF(ground_pts
+                           + [QPointF(frame.right(), frame.bottom()),
+                              QPointF(frame.left(), frame.bottom())])
+        path = QPainterPath()
+        path.addPolygon(filled)
+        terrain = QColor(theme.PALETTE["panel_alt"])
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(terrain)
+        painter.drawPath(path)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(theme.PALETTE["muted"]), 1.4))
+        painter.drawPolyline(QPolygonF(ground_pts))
+        painter.setPen(QPen(QColor(theme.PALETTE["accent"]), 1.8))
+        painter.drawPolyline(QPolygonF(flight_pts))
+
+        if self.cursor_s is not None:
+            x = frame.left() + (min(max(self.cursor_s, x_min),
+                                    x_min + x_span) - x_min) / x_span \
+                * frame.width()
+            painter.setPen(QPen(QColor(theme.PALETTE["warning"]), 1.4))
+            painter.drawLine(QPointF(x, frame.top()),
+                             QPointF(x, frame.bottom()))
+
+        painter.setPen(QPen(QColor(theme.PALETTE["muted"])))
+        painter.drawText(QRectF(frame.left() + 4, frame.top(),
+                                frame.width() - 8, 16),
+                         int(Qt.AlignmentFlag.AlignLeft
+                             | Qt.AlignmentFlag.AlignVCenter),
+                         "terreno / quota di volo - AGL {0:.0f} m".format(
+                             self.h_agl_m))
+        painter.end()
+
+
+__all__ = ["SpeciesMixChart", "ElevationProfile", "ROW_H", "TOLERANCE_PCT"]
