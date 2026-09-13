@@ -1,12 +1,17 @@
 """
-Dock panel: the CAD numeric fields, the tabs, and the settings.
+Dock panel: the CAD tools, what they just drew, and the settings.
 
-Each tab owns its own work. The dock builds the CAD side (toolbar, constraint
-fields, snapping) and then mounts one panel per domain -- Grid, Forest, UAV --
-each of which talks to the frozen engine directly. The dock holds no mission
-state of its own: what used to be a hand-built UAV form here now lives in
-``gui.uav_panel``, which plans on the DEM instead of pre-filling a Processing
-dialog. GUI calls services; services never import widgets (spec section 2).
+Three tabs, and only what has nowhere better to be. The CAD tab carries the
+map-tool toolbar, the numeric fields of the active tool and the cadastral
+readout of the shape it just placed; Rimboschimento keeps the quick forest
+panel; Impostazioni holds the stored preferences.
+
+The flight planner used to be a fourth tab here, with a fifth for its
+exports. Since 1.32.0 both are steps of the dashboard workflow instead --
+``gui.workflow`` builds one ``UavPanel`` and lays its controls out as six
+pages -- because two homes for one job is exactly what the single entry
+point was meant to end. GUI calls services; services never import widgets
+(spec section 2).
 """
 
 from __future__ import annotations
@@ -23,10 +28,7 @@ from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
 from ..settings import settings as app_settings
-from .export_panel import ExportPanel
 from .forest_panel import ForestPanel
-from .mission_player import MissionPlayer, RATES as PLAYER_RATES
-from .uav_panel import UavPanel
 
 
 def tr(text):
@@ -65,7 +67,8 @@ class GeoCadDock(QDockWidget):
 
     # v1.4.5: the Grid tab was withdrawn; the lattice engine (core.grid) is
     # still there and still feeds the reforestation schemes.
-    TAB_CAD, TAB_FOREST, TAB_UAV, TAB_EXPORT, TAB_SETTINGS = range(5)
+    # v1.32.0: UAV and Layer/Export went to the dashboard workflow.
+    TAB_CAD, TAB_FOREST, TAB_SETTINGS = range(3)
 
     def _scroll_page(self, widgets):
         """A scrollable tab page holding the given widgets, top-aligned."""
@@ -180,25 +183,6 @@ class GeoCadDock(QDockWidget):
         self.tabs.addTab(self._scroll_page([self.forest_panel]),
                          tr("Rimboschimento"))
 
-        # ---------------------------------------------------------------- UAV
-        self.uav_panel = UavPanel(self.iface)
-        self.dem_download_button = QPushButton(tr("Scarica un DEM..."))
-        self.dem_download_button.setToolTip(tr(
-            "Scarica un modello di elevazione e aggiungilo al progetto; "
-            "comparira' nell'elenco DEM qui sopra."))
-        self.tabs.addTab(
-            self._scroll_page([self.uav_panel, self.dem_download_button,
-                               self._build_player_box()]),
-            tr("UAV"))
-
-        # ------------------------------------------------------- LAYER/EXPORT
-        # The panel reads uav_panel.last_mission through a callable: the
-        # UAV tab owns the mission, this tab only exports it.
-        self.export_panel = ExportPanel(
-            self.iface, lambda: self.uav_panel.last_mission)
-        self.tabs.addTab(self._scroll_page([self.export_panel]),
-                         tr("Layer/Export"))
-
         # ------------------------------------------------------- IMPOSTAZIONI
         self.tabs.addTab(self._scroll_page(self._build_settings_widgets()),
                          tr("Impostazioni"))
@@ -263,30 +247,6 @@ class GeoCadDock(QDockWidget):
         return [units_box, snap_box, default_box, self.settings_reset,
                 self.credit]
 
-    def _build_player_box(self):
-        """Transport controls over the mission the UAV panel already built."""
-        box = QGroupBox(tr("Simulazione del volo"))
-        layout = QVBoxLayout(box)
-        self.player = MissionPlayer(self.iface, self)
-
-        row = QHBoxLayout()
-        self.play_button = QPushButton(tr("Play"))
-        self.pause_button = QPushButton(tr("Pausa"))
-        self.stop_button = QPushButton(tr("Stop"))
-        self.rate_combo = QComboBox()
-        for rate in PLAYER_RATES:
-            self.rate_combo.addItem("{0}x".format(rate), rate)
-        for widget in (self.play_button, self.pause_button, self.stop_button,
-                       self.rate_combo):
-            row.addWidget(widget)
-        layout.addLayout(row)
-
-        self.player_status = QLabel()
-        self.player_status.setWordWrap(True)
-        layout.addWidget(self.player_status)
-        self._refresh_player()
-        return box
-
     def _spin(self, value, minimum, maximum, step, suffix):
         spin = QDoubleSpinBox()
         spin.setRange(minimum, maximum)
@@ -299,26 +259,9 @@ class GeoCadDock(QDockWidget):
 
     def _wire(self):
         """Connect the dock's own controls, recording each link."""
-        for button, slot in ((self.cad_apply, self._apply_cad_values),
-                             (self.dem_download_button, self._open_dem_dialog),
-                             (self.play_button, self._play_mission),
-                             (self.pause_button, self._pause_mission),
-                             (self.stop_button, self._stop_mission)):
-            button.clicked.connect(slot)
-            self._connections.append((button.clicked, slot))
-
-        # The panel owns last_mission; the dock only reacts to it. Its own
-        # slots are connected first, so by the time these run the attribute
-        # already holds the mission that was just generated.
-        for signal, slot in (
-                (self.rate_combo.currentIndexChanged, self._change_rate),
-                (self.uav_panel.generate_button.clicked, self._refresh_player),
-                (self.uav_panel.generate_button.clicked,
-                 self.export_panel.refresh),
-                (self.player.ticked, self._on_player_tick),
-                (self.player.finished, self._refresh_player)):
-            signal.connect(slot)
-            self._connections.append((signal, slot))
+        self.cad_apply.clicked.connect(self._apply_cad_values)
+        self._connections.append((self.cad_apply.clicked,
+                                  self._apply_cad_values))
 
         for widget, signal_name, slot in (
                 (self.set_length_unit, "currentIndexChanged", self._save_settings),
@@ -367,7 +310,6 @@ class GeoCadDock(QDockWidget):
                 app_settings.get("cadastre/enabled"))
             self._select_data(self.set_export_format,
                               app_settings.get("export/format"))
-            self.uav_panel.load_settings()
             index = app_settings.get("ui/last_tab")
             if 0 <= index < self.tabs.count():
                 self.tabs.setCurrentIndex(index)
@@ -393,7 +335,6 @@ class GeoCadDock(QDockWidget):
         app_settings.set("cadastre/enabled",
                          self.set_cadastre_enabled.isChecked())
         app_settings.set("export/format", self.set_export_format.currentData())
-        self.uav_panel.save_settings()
         app_settings.set("ui/last_tab", self.tabs.currentIndex())
         self._apply_snapping_to_project()
         self._push_snap_to_tool()
@@ -455,10 +396,7 @@ class GeoCadDock(QDockWidget):
         if self._cad_tool is not None:
             self._cad_tool.commit_observer = None
         self._cad_tool = None
-        for panel in (getattr(self, "forest_panel", None),
-                      getattr(self, "uav_panel", None),
-                      getattr(self, "export_panel", None),
-                      getattr(self, "player", None)):
+        for panel in (getattr(self, "forest_panel", None),):
             if panel is not None:
                 try:
                     panel.teardown()
@@ -662,55 +600,6 @@ class GeoCadDock(QDockWidget):
         except Exception as exc:                                # noqa: BLE001
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), str(exc), level=Qgis.Warning)
-
-    # -- mission playback --------------------------------------------------
-
-    def _play_mission(self, *_args):
-        mission = self.uav_panel.last_mission
-        if mission is None:
-            self.player_status.setText(tr(
-                "Nessuna missione da simulare: premi prima Genera rotta."))
-            self._refresh_player()
-            return
-        if not self.player.play(mission):
-            self.player_status.setText(self.player.message)
-        self._refresh_player()
-
-    def _pause_mission(self, *_args):
-        self.player.pause()
-        self._refresh_player()
-
-    def _stop_mission(self, *_args):
-        self.player.stop()
-        self._refresh_player()
-
-    def _change_rate(self, *_args):
-        self.player.set_rate(self.rate_combo.currentData() or 1)
-        self._refresh_player()
-
-    def _on_player_tick(self, *_args):
-        self.player_status.setText(self.player.summary())
-
-    def _refresh_player(self, *_args):
-        """Play is enabled only when the panel actually holds a mission."""
-        mission = getattr(self.uav_panel, "last_mission", None)
-        self.play_button.setEnabled(mission is not None)
-        self.pause_button.setEnabled(self.player.is_playing)
-        self.stop_button.setEnabled(self.player.mission is not None)
-        if mission is None:
-            self.player_status.setText(tr(
-                "Nessuna missione da simulare: genera prima la rotta qui "
-                "sopra."))
-        else:
-            self.player_status.setText(self.player.summary())
-
-    def _open_dem_dialog(self, *_args):
-        """Modeless: the download runs on the task manager, not here."""
-        from .dem_dialog import DemDownloadDialog                # noqa: PLC0415
-
-        dialog = DemDownloadDialog(self.iface, self)
-        dialog.show()
-        self._dem_dialog = dialog
 
     def closeEvent(self, event):                                # noqa: N802
         super().closeEvent(event)

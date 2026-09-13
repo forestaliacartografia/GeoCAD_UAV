@@ -430,8 +430,11 @@ check_true("uav_panel imports nothing from the download side",
            "dem_source" not in panel_source
            and "dem_dialog" not in panel_source
            and "ADAPTERS" not in panel_source)
+# v1.32.0: the panel grew a second QgsMapLayerComboBox for the obstacle
+# layer, so counting combos no longer answers "is there one DEM combo".
+# Counting the raster filter does.
 check_true("there is still one DEM combo",
-           panel_source.count("QgsMapLayerComboBox()") == 1)
+           panel_source.count("QgsMapLayerProxyModel.RasterLayer") == 1)
 panel.teardown()
 
 print("\n" + "=" * 78)

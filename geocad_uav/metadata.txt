@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.31.0
+version=1.32.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,31 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.32.0
+    - Il pianificatore di volo e' entrato nella dashboard, come sei step
+      con il loro stato: Area del volo, Hardware e GSD, Parametri di
+      volo, Sicurezza e ostacoli, Simulazione, Export. La scheda UAV e
+      la scheda Layer/Export del pannello CAD sono sparite: erano una
+      seconda casa per lo stesso lavoro.
+    - Quota e GSD si fissano nei due versi. Si sceglie quale dei due
+      vincolare; l'altro lo calcola l'ottica e non e' modificabile a
+      mano, perche' GSD = quota x passo del pixel / focale ha un solo
+      grado di liberta'.
+    - Ostacoli: un layer vettoriale qualsiasi, un raggio di rischio, e
+      l'intersezione con la rotta vera. Non solo con i waypoint: una
+      tratta puo' attraversare un traliccio su cui non cade nessun
+      vertice, e fino a ieri passava per buona.
+    - Controllo pre-volo con i suoi ingressi. Il validatore riceve
+      parametri, terreno e area, non piu' la sola missione: otto
+      controlli in piu' (autonomia, intervallo di scatto, mosso,
+      salita, camera, limite waypoint, CRS, franco sul DTM).
+    - Schema delle strisciate, doppia griglia ortogonale, margine
+      fotogrammetrico e franco sulla vegetazione: il motore li accettava
+      gia', il pannello non li offriva.
+    - "Genera missione UAV" sullo step Genera del rimboschimento: passa
+      al volo l'area utile, le esclusioni, il DEM del progetto e
+      l'orientamento dei filari, col preset forestale gia' impostato.
 
 changelog=1.31.0
     - L'azimut delle strisciate si puo' misurare invece che indovinarlo.

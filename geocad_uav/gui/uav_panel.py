@@ -31,10 +31,10 @@ from qgis.core import (Qgis, QgsGeometry, QgsMapLayerProxyModel, QgsPointXY,
 from qgis.gui import QgsMapLayerComboBox, QgsRubberBand
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtGui import QColor
-from qgis.PyQt.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout,
-                                 QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                                 QPushButton, QTextBrowser, QVBoxLayout,
-                                 QWidget)
+from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
+                                 QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+                                 QLineEdit, QPushButton, QTextBrowser,
+                                 QVBoxLayout, QWidget)
 
 from ..core import crs as crs_svc
 from ..core import grid as grid_mod
@@ -49,6 +49,7 @@ from ..uav import drones as drone_lib
 from ..uav import mission as mission_mod
 from ..uav import photogrammetry as pg
 from ..uav import survey as sv
+from ..uav import validator as val
 from .extent_source import ExtentSource
 
 
@@ -59,6 +60,36 @@ def tr(text):
 #: Seconds per hour over metres per kilometre. The only place km/h exists.
 KMH_TO_MS = 1.0 / 3.6
 
+#: Which end of the optical relation the operator fixes. The other one is
+#: derived and shown read-only: GSD = H * pitch / f has one degree of
+#: freedom, and a panel that let both be typed would be lying about that.
+HEIGHT_FROM_AGL = "agl"
+HEIGHT_FROM_GSD = "gsd"
+
+#: Flight patterns offered, keyed on the engine's own names.
+PATTERNS = (
+    (sv.PATTERN_BOUSTROPHEDON, "Strisciate adiacenti (andata e ritorno)"),
+    (sv.PATTERN_INTERLACED, "Strisciate alternate (raggio di virata ampio)"),
+)
+
+#: Azimuth strategies offered. "optimised" is resolved by the sweep before
+#: the route is planned; the others go straight to the engine.
+AZIMUTHS = (
+    ("manual", "Manuale"),
+    ("longest", "Lato piu' lungo dell'area"),
+    ("optimised", "Misurato (scansione degli orientamenti)"),
+)
+
+#: The six steps of the flight workflow, in the order they are worked.
+STEP_AREA = "uav_area"
+STEP_HARDWARE = "uav_hardware"
+STEP_FLIGHT = "uav_flight"
+STEP_SAFETY = "uav_safety"
+STEP_SIMULATION = "uav_simulation"
+STEP_EXPORT = "uav_export"
+
+CM_PER_M = 100.0
+
 
 class UavPanel(QWidget):
     """Mission parameters, live derived values, route preview, one write."""
@@ -68,7 +99,14 @@ class UavPanel(QWidget):
         self.iface = iface
         self._band = None
         self._connections = []
+        self._updating = False
         self.last_mission = None
+        #: The terrain and the AOI the last route was planned on. Kept
+        #: because the pre-flight check needs them: a validator given only
+        #: the mission cannot check coverage, endurance or clearance.
+        self.last_terrain = None
+        self.last_aoi = None
+        self.last_report = None
         self._cameras = cam_lib.load_library()
         self._drones = drone_lib.load_library()
         self._build()
@@ -84,9 +122,9 @@ class UavPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
+        # ---------------------------------------------------------- AREA
         self.extent = ExtentSource(self.iface)
         self.extent.on_change(self.recompute)
-        layout.addWidget(self.extent)
 
         terrain_box = QGroupBox(tr("Terreno (obbligatorio)"))
         terrain_form = QFormLayout(terrain_box)
@@ -97,10 +135,14 @@ class UavPanel(QWidget):
         self.dem_note = QLabel()
         self.dem_note.setWordWrap(True)
         terrain_form.addRow(self.dem_note)
-        self.safety_margin = self._spin(0.0, 0.0, 200.0, " m")
-        terrain_form.addRow(tr("Margine di sicurezza"), self.safety_margin)
-        layout.addWidget(terrain_box)
+        self.user_margin = self._spin(0.0, 0.0, 500.0, " m")
+        self.user_margin.setToolTip(tr(
+            "Fascia aggiunta attorno all'area, oltre alla mezza impronta "
+            "che il motore aggiunge gia' da solo per coprire i bordi."))
+        terrain_form.addRow(tr("Margine sull'area"), self.user_margin)
+        self.terrain_box = terrain_box
 
+        # ------------------------------------------------------ HARDWARE
         gear_box = QGroupBox(tr("Camera e drone"))
         gear_form = QFormLayout(gear_box)
         self.camera_combo = QComboBox()
@@ -111,12 +153,32 @@ class UavPanel(QWidget):
         for key in sorted(self._drones):
             self.drone_combo.addItem(self._drones[key].name, key)
         gear_form.addRow(tr("Drone"), self.drone_combo)
-        layout.addWidget(gear_box)
+        self.gear_note = QLabel()
+        self.gear_note.setWordWrap(True)
+        gear_form.addRow(self.gear_note)
+        self.gear_box = gear_box
 
+        optics_box = QGroupBox(tr("Quota e GSD"))
+        optics_form = QFormLayout(optics_box)
+        self.height_mode = QComboBox()
+        self.height_mode.addItem(tr("Fisso la quota"), HEIGHT_FROM_AGL)
+        self.height_mode.addItem(tr("Fisso il GSD"), HEIGHT_FROM_GSD)
+        self.height_mode.setToolTip(tr(
+            "GSD = quota x passo del pixel / focale: un solo grado di "
+            "liberta'. Si fissa un capo, l'altro si legge."))
+        optics_form.addRow(tr("Vincolo"), self.height_mode)
+        self.h_agl = self._spin(80.0, 1.0, 2000.0, " m")
+        optics_form.addRow(tr("Quota H_AGL"), self.h_agl)
+        self.gsd_target = self._spin(2.0, 0.01, 100.0, " cm/px")
+        optics_form.addRow(tr("GSD"), self.gsd_target)
+        self.optics_note = QLabel()
+        self.optics_note.setWordWrap(True)
+        optics_form.addRow(self.optics_note)
+        self.optics_box = optics_box
+
+        # -------------------------------------------------------- FLIGHT
         flight_box = QGroupBox(tr("Volo"))
         flight_form = QFormLayout(flight_box)
-        self.h_agl = self._spin(80.0, 1.0, 2000.0, " m")
-        flight_form.addRow(tr("Quota H_AGL"), self.h_agl)
         self.speed_kmh = self._spin(36.0, 1.0, 108.0, " km/h")
         flight_form.addRow(tr("Velocita'"), self.speed_kmh)
         self.frontlap = self._spin(80.0, 1.0, 95.0, " %")
@@ -131,6 +193,20 @@ class UavPanel(QWidget):
             "Non e' modificabile perche' non e' un parametro libero."))
         flight_form.addRow(tr("Intervallo di scatto"), self.interval)
 
+        self.pattern_combo = QComboBox()
+        for key, label in PATTERNS:
+            self.pattern_combo.addItem(tr(label), key)
+        flight_form.addRow(tr("Schema"), self.pattern_combo)
+        self.double_grid = QCheckBox(tr("Doppia griglia ortogonale"))
+        self.double_grid.setToolTip(tr(
+            "Due passate perpendicolari. Raddoppia il tempo di volo ed e' "
+            "cio' che separa un ortofoto usabile da un modello 3D usabile."))
+        flight_form.addRow(self.double_grid)
+
+        self.azimuth_mode = QComboBox()
+        for key, label in AZIMUTHS:
+            self.azimuth_mode.addItem(tr(label), key)
+        flight_form.addRow(tr("Azimut"), self.azimuth_mode)
         self.azimuth = self._spin(0.0, 0.0, 360.0, " deg")
         flight_form.addRow(tr("Azimut strip"), self.azimuth)
         azimuth_buttons = QHBoxLayout()
@@ -150,28 +226,86 @@ class UavPanel(QWidget):
         self.azimuth_note.setWordWrap(True)
         self.azimuth_note.setVisible(False)
         flight_form.addRow(self.azimuth_note)
-        layout.addWidget(flight_box)
+        self.flight_box = flight_box
 
+        # -------------------------------------------------------- SAFETY
+        safety_box = QGroupBox(tr("Sicurezza e ostacoli"))
+        safety_form = QFormLayout(safety_box)
+        self.safety_margin = self._spin(0.0, 0.0, 200.0, " m")
+        self.safety_margin.setToolTip(tr(
+            "Aggiunta alla quota AGL su tutta la rotta."))
+        safety_form.addRow(tr("Margine di sicurezza"), self.safety_margin)
+        self.vegetation_clearance = self._spin(0.0, 0.0, 100.0, " m")
+        self.vegetation_clearance.setToolTip(tr(
+            "Franco sulla vegetazione. Serve quando il DEM e' un DTM di "
+            "terreno nudo e sotto la rotta c'e' chioma o edificato: il DTM "
+            "non sa che ci sono."))
+        safety_form.addRow(tr("Franco sulla vegetazione"),
+                           self.vegetation_clearance)
+        self.obstacle_combo = QgsMapLayerComboBox()
+        self.obstacle_combo.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        self.obstacle_combo.setAllowEmptyLayer(True, tr("(nessun ostacolo)"))
+        self.obstacle_combo.setToolTip(tr(
+            "Elettrodotti, edifici, gru: qualunque layer vettoriale. "
+            "La rotta viene intersecata con questo layer dilatato del "
+            "raggio di rischio."))
+        safety_form.addRow(tr("Layer ostacoli"), self.obstacle_combo)
+        self.obstacle_buffer = self._spin(30.0, 0.0, 1000.0, " m")
+        safety_form.addRow(tr("Raggio di rischio"), self.obstacle_buffer)
+        self.check_coverage = QCheckBox(
+            tr("Verifica la copertura sulle impronte a terra"))
+        self.check_coverage.setToolTip(tr(
+            "Proietta ogni scatto sul DEM e misura quanta parte dell'area "
+            "ricade in almeno tre foto. E' l'unica verifica di copertura "
+            "che valga qualcosa, e costa un raggio per scatto: su missioni "
+            "lunghe aggiunge secondi."))
+        safety_form.addRow(self.check_coverage)
+        self.safety_box = safety_box
+
+        self.quality_box = QGroupBox(tr("Controllo pre-volo"))
+        quality_layout = QVBoxLayout(self.quality_box)
+        self.quality = QTextBrowser()
+        self.quality.setMinimumHeight(180)
+        quality_layout.addWidget(self.quality)
+        self.quality_button = QPushButton(tr("Ricontrolla"))
+        quality_layout.addWidget(self.quality_button)
+
+        # ---------------------------------------------------- SIMULATION
         self.summary = QTextBrowser()
         self.summary.setMinimumHeight(190)
-        layout.addWidget(self.summary)
 
         buttons = QHBoxLayout()
         self.generate_button = QPushButton(tr("Genera rotta"))
         self.confirm_button = QPushButton(tr("Crea layer missione"))
         buttons.addWidget(self.generate_button)
         buttons.addWidget(self.confirm_button)
+        self.button_row = buttons
+
+        for widget in (self.extent, terrain_box, gear_box, optics_box,
+                       flight_box, safety_box, self.quality_box,
+                       self.summary):
+            layout.addWidget(widget)
         layout.addLayout(buttons)
 
         for widget, signal_name in (
                 (self.dem_combo, "layerChanged"),
                 (self.camera_combo, "currentIndexChanged"),
                 (self.drone_combo, "currentIndexChanged"),
+                (self.height_mode, "currentIndexChanged"),
                 (self.h_agl, "valueChanged"),
+                (self.gsd_target, "valueChanged"),
                 (self.speed_kmh, "valueChanged"),
                 (self.frontlap, "valueChanged"),
                 (self.sidelap, "valueChanged"),
                 (self.safety_margin, "valueChanged"),
+                (self.vegetation_clearance, "valueChanged"),
+                (self.user_margin, "valueChanged"),
+                (self.pattern_combo, "currentIndexChanged"),
+                (self.double_grid, "toggled"),
+                (self.check_coverage, "toggled"),
+                (self.obstacle_combo, "layerChanged"),
+                (self.obstacle_buffer, "valueChanged"),
+                (self.azimuth_mode, "currentIndexChanged"),
                 (self.azimuth, "valueChanged")):
             signal = getattr(widget, signal_name)
             signal.connect(self.recompute)
@@ -181,9 +315,29 @@ class UavPanel(QWidget):
                              (self.confirm_button, self.confirm),
                              (self.azimuth_from_map, self._pick_azimuth),
                              (self.azimuth_from_edge, self._azimuth_from_edge),
-                             (self.azimuth_optimise, self.apply_optimised_azimuth)):
+                             (self.azimuth_optimise,
+                              self.apply_optimised_azimuth),
+                             (self.quality_button, self.run_quality_check)):
             button.clicked.connect(slot)
             self._connections.append((button.clicked, slot))
+
+    # -- the workflow steps ------------------------------------------------
+
+    def pages(self):
+        """``{step key: [widgets]}``: the same controls, laid out as steps.
+
+        The widgets are the panel's own. A host that mounts them reparents
+        them out of this panel's layout, which is what makes this one
+        planner shown six ways rather than six planners.
+        """
+        return {
+            STEP_AREA: [self.extent, self.terrain_box],
+            STEP_HARDWARE: [self.gear_box, self.optics_box],
+            STEP_FLIGHT: [self.flight_box],
+            STEP_SAFETY: [self.safety_box, self.quality_box],
+            STEP_SIMULATION: [self.summary, self.button_row],
+            STEP_EXPORT: [],
+        }
 
     def _spin(self, value, minimum, maximum, suffix):
         spin = QDoubleSpinBox()
@@ -211,9 +365,35 @@ class UavPanel(QWidget):
         return pg.Overlap(frontlap=self.frontlap.value() / 100.0,
                           sidelap=self.sidelap.value() / 100.0)
 
+    def height_source(self) -> str:
+        """Which end of the optical relation the operator is fixing."""
+        return self.height_mode.currentData() or HEIGHT_FROM_AGL
+
+    def gsd_m(self) -> float:
+        """The GSD box in metres per pixel. The engine never sees cm."""
+        return self.gsd_target.value() / CM_PER_M
+
     def survey_geometry(self) -> pg.SurveyGeometry:
+        """The photogrammetric geometry, solved from whichever end is fixed.
+
+        ``solve_survey_geometry`` takes exactly one of the two and derives
+        the other, which is why the panel passes one and never both.
+        """
+        if self.height_source() == HEIGHT_FROM_GSD:
+            return pg.solve_survey_geometry(self.current_camera(),
+                                            self.overlap(),
+                                            gsd_m_px=self.gsd_m())
         return pg.solve_survey_geometry(self.current_camera(), self.overlap(),
                                         h_agl_m=self.h_agl.value())
+
+    def azimuth_choice(self):
+        """``(strategy, manual azimuth or None)`` from the azimuth combo."""
+        key = self.azimuth_mode.currentData() or "manual"
+        if key == "longest":
+            return sv.AZIMUTH_LONGEST_SIDE, None
+        if key == "optimised":
+            return sv.AZIMUTH_OPTIMISED, None
+        return sv.AZIMUTH_MANUAL, self.azimuth.value()
 
     def interval_s(self) -> float:
         """Shot interval, from the engine: D_front / v. Never typed in."""
@@ -224,20 +404,28 @@ class UavPanel(QWidget):
 
     def build_params(self) -> mission_mod.MissionParams:
         """Everything the frozen assembler needs, in engine units."""
+        strategy, manual = self.azimuth_choice()
+        from_gsd = self.height_source() == HEIGHT_FROM_GSD
         return mission_mod.MissionParams(
             camera=self.current_camera(),
             drone=self.current_drone(),
             overlap=self.overlap(),
-            h_agl_m=self.h_agl.value(),
+            h_agl_m=None if from_gsd else self.h_agl.value(),
+            gsd_m=self.gsd_m() if from_gsd else None,
             altitude_mode=AltitudeMode.TERRAIN,
             safety_margin_m=self.safety_margin.value(),
-            # The spin box is the only source of the strip azimuth: no
-            # hidden "0 means automatic" rule. The longest-side value is
-            # offered in the derived table and applied by its own button.
-            azimuth_strategy=sv.AZIMUTH_MANUAL,
-            manual_azimuth_deg=self.azimuth.value(),
+            vegetation_clearance_m=self.vegetation_clearance.value(),
+            user_margin_m=self.user_margin.value(),
+            pattern=self.pattern_combo.currentData()
+            or sv.PATTERN_BOUSTROPHEDON,
+            double_grid=self.double_grid.isChecked(),
+            azimuth_strategy=strategy,
+            manual_azimuth_deg=manual,
             v_mission_ms=self.speed_ms(),
-            compute_footprints=False)
+            # The draped footprints are what coverage is judged on, and ray
+            # casting one per exposure is not free: asked for only when the
+            # operator wants the coverage checked.
+            compute_footprints=self.check_coverage.isChecked())
 
     # -- azimuth helpers ---------------------------------------------------
 
@@ -309,6 +497,131 @@ class UavPanel(QWidget):
         self.azimuth_note.setVisible(True)
         return azimuth
 
+    # -- obstacles ---------------------------------------------------------
+
+    def no_fly_geometries(self):
+        """The obstacle layer near the AOI, dilated by the risk radius.
+
+        Read in the AOI's CRS and clipped by a filter rectangle: a national
+        power-line layer has no business being walked feature by feature to
+        plan a twenty-hectare flight.
+        """
+        layer = self.obstacle_combo.currentLayer()
+        if layer is None or not layer.isValid():
+            return []
+        aoi = self.extent.geometry()
+        crs = self.extent.crs()
+        if aoi is None or crs is None:
+            return []
+        radius = float(self.obstacle_buffer.value())
+
+        # The AOI is not where the aircraft flies. The strips are buffered
+        # outwards by half a footprint so the edge frames still cover the
+        # boundary, and the turns reach further still: a filter rectangle
+        # drawn round the AOI alone would skip the pylon the route passes
+        # over just outside it. Measured on the real route when there is
+        # one, and on the buffer when there is not yet.
+        box = aoi.boundingBox()
+        try:
+            geometry = self.survey_geometry()
+            reach = max(geometry.footprint_across_m,
+                        geometry.footprint_along_m)
+        except Exception:                                       # noqa: BLE001
+            reach = 0.0
+        box.grow(reach + float(self.user_margin.value()) + radius + 1.0)
+        mission = self.last_mission
+        if mission is not None and mission.waypoints:
+            for waypoint in mission.waypoints:
+                box.combineExtentWith(waypoint.x, waypoint.y)
+            box.grow(radius + 1.0)
+        request_box = box
+        if layer.crs() != crs:
+            back = crs_svc.make_transform(crs, layer.crs())
+            if back is not None:
+                try:
+                    request_box = back.transformBoundingBox(box)
+                except Exception:                               # noqa: BLE001
+                    request_box = None
+
+        from qgis.core import QgsFeatureRequest                 # noqa: PLC0415
+
+        request = QgsFeatureRequest()
+        if request_box is not None:
+            request.setFilterRect(request_box)
+
+        geometries = []
+        for feature in layer.getFeatures(request):
+            geometry = QgsGeometry(feature.geometry())
+            if geometry.isEmpty():
+                continue
+            if layer.crs() != crs:
+                geometry = crs_svc.transform_geometry(geometry, layer.crs(),
+                                                      crs)
+                if geometry is None or geometry.isEmpty():
+                    continue
+            if radius > 0.0:
+                geometry = geometry.buffer(radius, 12)
+            geometries.append(geometry)
+        return geometries
+
+    # -- the pre-flight check ----------------------------------------------
+
+    def run_quality_check(self, *_args):
+        """The frozen validator, with everything it needs to say something.
+
+        Run with the parameters, the terrain and the AOI as well as the
+        mission: given the mission alone it cannot check clearance,
+        endurance or coverage, and reports them as "not verified" -- which
+        is what the export tab was showing until now.
+        """
+        mission = self.last_mission
+        if mission is None:
+            self.last_report = None
+            self.quality.setHtml(
+                "<p>{0}</p>".format(tr("Genera prima la rotta.")))
+            return None
+        crs = self.extent.crs()
+        try:
+            report = val.validate(
+                mission, params=self.build_params(),
+                terrain=self.last_terrain, aoi_geom=self.last_aoi, crs=crs,
+                no_fly_geoms=self.no_fly_geometries())
+        except (GeoCadError, ValueError) as exc:                # noqa: BLE001
+            self.last_report = None
+            self.quality.setHtml("<p>{0}</p>".format(
+                tr("Controllo non riuscito: {0}").format(exc)))
+            return None
+        self.last_report = report
+        self.quality.setHtml(self._quality_html(report))
+        return report
+
+    @staticmethod
+    def _quality_html(report):
+        """Green, orange, red -- one line per check, with its number."""
+        colours = {val.SEVERITY_OK: "#2e7d32",
+                   val.SEVERITY_WARNING: "#ef6c00",
+                   val.SEVERITY_ERROR: "#c62828"}
+        marks = {val.SEVERITY_OK: "OK", val.SEVERITY_WARNING: "!",
+                 val.SEVERITY_ERROR: "X"}
+        rows = []
+        for check in report.checks:
+            colour = colours.get(check.severity, "#555")
+            rows.append(
+                "<tr><td width='24' align='center'><b "
+                "style='color:{0}'>{1}</b></td>"
+                "<td><b>{2}</b>{3}</td>"
+                "<td align='right' style='color:{0}'>{4}</td></tr>".format(
+                    colour, marks.get(check.severity, "?"), check.label,
+                    "<br><span style='color:#777'>{0}</span>".format(
+                        check.detail) if check.detail else "",
+                    check.value or ""))
+        head = "<p style='color:{0}'><b>{1}</b></p>".format(
+            "#c62828" if report.errors else
+            ("#ef6c00" if report.warnings else "#2e7d32"),
+            report.summary())
+        return (head + "<table width='100%' cellspacing='0' cellpadding='3'>"
+                + "".join(rows) + "</table>")
+
     # -- readiness ---------------------------------------------------------
 
     def readiness(self):
@@ -330,12 +643,27 @@ class UavPanel(QWidget):
                 "Il CRS dell'area ({0}) e' geografico: distanze e "
                 "sovrapposizioni verrebbero calcolate in gradi. Riproietta "
                 "in un CRS metrico (UTM).").format(crs.authid())
+        if self.height_source() == HEIGHT_FROM_GSD:
+            try:
+                height = pg.height_from_gsd(self.current_camera(),
+                                            self.gsd_m())
+            except pg.PhotogrammetryError as exc:
+                return False, tr("GSD non valido: {0}").format(exc)
+            limit = self.current_drone().max_agl_m
+            if height > limit:
+                return False, tr(
+                    "Un GSD di {0:.2f} cm/px con questa camera richiede "
+                    "{1:.0f} m di quota, oltre il limite di {2:.0f} m del "
+                    "profilo drone. Alza il GSD o cambia ottica.").format(
+                        self.gsd_target.value(), height, limit)
         return True, ""
 
     # -- live derived values (pure arithmetic, no DEM read) ----------------
 
     def recompute(self, *_args):
         """Refresh the interval and the derived table. Touches no raster."""
+        if self._updating:
+            return
         self._dem_layer = self.dem_combo.currentLayer()
         ready, reason = self.readiness()
         self.generate_button.setEnabled(ready)
@@ -351,6 +679,8 @@ class UavPanel(QWidget):
                 tr("Parametri non validi: {0}").format(exc))
             return
         self.interval.setText("{0:.2f} s".format(interval))
+        self._pair_height_and_gsd(geometry)
+        self.azimuth.setEnabled(self.azimuth_choice()[0] == sv.AZIMUTH_MANUAL)
 
         drone = self.current_drone()
         budget = pg.build_speed_budget(geometry, self.speed_ms(),
@@ -408,6 +738,33 @@ class UavPanel(QWidget):
 
         self.summary.setHtml(self._html(rows, notes))
 
+    def _pair_height_and_gsd(self, geometry):
+        """Write the derived end of the optical relation into its own box.
+
+        The one the operator fixed is left alone and stays editable; the
+        other is set from the engine's answer and greyed, so the pair on
+        screen is always a pair that exists.
+        """
+        from_gsd = self.height_source() == HEIGHT_FROM_GSD
+        self._updating = True
+        try:
+            if from_gsd:
+                self.h_agl.setValue(geometry.h_agl_m)
+            else:
+                self.gsd_target.setValue(geometry.gsd_cm_px)
+        finally:
+            self._updating = False
+        self.h_agl.setReadOnly(from_gsd)
+        self.h_agl.setEnabled(not from_gsd)
+        self.gsd_target.setReadOnly(not from_gsd)
+        self.gsd_target.setEnabled(from_gsd)
+        self.optics_note.setText(tr(
+            "{0} cm/px a {1:.0f} m con {2} ({3:.0f} mm): impronta "
+            "{4:.0f} x {5:.0f} m.").format(
+                "{0:.2f}".format(geometry.gsd_cm_px), geometry.h_agl_m,
+                self.current_camera().name, self.current_camera().focal_mm,
+                geometry.footprint_across_m, geometry.footprint_along_m))
+
     @staticmethod
     def _html(rows, notes):
         table = "".join(
@@ -428,6 +785,9 @@ class UavPanel(QWidget):
         ready, reason = self.readiness()
         if not ready:
             self.last_mission = None
+            self.last_terrain = None
+            self.last_aoi = None
+            self.last_report = None
             self.clear_preview()
             self._notify_user(reason, Qgis.Warning)
             self.recompute()
@@ -439,6 +799,9 @@ class UavPanel(QWidget):
             blocks, warnings = sv.prepare_aoi([geometry])
         except sv.RoutingError as exc:
             self.last_mission = None
+            self.last_terrain = None
+            self.last_aoi = None
+            self.last_report = None
             self.clear_preview()
             self._notify_user(str(exc), Qgis.Warning)
             self.recompute()
@@ -457,6 +820,9 @@ class UavPanel(QWidget):
                              geom_survey.footprint_along_m))
         except Exception as exc:                                # noqa: BLE001
             self.last_mission = None
+            self.last_terrain = None
+            self.last_aoi = None
+            self.last_report = None
             self.clear_preview()
             self._notify_user(
                 tr("DEM non leggibile: {0}").format(exc), Qgis.Critical)
@@ -469,6 +835,9 @@ class UavPanel(QWidget):
         except (GeoCadError, sv.RoutingError,
                 pg.PhotogrammetryError) as exc:
             self.last_mission = None
+            self.last_terrain = None
+            self.last_aoi = None
+            self.last_report = None
             self.clear_preview()
             message = getattr(exc, "user_message", "") or str(exc)
             self._notify_user(message, Qgis.Critical)
@@ -478,8 +847,13 @@ class UavPanel(QWidget):
         mission.warnings = list(warnings) + list(dem_warnings) + \
             list(mission.warnings)
         self.last_mission = mission
+        # Kept for the pre-flight check, which cannot judge clearance,
+        # endurance or coverage from the mission alone.
+        self.last_terrain = terrain
+        self.last_aoi = aoi
         self._draw(mission)
         self.recompute()
+        self.run_quality_check()
         return mission
 
     def _ensure_band(self):
@@ -557,6 +931,7 @@ class UavPanel(QWidget):
         self.frontlap.setValue(app_settings.get("uav/frontlap") * 100.0)
         self.sidelap.setValue(app_settings.get("uav/sidelap") * 100.0)
         self.h_agl.setValue(app_settings.get("uav/h_agl_m"))
+        self.recompute()
 
     def save_settings(self):
         app_settings.set("uav/camera", self.camera_combo.currentData() or "")

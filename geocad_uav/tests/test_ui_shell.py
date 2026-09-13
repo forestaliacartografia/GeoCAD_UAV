@@ -175,7 +175,7 @@ print("\n== U2: toggle shows and hides the dock ==")
 check("three docks registered", len(iface.docks), 3)
 check_true("the workflow dock is on the left and lists every step",
            plugin.workspace is not None
-           and plugin.workspace.workflow.list.count() == len(wf.STEPS))
+           and plugin.workspace.workflow.list.count() == len(wf.ALL_STEPS))
 check_true("the context dock holds a stack of panels",
            plugin.workspace.context.stack.count() >= 10)
 
@@ -235,18 +235,25 @@ check_true("...and re-checks it when the dock reappears",
 plugin.dock_action.setChecked(False)
 
 # --------------------------------------------------------------------------
-# U3 - six tabs, in a fixed order
+# U3 - three tabs, in a fixed order
 # --------------------------------------------------------------------------
-print("\n== U3: the dock has six tabs in a fixed order ==")
+print("\n== U3: the dock has three tabs in a fixed order ==")
 tabs = dock.tabs
 titles = [tabs.tabText(i) for i in range(tabs.count())]
 print("        tabs: {0}".format(titles))
 # v1.4.5: the Griglie tab was withdrawn. core.grid stays -- the reforestation
 # schemes are built on it, they simply no longer have a tab of their own.
-check("tab count", tabs.count(), 5)
+# v1.32.0: the UAV tab and the Layer/Export tab moved into the dashboard
+# workflow, where they are six steps with a state marker each. What is left
+# in this dock is what has nowhere better to be.
+check("tab count", tabs.count(), 3)
 check_true("titles and order match the contract",
-           titles == ["CAD", "Rimboschimento", "UAV", "Layer/Export",
-                      "Impostazioni"])
+           titles == ["CAD", "Rimboschimento", "Impostazioni"])
+check_true("the flight planner is not a tab any more",
+           not any("UAV" in t or "Export" in t for t in titles))
+check_true("...it is six steps of the workflow instead",
+           all(plugin.workspace.workflow.select_step(key)
+               for key, _label in wf.UAV_STEPS))
 check_true("the forestry tab is named for the work, not the subject",
            "Foresta" not in titles and "Rimboschimento" in titles)
 check_true("no Grid tab is left, not even an empty one",

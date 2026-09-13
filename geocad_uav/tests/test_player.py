@@ -377,15 +377,22 @@ check("nothing is drawn", empty.band_vertices(), 0)
 check_true("the summary says so, not a number",
            empty.summary() == empty.message)
 
+# v1.32.0: the transport controls moved with the flight planner, out of
+# the CAD dock and into the Simulazione step of the dashboard workflow.
 try:
+    from geocad_uav.gui.workflow import ContextDock              # noqa: F401
     from geocad_uav.gui.dock import GeoCadDock                   # noqa: F401
 
-    check_true("the dock exposes the transport controls",
-               all(hasattr(GeoCadDock, name) for name in
-                   ("_play_mission", "_pause_mission", "_stop_mission",
-                    "_refresh_player")))
+    check_true("the Simulazione step exposes the transport controls",
+               all(hasattr(ContextDock, name) for name in
+                   ("play_mission", "pause_mission", "stop_mission",
+                    "refresh_player")))
+    check_true("...and the CAD dock no longer does",
+               not any(hasattr(GeoCadDock, name) for name in
+                       ("_play_mission", "_pause_mission", "_stop_mission",
+                        "_refresh_player")))
 except ImportError as exc:                                      # noqa: BLE001
-    skip("the dock exposes the transport controls", str(exc))
+    skip("the Simulazione step exposes the transport controls", str(exc))
 
 # --------------------------------------------------------------------------
 # R1 - the player is a viewer, not a planner

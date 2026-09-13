@@ -468,6 +468,14 @@ def coverage_fraction(mission: Mission, aoi_geom, min_photos: int,
 
 
 def _check_no_fly(report, mission: Mission, no_fly_geoms):
+    """The flown track against the forbidden ground, with GEOS.
+
+    Both the waypoints and the spans between them: an aircraft does not
+    teleport from one waypoint to the next, and a span can cross a pylon
+    that neither of its endpoints sits on. Testing the vertices alone --
+    which is what this did until 1.32.0 -- reports a clean flight straight
+    through an overhead line.
+    """
     if not no_fly_geoms:
         report.add("no_fly_absent", "Aree vietate", SEVERITY_OK,
                    "Nessun layer di vincoli fornito: verifica non eseguita.")
@@ -479,13 +487,25 @@ def _check_no_fly(report, mission: Mission, no_fly_geoms):
         pt = QgsGeometry.fromPointXY(QgsPointXY(wp.x, wp.y))
         if any(g.intersects(pt) for g in no_fly_geoms):
             hits += 1
-    if hits:
+
+    crossed = 0
+    for line in mission.lines:
+        array = np.asarray(line, dtype=float)
+        if array.shape[0] < 2:
+            continue
+        track = QgsGeometry.fromPolylineXY(
+            [QgsPointXY(float(p[0]), float(p[1])) for p in array])
+        if any(g.intersects(track) for g in no_fly_geoms):
+            crossed += 1
+
+    if hits or crossed:
         report.add("no_fly", "Aree vietate", SEVERITY_ERROR,
-                   "{0} waypoint ricadono in un'area vietata.".format(hits),
-                   value=str(hits))
+                   "{0} waypoint in area vietata e {1} tratte che la "
+                   "attraversano.".format(hits, crossed),
+                   value=str(hits + crossed))
     else:
         report.add("no_fly", "Aree vietate", SEVERITY_OK,
-                   "Nessun waypoint in area vietata.")
+                   "Nessun waypoint e nessuna tratta in area vietata.")
 
 
 def _check_datum(report, mission: Mission, params):

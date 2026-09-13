@@ -366,10 +366,20 @@ print("        buttons: {0}".format(labels))
 check_true("no button mentions export or WPML",
            not any(word in label.lower() for label in labels
                    for word in ("export", "esport", "wpml", "kmz", "litchi")))
-check_true("the panel source names no exporter",
-           "export" not in source.lower().replace("# ", ""))
-check_true("no simulator either",
-           "simulat" not in source.lower())
+# v1.32.0: the panel names the six workflow steps it supplies widgets
+# for, two of which are called "export" and "simulazione", so a substring
+# of the whole source no longer separates naming a step from implementing
+# one. What must stay true is that the panel neither imports nor performs
+# either job: the export tab writes the files and the player animates the
+# route, both from the mission this panel produced.
+check_true("the panel imports no exporter",
+           "import export" not in source
+           and "ex.write" not in source
+           and "def write" not in source)
+check_true("the panel runs no simulator",
+           "MissionPlayer" not in source
+           and "import mission_player" not in source
+           and "QTimer" not in source)
 
 # --------------------------------------------------------------------------
 # R3 - the azimuth sweep, from the button

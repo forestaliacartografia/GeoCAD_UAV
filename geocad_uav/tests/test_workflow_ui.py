@@ -114,7 +114,11 @@ check_true("il dock del flusso e' un QDockWidget",
            workspace.workflow.inherits("QDockWidget"))
 check_true("...e contiene un QListWidget",
            isinstance(workspace.workflow.list, QListWidget))
-check("gli step sono quattordici", workspace.workflow.list.count(), 14)
+# v1.32.0: fourteen planting steps, then six flight ones in the same list.
+check("gli step del rimboschimento sono quattordici", len(wf.STEPS), 14)
+check("...e quelli del volo sei", len(wf.UAV_STEPS), 6)
+check("la lista li porta tutti", workspace.workflow.list.count(),
+      len(wf.ALL_STEPS))
 labels = [workspace.workflow.list.item(i).text()
           for i in range(workspace.workflow.list.count())]
 print("        {0}".format(labels))

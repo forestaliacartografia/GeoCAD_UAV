@@ -126,7 +126,7 @@ state.reset_history()
 
 labels = [dock.list.item(i).text() for i in range(dock.list.count())]
 done(1, "vedere la nuova interfaccia",
-     dock.list.count() == len(wf.STEPS) and context.stack.count() >= 12
+     dock.list.count() == len(wf.ALL_STEPS) and context.stack.count() >= 12
      and len(dock.actions) == 8,
      "{0} step, {1} pagine, {2} comandi di progetto".format(
          dock.list.count(), context.stack.count(), len(dock.actions)))

@@ -502,7 +502,8 @@ check_true("one tab is called Rimboschimento", "Rimboschimento" in rm_titles)
 check("...exactly one", rm_titles.count("Rimboschimento"), 1)
 check_true("no tab is called Foresta any more",
            not any("orest" in title for title in rm_titles))
-check("the tab count is unchanged", len(rm_titles), 5)
+# v1.32.0: UAV and Layer/Export became steps of the dashboard.
+check("the tab count is unchanged", len(rm_titles), 3)
 check_true("the toolbar tip does not promise a tab that is gone",
            "Foresta" not in rm_plugin.dock_action.toolTip()
            and "Griglie" not in rm_plugin.dock_action.toolTip())
@@ -622,8 +623,12 @@ dock_source = open(os.path.join(
     "gui", "dock.py"), encoding="utf-8").read()
 check_true("the dock does not mention it either",
            "grid_panel" not in dock_source and "GridPanel" not in dock_source)
-check("the dock declares five tabs",
-      len([n for n in dir(dock_mod.GeoCadDock) if n.startswith("TAB_")]), 5)
+check("the dock declares three tabs",
+      len([n for n in dir(dock_mod.GeoCadDock) if n.startswith("TAB_")]), 3)
+check_true("and no UAV or export tab among them",
+           not any("UAV" in n or "EXPORT" in n
+                   for n in dir(dock_mod.GeoCadDock)
+                   if n.startswith("TAB_")))
 check_true("and none of them is a Grid tab",
            not any("GRID" in n for n in dir(dock_mod.GeoCadDock)
                    if n.startswith("TAB_")))

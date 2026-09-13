@@ -183,8 +183,10 @@ check_true("...ed e' un interruttore", mounted[0].isCheckable())
 
 workspace = plugin.workspace
 check_true("la dashboard esiste", workspace is not None)
-check("...con i suoi quattordici step",
-      workspace.workflow.list.count(), len(wf.STEPS))
+# v1.32.0: fourteen planting steps and six flight ones, one list.
+check("...con i suoi venti step",
+      workspace.workflow.list.count(), len(wf.ALL_STEPS))
+check("...di cui sei di volo", len(wf.UAV_STEPS), 6)
 check_true("prima del click e' nascosta",
            workspace.workflow.isHidden() and workspace.context.isHidden())
 check_true("...e cosi' il dock CAD", plugin.dock.isHidden())

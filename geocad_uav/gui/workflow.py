@@ -69,10 +69,15 @@ from ..io import cadastre as cadastre_mod
 from ..io import cartography as carto_mod
 from ..io import documents as docs_mod
 from ..io import project_file as project_mod
+from ..uav import forest_link as forest_link_mod
 from . import charts as charts_mod
 from . import map_layers as map_layers_mod
 from . import theme as theme_mod
+from .export_panel import ExportPanel
+from .mission_player import MissionPlayer, RATES as PLAYER_RATES
 from .preview import PlanPreview
+from .uav_panel import UavPanel
+from . import uav_panel as uav_mod
 from .map_layers import ProjectLayers
 
 M2_PER_HA = 10_000.0
@@ -106,6 +111,25 @@ STEPS = (
     ("cartography", "13. Cartografia"),
     ("outputs", "14. Elaborati"),
 )
+
+#: The flight workflow, worked after the planting one or on its own. The
+#: widgets of every one of these steps belong to a single UavPanel: they are
+#: laid out as six pages here instead of one long form, and there is no
+#: second planner behind them.
+UAV_STEPS = (
+    (uav_mod.STEP_AREA, "V1. Area del volo"),
+    (uav_mod.STEP_HARDWARE, "V2. Hardware e GSD"),
+    (uav_mod.STEP_FLIGHT, "V3. Parametri di volo"),
+    (uav_mod.STEP_SAFETY, "V4. Sicurezza e ostacoli"),
+    (uav_mod.STEP_SIMULATION, "V5. Simulazione"),
+    (uav_mod.STEP_EXPORT, "V6. Export"),
+)
+
+#: Everything the step list shows, in order.
+ALL_STEPS = STEPS + UAV_STEPS
+
+#: Where a section title goes, by index into ALL_STEPS.
+SECTIONS = {0: "RIMBOSCHIMENTO", len(STEPS): "VOLO UAV"}
 
 #: Visual state of one step. Derived from the model, never set by a widget
 #: for its own convenience.
@@ -180,6 +204,10 @@ class ProjectState(QObject):
     #: naturaliform one. Panels do not call each other: the project says a
     #: new generation is due and whoever owns the generator answers.
     regenerateRequested = pyqtSignal()
+    #: Asked for by a panel that has finished its job and is handing the
+    #: operator on to another step. The workflow list is what answers: a
+    #: panel never reaches into it.
+    stepRequested = pyqtSignal(str)
 
     def __init__(self, iface=None, parent=None):
         super().__init__(parent)
@@ -192,6 +220,11 @@ class ProjectState(QObject):
         self.area = None                        # ReforestationArea
         self.crs = None                         # QgsCoordinateReferenceSystem
         self.terrain = None                     # TerrainAnalysis
+        #: Id of the raster the terrain was read from, when it came from a
+        #: layer of the project. The flight planner offers the operator that
+        #: same layer; the warped working grid is a temporary file the
+        #: project never adopted and no layer combo would list it.
+        self.dem_layer_id = ""
         #: The contour lines extracted from the DEM and cut to the usable
         #: surface. They are rows an operator can see before deciding to
         #: plant along them, which is why they live on the project and not
@@ -238,6 +271,11 @@ class ProjectState(QObject):
         #: the operator is standing on keeps its marker until it earns a
         #: better one.
         self.current_step = STEPS[0][0]
+        #: The flight planner and its export tab, once the context dock has
+        #: built them. The only thing the model does with either is read its
+        #: state to mark the six flight steps; it never drives them.
+        self.uav = None
+        self.uav_export = None
         #: Where the project was last written, and whether it has changed
         #: since. Both are what a Save button has to know.
         self.path = ""
@@ -247,7 +285,7 @@ class ProjectState(QObject):
         #: undo should take back a decision, not half of one.
         self._undo = []
         self._redo = []
-        self._status = {key: NOT_STARTED for key, _label in STEPS}
+        self._status = {key: NOT_STARTED for key, _label in ALL_STEPS}
 
     # -- the project as a whole --------------------------------------------
 
@@ -459,7 +497,42 @@ class ProjectState(QObject):
             self.set_status("verify", WARNING if self.anomalies else DONE)
         self.set_status("outputs", DONE if self.plants_layer is not None
                         else NOT_STARTED)
+        self.refresh_flight_status()
         self.changed.emit()
+
+    def refresh_flight_status(self) -> None:
+        """Mark the six flight steps from what the planner actually holds."""
+        panel = self.uav
+        if panel is None:
+            for key, _label in UAV_STEPS:
+                self.set_status(key, NOT_STARTED)
+            return
+        has_area = panel.extent.geometry() is not None
+        has_dem = panel.dem_layer() is not None
+        ready, _reason = panel.readiness()
+        mission = panel.last_mission
+        report = panel.last_report
+
+        self.set_status(uav_mod.STEP_AREA,
+                        DONE if (has_area and has_dem) else NOT_STARTED)
+        self.set_status(uav_mod.STEP_HARDWARE,
+                        DONE if ready else
+                        (WARNING if has_area and has_dem else NOT_STARTED))
+        self.set_status(uav_mod.STEP_FLIGHT,
+                        DONE if mission is not None else NOT_STARTED)
+        if report is None:
+            self.set_status(uav_mod.STEP_SAFETY, NOT_STARTED)
+        elif report.errors:
+            self.set_status(uav_mod.STEP_SAFETY, ERROR)
+        elif report.warnings:
+            self.set_status(uav_mod.STEP_SAFETY, WARNING)
+        else:
+            self.set_status(uav_mod.STEP_SAFETY, DONE)
+        self.set_status(uav_mod.STEP_SIMULATION,
+                        DONE if mission is not None else NOT_STARTED)
+        written = getattr(self.uav_export, "last_written", None)
+        self.set_status(uav_mod.STEP_EXPORT,
+                        DONE if written else NOT_STARTED)
 
     def touch(self) -> None:
         """Mark the project as changed since it was last written."""
@@ -875,12 +948,15 @@ class WorkflowDock(QDockWidget):
         self.list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setUniformItemSizes(True)
-        for key, label in STEPS:
+        for key, label in ALL_STEPS:
             item = QListWidgetItem(swatch(STATE_COLORS[NOT_STARTED]), label)
             item.setData(Qt.ItemDataRole.UserRole, key)
             self.list.addItem(item)
         self.list.setCurrentRow(0)
         self.list.currentRowChanged.connect(self.stepChanged.emit)
+        # A panel that finishes its own job and hands over to another step
+        # asks for it here rather than reaching into the list.
+        state.stepRequested.connect(self.select_step)
 
         self.file_label = QLabel(tr("progetto non salvato"))
         self.file_label.setWordWrap(True)
@@ -1036,6 +1112,14 @@ class WorkflowDock(QDockWidget):
     def current_key(self) -> str:
         item = self.list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else ""
+
+    def select_step(self, key: str) -> bool:
+        """Move to a step by name. Used when one step hands over to another."""
+        for row in range(self.list.count()):
+            if self.list.item(row).data(Qt.ItemDataRole.UserRole) == key:
+                self.list.setCurrentRow(row)
+                return True
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -1375,6 +1459,7 @@ class TerrainPanel(Panel):
         if analysis is None:
             return None
         self.state.terrain = analysis
+        self.state.dem_layer_id = ""
         self.state.refresh_status()
         return analysis
 
@@ -1419,6 +1504,7 @@ class TerrainPanel(Panel):
             self.warn(exc)
             return None
         self.state.terrain = analysis
+        self.state.dem_layer_id = layer.id()
         self.state.contours = []
         self.state.draw()
         self.state.checkpoint()
@@ -2104,9 +2190,18 @@ class GeneratePanel(Panel):
         self.layout.addWidget(self.preview_label)
         theme_mod.mark(self.generate_button, primary=True)
 
+        self.flight_button = QPushButton(tr("Genera missione UAV"))
+        self.flight_button.setToolTip(tr(
+            "Passa l'area utile, le esclusioni e l'orientamento dei filari "
+            "al pianificatore di volo, con il preset forestale gia' "
+            "impostato. Non c'e' niente da riscrivere a mano."))
+        self.flight_button.setEnabled(False)
+        self.layout.addWidget(self.flight_button)
+
         self.preview_button.clicked.connect(self.preview)
         self.clear_preview_button.clicked.connect(self.clear_preview)
         self.generate_button.clicked.connect(self.generate)
+        self.flight_button.clicked.connect(self.start_flight)
         state.regenerateRequested.connect(self.preview)
         state.changed.connect(self.refresh)
 
@@ -2280,6 +2375,82 @@ class GeneratePanel(Panel):
         self.state.layers.draw_glades(glades)
         self.state.layers.refresh_canvas()
 
+    def _flight_dem(self):
+        """The raster the flight should read, as a layer of the project.
+
+        The one the operator chose, when the terrain came from the project.
+        Otherwise the warped working grid, adopted here: it is a temporary
+        GeoTIFF nobody added, and a layer outside the project cannot be
+        selected in a layer combo -- handing it over without adopting it
+        would leave the flight step showing "(nessun DEM)".
+        """
+        state = self.state
+        if state.terrain is None:
+            return None
+        chosen = QgsProject.instance().mapLayer(state.dem_layer_id or "")
+        if chosen is not None:
+            return chosen
+        layer = state.terrain.raster_layer()
+        if layer is None:
+            return None
+        if QgsProject.instance().mapLayer(layer.id()) is None:
+            QgsProject.instance().addMapLayer(layer)
+        return layer
+
+    def start_flight(self) -> bool:
+        """Hand the finished planting block to the flight planner.
+
+        Reads what the project already holds through ``uav.forest_link`` --
+        the usable surface, the exclusions and the orientation the rows were
+        laid out at -- puts it on the flight planner and leaves the operator
+        on the flight area step. Nothing is re-entered, so nothing can be
+        re-entered wrongly.
+        """
+        state = self.state
+        if state.area is None or state.crs is None:
+            self.say(tr("Definisci prima l'area del progetto."))
+            return False
+        panel = state.uav
+        if panel is None:
+            self.say(tr("Il pianificatore di volo non e' disponibile."))
+            return False
+        azimuth = None
+        if state.orientation_applied and state.spec is not None:
+            # The bearing the rows RUN at (SlopeSpacing.row_azimuth_deg),
+            # not the one the lattice steps along: the imagery has to line
+            # up with what is on the ground.
+            azimuth = float(state.spec.row_azimuth_deg)
+        try:
+            survey = forest_link_mod.survey_from_area(
+                state.area, state.crs.authid(), row_azimuth_deg=azimuth,
+                plant_count=(state.result.count
+                             if state.result is not None else 0))
+        except forest_link_mod.ForestLinkError as exc:
+            self.warn(str(exc))
+            return False
+
+        panel.extent.set_extent(survey.aoi_geom, state.crs)
+        panel.dem_combo.setLayer(self._flight_dem())
+        overlap = forest_link_mod.forest_overlap()
+        front, side = overlap.as_percent
+        panel.frontlap.setValue(front)
+        panel.sidelap.setValue(side)
+        if azimuth is not None:
+            index = panel.azimuth_mode.findData("manual")
+            if index >= 0:
+                panel.azimuth_mode.setCurrentIndex(index)
+            panel.azimuth.setValue(azimuth % 360.0)
+        else:
+            index = panel.azimuth_mode.findData("optimised")
+            if index >= 0:
+                panel.azimuth_mode.setCurrentIndex(index)
+        panel.recompute()
+        self.say(tr("Missione UAV impostata sull'area utile ({0}). "
+                    "Preset forestale: sovrapposizione {1:.0f}/{2:.0f} %.")
+                 .format(ha(survey.area_m2), front, side))
+        state.stepRequested.emit(uav_mod.STEP_AREA)
+        return True
+
     def generate(self):
         """Commit the preview to a real PointZ layer, coloured by species."""
         result = self.state.result or self.preview()
@@ -2306,6 +2477,9 @@ class GeneratePanel(Panel):
             self.state.expected_plants()) if self.state.area else DASH)
         self.actual_label.setText("{0:,}".format(self.state.result.count)
                                   if self.state.result else DASH)
+        # There is nothing to fly over until there is a usable surface.
+        self.flight_button.setEnabled(
+            self.state.area is not None and self.state.usable_m2 > 0.0)
 
 
 class NaturalPanel(Panel):
@@ -3362,15 +3536,157 @@ class ContextDock(QDockWidget):
             holder.setWidget(panel)
             self.stack.addWidget(holder)
 
+        # ---------------------------------------------------------- VOLO
+        # One planner, laid out as six pages. UavPanel owns the widgets and
+        # every number they produce; this dock only decides which of them
+        # the operator is looking at.
+        self.uav_panel = UavPanel(state.iface)
+        self.export_panel = ExportPanel(
+            state.iface, lambda: self.uav_panel.last_mission)
+        self.player = MissionPlayer(state.iface, self)
+        self._player_connections = []
+        flight = dict(self.uav_panel.pages())
+        # One DEM download in the whole plugin, and it belongs to the
+        # Terreno step. The flight step sends the operator there rather
+        # than growing a second dialog of its own.
+        self.dem_step_button = QPushButton(tr("Serve un DEM: vai a Terreno"))
+        self.dem_step_button.clicked.connect(
+            lambda: state.stepRequested.emit("terrain"))
+        flight[uav_mod.STEP_AREA] = (list(flight[uav_mod.STEP_AREA])
+                                     + [self.dem_step_button])
+        flight[uav_mod.STEP_SIMULATION] = (
+            list(flight[uav_mod.STEP_SIMULATION]) + [self._build_player_box()])
+        flight[uav_mod.STEP_EXPORT] = [self.export_panel]
+
+        #: Flight step key -> (page widget, None). Kept apart from
+        #: ``pages`` because these are one planner's controls, not panels
+        #: sharing the planting project's state.
+        self.flight_pages = {}
+        for key, _label in UAV_STEPS:
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(6, 6, 6, 6)
+            layout.setSpacing(8)
+            for widget in flight.get(key, []):
+                if isinstance(widget, QWidget):
+                    layout.addWidget(widget)
+                else:
+                    layout.addLayout(widget)
+            layout.addStretch(1)
+            holder = QScrollArea()
+            holder.setWidgetResizable(True)
+            holder.setWidget(page)
+            self.stack.addWidget(holder)
+            self.flight_pages[key] = (page, None)
+
+        state.uav = self.uav_panel
+        state.uav_export = self.export_panel
+        self.uav_panel.load_settings()
+        self._wire_player()
+
         self.setWidget(self.stack)
         self.setMinimumWidth(240)
 
+    # -- the flight simulator ----------------------------------------------
+
+    def _build_player_box(self):
+        """Transport controls over the mission the planner already built."""
+        box = QGroupBox(tr("Simulazione del volo"))
+        layout = QVBoxLayout(box)
+        row = QHBoxLayout()
+        self.play_button = QPushButton(tr("Play"))
+        self.pause_button = QPushButton(tr("Pausa"))
+        self.stop_button = QPushButton(tr("Stop"))
+        self.rate_combo = QComboBox()
+        for rate in PLAYER_RATES:
+            self.rate_combo.addItem("{0}x".format(rate), rate)
+        for widget in (self.play_button, self.pause_button, self.stop_button,
+                       self.rate_combo):
+            row.addWidget(widget)
+        layout.addLayout(row)
+        self.player_status = QLabel()
+        self.player_status.setWordWrap(True)
+        layout.addWidget(self.player_status)
+        return box
+
+    def _wire_player(self):
+        for signal, slot in (
+                (self.play_button.clicked, self.play_mission),
+                (self.pause_button.clicked, self.pause_mission),
+                (self.stop_button.clicked, self.stop_mission),
+                (self.rate_combo.currentIndexChanged, self._change_rate),
+                (self.uav_panel.generate_button.clicked,
+                 self.refresh_player),
+                (self.uav_panel.generate_button.clicked,
+                 self.export_panel.refresh),
+                (self.uav_panel.generate_button.clicked,
+                 self.state.refresh_status),
+                (self.export_panel.export_button.clicked,
+                 self.state.refresh_status),
+                (self.player.ticked, self._on_player_tick),
+                (self.player.finished, self.refresh_player)):
+            signal.connect(slot)
+            self._player_connections.append((signal, slot))
+        self.refresh_player()
+
+    def play_mission(self, *_args) -> bool:
+        mission = self.uav_panel.last_mission
+        if mission is None:
+            self.player_status.setText(tr(
+                "Nessuna rotta da simulare: generala nello step Simulazione."))
+            return False
+        if not self.player.play(mission):
+            self.player_status.setText(self.player.message)
+            return False
+        self.refresh_player()
+        return True
+
+    def pause_mission(self, *_args) -> None:
+        self.player.pause()
+        self.refresh_player()
+
+    def stop_mission(self, *_args) -> None:
+        self.player.stop()
+        self.refresh_player()
+
+    def _change_rate(self, *_args) -> None:
+        self.player.set_rate(self.rate_combo.currentData() or 1)
+
+    def _on_player_tick(self, *_args) -> None:
+        self.player_status.setText(self.player.summary())
+
+    def refresh_player(self, *_args) -> None:
+        mission = getattr(self.uav_panel, "last_mission", None)
+        self.play_button.setEnabled(mission is not None)
+        self.pause_button.setEnabled(self.player.is_playing)
+        self.stop_button.setEnabled(self.player.mission is not None)
+        if mission is None:
+            self.player_status.setText(tr("Nessuna rotta caricata."))
+        else:
+            self.player_status.setText(self.player.summary())
+
+    def teardown(self) -> None:
+        """Called from the workspace when the plugin is unloaded."""
+        for signal, slot in self._player_connections:
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
+        self._player_connections = []
+        self.uav_panel.save_settings()
+        for panel in (self.player, self.uav_panel, self.export_panel):
+            try:
+                panel.teardown()
+            except Exception:                                   # noqa: BLE001
+                pass
+
     def show_step(self, row: int) -> None:
         """Called by the workflow list. Rows map to pages, sometimes to tabs."""
-        if row < 0 or row >= len(STEPS):
+        if row < 0 or row >= len(ALL_STEPS):
             return
-        key = STEPS[row][0]
-        panel, tab = self.pages.get(key, (None, None))
+        key = ALL_STEPS[row][0]
+        panel, tab = self.pages.get(key, self.flight_pages.get(key,
+                                                               (None, None)))
         if panel is None:
             return
         index = self.stack.indexOf(panel.parentWidget().parentWidget())
@@ -3468,6 +3784,7 @@ class Workspace(QObject):
                                  self.context)
 
     def unmount(self) -> None:
+        self.context.teardown()
         self.state.preview.dispose()
         self.state.layers.remove_all()
         if self.state.terrain is not None:
