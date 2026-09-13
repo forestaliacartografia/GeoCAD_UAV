@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.34.0
+version=1.35.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,18 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.35.0
+    - Relazione di missione in PDF, Word ed Excel, oltre all'HTML. E' la
+      stessa relazione: la missione viene descritta una volta sola
+      nell'oggetto report di io.documents e i tre scrittori la mettono su
+      carta. Il foglio di calcolo porta in piu' la tabella di tutti i
+      waypoint, che in un PDF sarebbero quaranta pagine illeggibili.
+    - Il profilo altimetrico viaggia dentro il PDF come figura,
+      disegnato dallo stesso grafico che si vede nel pannello. La strada
+      e' stata verificata su entrambe le versioni di QGIS prima di
+      usarla; Word ed Excel dicono dov'e' la figura invece di fingere di
+      portarla, perche' quella parte non e' verificata.
 
 changelog=1.34.0
     - Missioni a corridoio: strade, corsi d'acqua, elettrodotti. Scegli

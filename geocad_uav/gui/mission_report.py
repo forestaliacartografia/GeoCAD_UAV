@@ -363,6 +363,179 @@ def build_html(mission: Mission, params=None, validation=None,
     return "\n".join(parts)
 
 
+# --------------------------------------------------------------------------
+# The same report as a document: PDF, DOCX, XLSX
+# --------------------------------------------------------------------------
+
+#: Size of the profile figure in the written report, in pixels. A4 at 150
+#: dpi is about 1100 points across the text column; this sits inside it
+#: without being upscaled.
+FIGURE_W, FIGURE_H = 1000, 280
+
+
+def profile_png(mission: Mission, width: int = FIGURE_W,
+                height: int = FIGURE_H) -> bytes:
+    """The altimetric profile as PNG bytes, or empty when there is none.
+
+    Painted by the widget the panel shows, rendered into an image without
+    ever being put on screen -- so the figure in the PDF is the same drawing
+    the operator was looking at, not a second one that could disagree.
+    """
+    from qgis.PyQt.QtCore import QBuffer, QIODevice                # noqa: PLC0415
+    from qgis.PyQt.QtGui import QImage                             # noqa: PLC0415
+
+    from .charts import ElevationProfile                           # noqa: PLC0415
+
+    chart = ElevationProfile()
+    if chart.set_mission(mission) < 2:
+        return b""
+    chart.resize(int(width), int(height))
+    picture = QImage(int(width), int(height), QImage.Format.Format_ARGB32)
+    picture.fill(0xFFFFFFFF)
+    chart.render(picture)
+
+    buffer = QBuffer()
+    mode = getattr(QIODevice, "OpenModeFlag", QIODevice)
+    buffer.open(mode.WriteOnly)
+    if not picture.save(buffer, "PNG"):
+        return b""
+    return bytes(buffer.data())
+
+
+def build_document(mission: Mission, params=None, validation=None,
+                   geometry=None, title: str = "Piano di volo UAV",
+                   with_figure: bool = True):
+    """The mission as a :class:`io.documents.Report`.
+
+    Same numbers as :func:`build_html`, read from the same mission -- the
+    two are different renderings, not two descriptions that have to be kept
+    in step by hand.
+    """
+    from ..io import documents as docs                             # noqa: PLC0415
+
+    st = mission.stats
+    if geometry is None and params is not None:
+        from ..uav import photogrammetry as pg                     # noqa: PLC0415
+        geometry = pg.solve_survey_geometry(
+            params.camera, params.overlap, h_agl_m=mission.h_agl_m,
+            orientation=params.orientation)
+
+    report = docs.Report(title=title, date=docs.today())
+    report.subtitle = "{0} | {1} | CRS {2}".format(
+        mission.camera_key or "camera n/d", mission.drone_key or "drone n/d",
+        mission.crs_authid or "n/d")
+
+    report.heading("Sintesi", level=1)
+    report.table("Numeri della missione", ("Grandezza", "Valore"), (
+        ("Area di riferimento", "{0:,.2f} ha".format(st.aoi_area_ha)),
+        ("Strisciate", "{0:,}".format(st.n_strips)),
+        ("Waypoint", "{0:,}".format(st.n_waypoints)),
+        ("Scatti", "{0:,}".format(st.n_photos)),
+        ("Percorso", "{0:,.0f} m".format(st.total_length_m)),
+        ("Tempo di volo stimato", format_duration(st.flight_time_s)),
+        ("Batterie", "{0}".format(st.n_batteries)),
+        ("Schema", mission.pattern or "n/d"),
+        ("Azimut", "{0:.1f} deg".format(mission.azimuth_deg)),
+    ))
+
+    report.heading("Parametri di ripresa", level=1)
+    rows = [
+        ("Quota AGL", "{0:.1f} m".format(mission.h_agl_m)),
+        ("GSD", "{0:.2f} cm/px".format(mission.gsd_m * 100.0)),
+        ("Sovrapposizione longitudinale",
+         "{0:.0f} %".format(100.0 * mission.frontlap)),
+        ("Sovrapposizione laterale",
+         "{0:.0f} %".format(100.0 * mission.sidelap)),
+        ("Velocita'", "{0:.2f} m/s".format(mission.speed_ms)),
+        ("Modalita' di quota", AltitudeMode.LABELS.get(
+            mission.altitude_mode, mission.altitude_mode)),
+        ("Datum verticale", VerticalDatum.label(mission.vertical_datum)),
+        ("Margine di sicurezza", "{0:.1f} m".format(mission.safety_margin_m)),
+        ("Franco sulla vegetazione",
+         "{0:.1f} m".format(mission.vegetation_clearance_m)),
+    ]
+    if geometry is not None:
+        rows.extend([
+            ("Impronta a terra", "{0:.1f} x {1:.1f} m".format(
+                geometry.footprint_across_m, geometry.footprint_along_m)),
+            ("Interasse strisciate", "{0:.2f} m".format(geometry.d_side_m)),
+            ("Base di presa", "{0:.2f} m".format(geometry.d_front_m)),
+            ("Intervallo di scatto", "{0:.2f} s".format(
+                geometry.interval_at_speed(mission.speed_ms))),
+        ])
+    report.table("Ripresa", ("Parametro", "Valore"), rows)
+
+    report.heading("Terreno e quote", level=1)
+    report.table("Profilo", ("Grandezza", "Valore"), (
+        ("Terreno minimo", "{0:.1f} m s.l.m.".format(st.terrain_z_min)),
+        ("Terreno massimo", "{0:.1f} m s.l.m.".format(st.terrain_z_max)),
+        ("Dislivello", "{0:.1f} m".format(st.terrain_relief_m)),
+        ("AGL minimo", "{0:.1f} m".format(st.agl_min)),
+        ("AGL massimo", "{0:.1f} m".format(st.agl_max)),
+        ("GSD minimo", "{0:.2f} cm/px".format(st.gsd_min_m * 100.0)),
+        ("GSD massimo", "{0:.2f} cm/px".format(st.gsd_max_m * 100.0)),
+    ))
+    if with_figure:
+        figure = profile_png(mission)
+        if figure:
+            report.image_block(
+                figure, "Profilo altimetrico: terreno e quota di volo. Le "
+                        "due curve restano parallele quando il terrain "
+                        "following e' attivo.")
+
+    if validation is not None:
+        report.heading("Controllo pre-volo", level=1)
+        report.text(validation.summary())
+        report.table("Verifiche", ("Esito", "Controllo", "Valore", "Nota"), [
+            (check.severity.upper(), check.label, check.value or "",
+             check.detail or "") for check in validation.checks])
+
+    if mission.warnings:
+        report.heading("Avvisi di pianificazione", level=1)
+        for warning in mission.warnings:
+            report.text(warning)
+
+    if mission.assumptions:
+        report.heading("Assunzioni dichiarate", level=1)
+        for assumption in mission.assumptions:
+            report.text(assumption)
+
+    report.heading("Prima del volo", level=1)
+    report.text(
+        "Verifica in campo il punto di decollo, la quota di rientro, gli "
+        "ostacoli non presenti nel modello di elevazione e le autorizzazioni "
+        "dello spazio aereo. Le quote di questo piano sono espresse nel "
+        "datum verticale dichiarato sopra: assicurati che coincida con "
+        "quello atteso dal firmware del drone.")
+
+    report.table("Waypoint", ("seq", "x", "y", "z_amsl", "z_agl",
+                              "rotta", "v", "tipo", "sotto-missione"),
+                 [(w.seq, round(w.x, 3), round(w.y, 3), round(w.z_amsl, 2),
+                   round(w.z_agl, 2), round(w.heading_deg, 1),
+                   round(w.speed_ms, 2), w.kind, w.sub_mission)
+                  for w in mission.waypoints], sheet_only=True)
+    return report
+
+
+def save_document(mission: Mission, path: str, key: str = "pdf", params=None,
+                  validation=None, geometry=None,
+                  overwrite: bool = False) -> str:
+    """Write the mission report through one of the document writers."""
+    from ..io import documents as docs                             # noqa: PLC0415
+
+    import os                                                      # noqa: PLC0415
+
+    from ..core.errors import ExportError                          # noqa: PLC0415
+
+    if os.path.exists(path) and not overwrite:
+        raise ExportError(
+            "refusing to overwrite {0}".format(path),
+            user_message="Il file esiste gia'.",
+            hint="Conferma la sovrascrittura o scegli un altro nome.")
+    report = build_document(mission, params, validation, geometry)
+    return docs.write(report, path, key)
+
+
 def save_html(mission: Mission, path: str, params=None, validation=None,
               geometry=None, overwrite: bool = False) -> str:
     """Write the report. Refuses to overwrite unless told to."""

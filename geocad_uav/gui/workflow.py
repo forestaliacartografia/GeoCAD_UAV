@@ -176,6 +176,18 @@ SLIDER_STEPS = 1000
 FOOTPRINT_FILL = "255,180,60,55"
 FOOTPRINT_OUTLINE = "200,120,20,120"
 
+#: Shapes the flight report can be written in. PDF first: it is what goes
+#: in the folder with the rest of the job.
+REPORT_FORMATS = (
+    ("pdf", "PDF (.pdf)"),
+    ("html", "Pagina HTML (.html)"),
+    ("docx", "Word (.docx)"),
+    ("xlsx", "Excel (.xlsx)"),
+)
+
+REPORT_SUFFIXES = (("pdf", ".pdf"), ("html", ".html"), ("docx", ".docx"),
+                   ("xlsx", ".xlsx"))
+
 
 def tr(text: str) -> str:
     from qgis.PyQt.QtCore import QCoreApplication              # noqa: PLC0415
@@ -3570,12 +3582,19 @@ class ContextDock(QDockWidget):
                                      + [self.dem_step_button])
         flight[uav_mod.STEP_SIMULATION] = (
             list(flight[uav_mod.STEP_SIMULATION]) + [self._build_player_box()])
-        self.report_button = QPushButton(tr("Relazione di missione (HTML)"))
+        self.report_format = QComboBox()
+        for key, label in REPORT_FORMATS:
+            self.report_format.addItem(tr(label), key)
+        self.report_button = QPushButton(tr("Relazione di missione"))
         self.report_button.setToolTip(tr(
             "Scrive la relazione completa: parametri, statistiche, esito "
-            "dei controlli e profilo altimetrico."))
+            "dei controlli e profilo altimetrico. Il foglio di calcolo "
+            "porta anche la tabella di tutti i waypoint."))
         self.report_button.setEnabled(False)
-        flight[uav_mod.STEP_EXPORT] = [self.export_panel, self.report_button]
+        report_row = QHBoxLayout()
+        report_row.addWidget(self.report_format)
+        report_row.addWidget(self.report_button)
+        flight[uav_mod.STEP_EXPORT] = [self.export_panel, report_row]
 
         #: Flight step key -> (page widget, None). Kept apart from
         #: ``pages`` because these are one planner's controls, not panels
@@ -3793,29 +3812,38 @@ class ContextDock(QDockWidget):
             "sovrappongono.").format(layer.featureCount()))
         return layer
 
-    def write_mission_report(self, *_args, path: str = ""):
-        """Write the flight report the plugin could always build.
+    def write_mission_report(self, *_args, path: str = "", key: str = ""):
+        """Write the flight report, in the shape the operator asked for.
 
         It existed only as the HTML output of a Processing algorithm, which
-        is not a place anyone working in the dashboard ever looks.
+        is not a place anyone working in the dashboard ever looks; and only
+        as HTML, which is not what goes in a folder with the rest of a job.
         """
         mission = getattr(self.uav_panel, "last_mission", None)
         if mission is None:
             self.player_status.setText(tr("Genera prima la rotta."))
             return ""
+        key = key or self.report_format.currentData() or "pdf"
+        suffix = dict(REPORT_SUFFIXES).get(key, ".pdf")
         if not path:
             path, _filter = QFileDialog.getSaveFileName(
-                self, tr("Relazione di missione"), "missione.html",
-                tr("Pagina HTML (*.html)"))
+                self, tr("Relazione di missione"), "missione" + suffix,
+                "*{0}".format(suffix))
         if not path:
             return ""
         try:
-            # build_html's "geometry" is the photogrammetric geometry --
+            # The "geometry" these take is the photogrammetric geometry --
             # footprint, spacings, GSD -- not the AOI polygon.
-            written = mission_report_mod.save_html(
-                mission, path, params=self.uav_panel.build_params(),
-                validation=self.uav_panel.last_report,
-                geometry=self.uav_panel.survey_geometry())
+            common = dict(params=self.uav_panel.build_params(),
+                          validation=self.uav_panel.last_report,
+                          geometry=self.uav_panel.survey_geometry(),
+                          overwrite=True)
+            if key == "html":
+                written = mission_report_mod.save_html(mission, path,
+                                                       **common)
+            else:
+                written = mission_report_mod.save_document(mission, path,
+                                                           key=key, **common)
         except (GeoCadError, OSError, ValueError) as exc:
             self.warn(exc)
             return ""

@@ -26,12 +26,21 @@ types and the WordprocessingML in this module were read off a .docx produced
 by Microsoft Word 2016 and checked against Microsoft's own documentation of
 the minimum document scenario (document / body / p / r / t). It is written
 minimal on purpose: main document part, styles, core properties. What is
-*not* claimed is any feature beyond text, headings and tables -- there are no
-images, no headers, no footers, no fields, because those were not verified.
+*not* claimed is any feature beyond text, headings and tables -- no headers,
+no footers, no fields, and no images, because those were not verified.
+
+**Figures** (1.35.0) are carried as PNG bytes and appear in the PDF and in
+the HTML. The PDF path registers them on the ``QTextDocument`` as
+``ResourceType.ImageResource`` -- verified present in its scoped spelling on
+Qt 5.15 (QGIS 3.40.15) and Qt 6.8 (QGIS 4.0.0), with a document that
+measurably lays the image out. The HTML embeds them as data URIs so the file
+stays one file. The workbook and the Word document say where the figure is
+rather than carrying it, for the reason above.
 """
 
 from __future__ import annotations
 
+import base64 as _b64
 import datetime as _datetime
 import os
 import zipfile
@@ -48,6 +57,10 @@ from ..core.errors import ExportError, InvalidInputError
 BLOCK_HEADING = "heading"
 BLOCK_TEXT = "text"
 BLOCK_TABLE = "table"
+BLOCK_IMAGE = "image"
+
+#: Where a figure is referred to in the writers that cannot carry it.
+IMAGE_ELSEWHERE = "(figura disponibile nelle versioni PDF e HTML)"
 
 
 @dataclass
@@ -63,10 +76,14 @@ class Block:
     #: plants are a column in Excel and forty unreadable pages in a PDF, so
     #: the prose writers skip these and the workbook keeps them.
     sheet_only: bool = False
+    #: PNG bytes, for a figure. The caption is ``text``.
+    image: bytes = b""
 
     def is_empty(self) -> bool:
         if self.kind == BLOCK_TABLE:
             return not self.rows
+        if self.kind == BLOCK_IMAGE:
+            return not self.image
         return not str(self.text).strip()
 
 
@@ -106,6 +123,17 @@ class Report:
                                  sheet_only=sheet_only))
         return self
 
+    def image_block(self, png: bytes, caption: str = "") -> "Report":
+        """A figure, as PNG bytes, with the caption it is known by."""
+        if png:
+            self.blocks.append(Block(BLOCK_IMAGE, text=caption,
+                                     image=bytes(png)))
+        return self
+
+    def images(self):
+        return [block for block in self.blocks
+                if block.kind == BLOCK_IMAGE and block.image]
+
     def prose(self):
         """The blocks the written report shows: everything but the listings."""
         return [block for block in self.blocks if not block.sheet_only]
@@ -130,6 +158,10 @@ def as_text(report: Report) -> str:
         if block.kind == BLOCK_HEADING:
             lines.append("")
             lines.append(block.text)
+        elif block.kind == BLOCK_IMAGE:
+            lines.append("")
+            lines.append("[{0}] {1}".format(block.text or "figura",
+                                            IMAGE_ELSEWHERE))
         elif block.kind == BLOCK_TABLE:
             lines.append("")
             lines.append(block.text)
@@ -171,18 +203,41 @@ def today() -> str:
 PAGE_MARGIN_MM = 18.0
 
 
-def as_html(report: Report) -> str:
-    """The report as a document Qt can lay out. Also what the DOCX mirrors."""
+def image_name(index: int) -> str:
+    """The resource name a figure is registered and referred to by."""
+    return "geocad-figura-{0}".format(int(index))
+
+
+def as_html(report: Report, embed_images: bool = True) -> str:
+    """The report as a document Qt can lay out. Also what the DOCX mirrors.
+
+    ``embed_images`` decides how a figure is referred to: a ``data:`` URI,
+    which keeps a standalone HTML file in one piece, or the resource name
+    :func:`write_pdf` registers on the QTextDocument, which is the only form
+    Qt's own text engine resolves.
+    """
     out = ["<html><head><meta charset='utf-8'></head><body>",
            "<h1>{0}</h1>".format(escape(report.title))]
     if report.subtitle:
         out.append("<p><i>{0}</i></p>".format(escape(report.subtitle)))
     if report.stamp():
         out.append("<p><small>{0}</small></p>".format(escape(report.stamp())))
+    seen_images = 0
     for block in report.prose():
         if block.kind == BLOCK_HEADING:
             level = 2 if block.level <= 1 else 3
             out.append("<h{0}>{1}</h{0}>".format(level, escape(block.text)))
+        elif block.kind == BLOCK_IMAGE:
+            if embed_images:
+                source = "data:image/png;base64,{0}".format(
+                    _b64.b64encode(block.image).decode("ascii"))
+            else:
+                source = image_name(seen_images)
+            seen_images += 1
+            out.append("<p><img src='{0}'></p>".format(source))
+            if block.text:
+                out.append("<p><small><i>{0}</i></small></p>".format(
+                    escape(block.text)))
         elif block.kind == BLOCK_TABLE:
             out.append("<h3>{0}</h3>".format(escape(block.text)))
             out.append("<table border='1' cellspacing='0' cellpadding='3' "
@@ -204,9 +259,9 @@ def as_html(report: Report) -> str:
 
 def write_pdf(report: Report, path: str) -> str:
     """Write the report to PDF with the text engine PyQt already carries."""
-    from qgis.PyQt.QtCore import QMarginsF                       # noqa: PLC0415
-    from qgis.PyQt.QtGui import (QPageLayout, QPageSize,         # noqa: PLC0415
-                                 QPdfWriter, QTextDocument)
+    from qgis.PyQt.QtCore import QMarginsF, QUrl                 # noqa: PLC0415
+    from qgis.PyQt.QtGui import (QImage, QPageLayout,            # noqa: PLC0415
+                                 QPageSize, QPdfWriter, QTextDocument)
 
     writer = QPdfWriter(path)
     writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
@@ -215,7 +270,15 @@ def write_pdf(report: Report, path: str) -> str:
                           QPageLayout.Unit.Millimeter)
     writer.setTitle(report.title)
     document = QTextDocument()
-    document.setHtml(as_html(report))
+    # Registered before setHtml: the layout resolves <img src> while it
+    # parses, and a resource added afterwards arrives too late to be placed.
+    for index, block in enumerate(report.images()):
+        picture = QImage()
+        if picture.loadFromData(block.image, "PNG"):
+            document.addResource(
+                QTextDocument.ResourceType.ImageResource,
+                QUrl(image_name(index)), picture)
+    document.setHtml(as_html(report, embed_images=False))
     # PyQt5 spells it print_, PyQt6 print. One plugin, two QGIS majors.
     render = getattr(document, "print_", None) or getattr(document, "print")
     render(writer)
@@ -280,6 +343,11 @@ def write_xlsx(report: Report, path: str) -> str:
             row_index += 1
         elif block.kind == BLOCK_TEXT:
             sheet.cell(row=row_index, column=1, value=block.text)
+            row_index += 1
+        elif block.kind == BLOCK_IMAGE:
+            sheet.cell(row=row_index, column=1,
+                       value="{0} {1}".format(block.text or "Figura",
+                                              IMAGE_ELSEWHERE))
             row_index += 1
     sheet.column_dimensions["A"].width = 70
 
@@ -413,6 +481,12 @@ def document_xml(report: Report) -> str:
         if block.kind == BLOCK_HEADING:
             body.append(_paragraph(
                 block.text, "Heading1" if block.level <= 1 else "Heading2"))
+        elif block.kind == BLOCK_IMAGE:
+            # A picture in WordprocessingML needs a media part, a
+            # relationship and a drawing element, none of which was read off
+            # a real .docx: the caption and where to find the figure, then.
+            body.append(_paragraph("{0} {1}".format(
+                block.text or "Figura", IMAGE_ELSEWHERE)))
         elif block.kind == BLOCK_TABLE:
             body.append(_paragraph(block.text, "Heading2"))
             body.append(_table(block))
@@ -566,6 +640,7 @@ def _written(path: str, what: str) -> None:
 
 
 __all__ = ["Report", "Block", "BLOCK_HEADING", "BLOCK_TEXT", "BLOCK_TABLE",
+           "BLOCK_IMAGE", "IMAGE_ELSEWHERE", "image_name",
            "FORMATS", "as_text", "as_html", "write", "write_pdf",
            "write_docx", "write_xlsx", "writer_for", "suffix_for",
            "sheet_name", "today", "document_xml", "content_types_xml",

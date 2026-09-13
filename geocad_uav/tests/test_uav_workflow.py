@@ -41,6 +41,7 @@ from qgis.PyQt.QtWidgets import QWidget                         # noqa: E402
 
 from geocad_uav.forest.reforestation import terrain as terrain_mod  # noqa: E402
 from geocad_uav.gui import uav_panel as up                      # noqa: E402
+from geocad_uav.gui import mission_report as mission_report_mod  # noqa: E402
 from geocad_uav.gui import workflow as wf                       # noqa: E402
 from geocad_uav.uav import forest_link as fl                    # noqa: E402
 from geocad_uav.uav import photogrammetry as pg                 # noqa: E402
@@ -574,19 +575,88 @@ else:
                    bool(coverage)
                    and "non verificat" not in coverage[0].detail)
 
-    # -- the mission report
-    report_path = os.path.join(TMP, "relazione.html")
-    written = context.write_mission_report(path=report_path)
-    check_true("la relazione viene scritta", bool(written)
-               and os.path.exists(report_path))
+    # -- the mission report, in the four shapes the step offers
+    check_true("lo step Export offre PDF, HTML, Word ed Excel",
+               [context.report_format.itemData(i)
+                for i in range(context.report_format.count())]
+               == ["pdf", "html", "docx", "xlsx"])
+
+    html_path = os.path.join(TMP, "relazione.html")
+    written = context.write_mission_report(path=html_path, key="html")
+    check_true("la relazione HTML viene scritta", bool(written)
+               and os.path.exists(html_path))
     if written:
-        html = io_open(report_path)
-        print("        relazione: {0:,} caratteri".format(len(html)))
+        html = io_open(html_path)
+        print("        HTML: {0:,} caratteri".format(len(html)))
         check_true("...e contiene il profilo altimetrico disegnato",
                    "<svg" in html and "Profilo altimetrico" in html)
         check_true("...e i numeri della missione",
                    "{0}".format(len(covered.waypoints)) in html
                    or "waypoint" in html.lower())
+
+    pdf_path = os.path.join(TMP, "relazione.pdf")
+    written_pdf = context.write_mission_report(path=pdf_path, key="pdf")
+    check_true("la relazione PDF viene scritta", bool(written_pdf)
+               and os.path.exists(pdf_path))
+    if written_pdf:
+        raw = open(pdf_path, "rb").read()
+        print("        PDF: {0:,} byte".format(len(raw)))
+        check_true("...ed e' davvero un PDF", raw[:5] == b"%PDF-")
+        check_true("...con piu' di una pagina di contenuto",
+                   raw.count(b"/Type /Page") >= 1 and len(raw) > 20000)
+        # The figure travels with it: a PDF carrying an image has an image
+        # XObject, which a text-only one does not.
+        check_true("...e porta il profilo altimetrico come immagine",
+                   b"/Subtype /Image" in raw or b"/Image" in raw)
+        check_true("...e finisce come un PDF", b"%%EOF" in raw[-2048:])
+        try:
+            from PyPDF2 import PdfReader
+            reader = PdfReader(pdf_path)
+            text = "\n".join(page.extract_text() or ""
+                             for page in reader.pages)
+            print("        {0} pagine, {1:,} caratteri estratti".format(
+                len(reader.pages), len(text)))
+            check_true("il PDF si rilegge, con delle pagine",
+                       len(reader.pages) >= 1)
+            check_true("...e il testo torna fuori",
+                       "Piano di volo UAV" in text)
+            check_true("...coi numeri della missione",
+                       "Waypoint" in text or "waypoint" in text)
+            check_true("...e con l'esito del controllo pre-volo",
+                       "pre-volo" in text.lower()
+                       or "verifiche" in text.lower())
+        except ImportError as exc:                              # noqa: BLE001
+            skip("il testo del PDF si rilegge",
+                 "questa installazione di QGIS non comprende PyPDF2 "
+                 "({0})".format(exc))
+
+    figure = mission_report_mod.profile_png(covered)
+    print("        figura: {0:,} byte PNG".format(len(figure)))
+    check_true("il profilo si disegna anche fuori dallo schermo",
+               figure[:8] == b"\x89PNG\r\n\x1a\n" and len(figure) > 1000)
+
+    for key, suffix in (("docx", ".docx"), ("xlsx", ".xlsx")):
+        out = os.path.join(TMP, "relazione" + suffix)
+        got = context.write_mission_report(path=out, key=key)
+        check_true("la relazione {0} viene scritta".format(key.upper()),
+                   bool(got) and os.path.getsize(out) > 2000)
+        # Both are zip packages; neither claims to carry the figure.
+        import zipfile as _zip
+        check_true("...ed e' un pacchetto valido",
+                   _zip.is_zipfile(out))
+
+    doc = mission_report_mod.build_document(covered, with_figure=False)
+    titles = [b.text for b in doc.blocks]
+    print("        blocchi: {0}".format(len(doc.blocks)))
+    check_true("il documento porta le sezioni attese",
+               any("Sintesi" in t for t in titles)
+               and any("Ripresa" in t for t in titles)
+               and any("Waypoint" in t for t in titles))
+    sheet_only = [b for b in doc.blocks if b.sheet_only]
+    check("la tabella dei waypoint sta solo nel foglio di calcolo",
+          len(sheet_only), 1)
+    check("...e ha una riga per waypoint", len(sheet_only[0].rows),
+          len(covered.waypoints))
 
 # --------------------------------------------------------------------------
 # W9 - the hardware step says what the hardware is
