@@ -159,6 +159,50 @@ check_true("...e coprono il dislivello del versante di progetto",
 check_text("lo step Terreno risulta completato", state.status("terrain"),
            wf.DONE)
 
+print("\n-- il limite di pendenza diventa superficie tolta --")
+before_usable = state.usable_m2
+print("        {0}".format(terrain_panel.suitable_label.text()))
+check_true("finche' non si preme, il limite e' solo una percentuale",
+           "non ancora esclusa" in terrain_panel.suitable_label.text())
+# The test hillside runs 5.7 to 14.0 degrees: a limit inside that range
+# has to take some of it away and leave the rest.
+terrain_panel.slope_max.setValue(11.5)
+excluded_ground = terrain_panel.apply_suitability()
+print("        utile {0:,.0f} -> {1:,.0f} m2".format(before_usable,
+                                                     state.usable_m2))
+check_true("le aree troppo ripide sono una geometria vera",
+           excluded_ground is not None
+           and excluded_ground.isGeosValid()
+           and excluded_ground.area() > 0.0)
+check_true("...e la superficie utile si e' ridotta davvero",
+           0.0 < state.usable_m2 < before_usable)
+print("        tolto: {0:,.0f} m2 su {1:,.0f}".format(
+    before_usable - state.usable_m2, before_usable))
+check_true("...e l'esclusione e' sulla mappa",
+           layers.layers["excluded"].featureCount() >= 1)
+check_true("...col motivo scritto sopra",
+           any("Pendenza oltre" in str(f["motivo"])
+               for f in layers.layers["excluded"].getFeatures()))
+check_true("il pannello dice che adesso e' esclusa",
+           "esclusa dal progetto" in terrain_panel.suitable_label.text())
+check_true("la relazione la elenca fra i vincoli",
+           "Pendenza oltre" in workspace.context.outputs_panel.build_report())
+print("\n-- e un limite che non lascia niente lo dice subito --")
+refusals = []
+terrain_panel.warn = lambda exc: refusals.append(exc.formatted())
+terrain_panel.slope_max.setValue(1.0)
+terrain_panel.apply_suitability()
+check("con un grado non resta niente", state.usable_m2, 0.0, 1e-6)
+check_true("...e il pannello lo dice invece di lasciarlo scoprire al "
+           "generatore",
+           refusals and "non resta alcuna superficie" in refusals[-1])
+print("        avviso: {0}".format(refusals[-1]))
+
+terrain_panel.slope_max.setValue(89.0)
+terrain_panel.apply_suitability()
+check("tolto il limite, la superficie utile torna", state.usable_m2,
+      before_usable, 1e-6)
+
 # --------------------------------------------------------------------------
 # C2 - the contours come out of GDAL and land on the map
 # --------------------------------------------------------------------------

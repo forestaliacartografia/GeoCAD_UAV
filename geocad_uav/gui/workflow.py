@@ -78,6 +78,10 @@ M2_PER_HA = 10_000.0
 #: very edge comes from real neighbours and not from the padding.
 DEM_MARGIN_M = 50.0
 
+#: The constraint key the slope limit writes into. A constraint like any
+#: other, so it is subtracted, reported and drawn by the same machinery.
+SUITABILITY_KEY = "idoneita"
+
 #: How many operator actions can be taken back. Snapshots are the whole
 #: project serialised, so this is a memory budget as much as a policy.
 UNDO_DEPTH = 25
@@ -1291,6 +1295,9 @@ class TerrainPanel(Panel):
         self.slope_max.setValue(35.0)
         self.slope_max.setSuffix(" deg")
         limit_form.addRow(tr("Pendenza massima"), self.slope_max)
+        self.apply_suitability_button = QPushButton(
+            tr("Escludi le aree non idonee"))
+        limit_form.addRow(self.apply_suitability_button)
         self.layout.addWidget(limits)
 
         contours = QGroupBox(tr("Curve di livello"))
@@ -1315,6 +1322,7 @@ class TerrainPanel(Panel):
 
         self.download_button.clicked.connect(self.download)
         self.use_local_button.clicked.connect(self.use_local_dem)
+        self.apply_suitability_button.clicked.connect(self.apply_suitability)
         self.contour_button.clicked.connect(self.extract_contours)
         state.changed.connect(self.refresh)
         self.reload_rasters()
@@ -1386,6 +1394,57 @@ class TerrainPanel(Panel):
         self.state.refresh_status()
         return analysis
 
+    def apply_suitability(self, *_args):
+        """Turn the slope limit into ground the plan will not use.
+
+        Until this is pressed the limit is a percentage in a label: the
+        generator plants over the whole usable surface whatever the DEM
+        says. Pressed, the rejected cells become an exclusion like a road
+        or a watercourse -- same mechanism, same report line, same colour on
+        the map -- and the usable surface really shrinks.
+        """
+        from ..forest.planting import TopographicFilter          # noqa: PLC0415
+
+        if self.state.terrain is None:
+            self.warn(GeoCadError(
+                "no terrain", user_message=tr("Carica prima il DEM.")))
+            return None
+        geometry = self.state.area.lorda() if self.state.area else None
+        if geometry is None:
+            self.warn(GeoCadError(
+                "no area", user_message=tr("Definisci prima l'area.")))
+            return None
+        limit = self.slope_max.value()
+        try:
+            mask = self.state.terrain.suitability(
+                TopographicFilter(slope_max_deg=limit))
+            mask = self.state.terrain.restrict_to(mask, geometry)
+            unsuitable = self.state.terrain.unsuitable_geometry(mask,
+                                                                clip=geometry)
+        except GeoCadError as exc:
+            self.warn(exc)
+            return None
+        key = SUITABILITY_KEY
+        label = tr("Pendenza oltre {0:g} gradi").format(limit)
+        self.state.constraints.declare(key, 0.0, label=label)
+        self.state.constraints.clear_features(key)
+        if unsuitable is not None:
+            self.state.constraints.add_geometry(key, unsuitable,
+                                                source=tr("DEM"))
+        self.state.apply_constraints()
+        self.state.draw()
+        self.state.checkpoint()
+        self.refresh()
+        if self.state.usable_m2 <= 0.0:
+            # Better said out loud here than met three steps later as
+            # "nessuna superficie utile" from the generator.
+            self.warn(GeoCadError(
+                "suitability leaves nothing",
+                user_message=tr("Con una pendenza massima di {0:g} deg non "
+                                "resta alcuna superficie utile: tutta l'area "
+                                "e' piu' ripida.").format(limit)))
+        return unsuitable
+
     def extract_contours(self, *_args) -> int:
         """Contour the DEM and put the lines on the map."""
         try:
@@ -1433,8 +1492,13 @@ class TerrainPanel(Panel):
 
         mask = analysis.suitability(
             TopographicFilter(slope_max_deg=self.slope_max.value()))
-        self.suitable_label.setText("{0:.1%} idonea".format(
-            mask.suitable_fraction))
+        applied = self.state.constraints.rules.get(SUITABILITY_KEY)
+        self.suitable_label.setText(
+            tr("{0:.1%} idonea{1}").format(
+                mask.suitable_fraction,
+                tr(" - esclusa dal progetto") if (applied is not None
+                                                  and applied.n_features)
+                else tr(" - non ancora esclusa")))
 
 
 class ConstraintsPanel(Panel):

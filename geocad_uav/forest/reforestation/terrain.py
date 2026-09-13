@@ -413,6 +413,77 @@ class TerrainAnalysis:
             self._raster_layer = layer
         return layer
 
+    def unsuitable_geometry(self, suitability, clip=None):
+        """The ground the criteria reject, as one polygon.
+
+        A suitability mask is a percentage until it is a shape: an operator
+        who sets "slope at most 35 degrees" and reads "82 % suitable" still
+        gets a plan generated over the whole surface. This turns the rejected
+        cells into geometry, so they can be subtracted like any other
+        constraint and seen on the map.
+
+        The polygonisation is GDAL's own (``gdal:polygonize``), run over a
+        one-band mask written from this same grid, so the edges of the
+        polygon are the edges of the DEM cells and not an interpolation of
+        them. Returns None when nothing is rejected.
+        """
+        from osgeo import gdal, ogr                             # noqa: PLC0415
+        from qgis.core import QgsGeometry                        # noqa: PLC0415
+
+        rejected = np.asarray(suitability.mask, dtype=bool)
+        rejected = ~rejected
+        if not rejected.any():
+            return None
+
+        # gdal.Polygonize, not the Processing algorithm of the same name:
+        # the algorithm shells out to gdal_polygonize.py, which on the
+        # 3.40.15 standalone install produces a file QGIS cannot reopen --
+        # measured, on every output format. This is the same C function
+        # underneath, called directly, with nothing written to disk.
+        gdal.UseExceptions()
+        rows, cols = rejected.shape
+        raster = gdal.GetDriverByName("MEM").Create("", cols, rows, 1,
+                                                    gdal.GDT_Byte)
+        raster.SetGeoTransform(self.model.gt)
+        band = raster.GetRasterBand(1)
+        band.WriteArray(rejected.astype(np.uint8))
+        band.FlushCache()
+
+        vector = ogr.GetDriverByName("Memory").CreateDataSource("maschera")
+        layer = vector.CreateLayer("maschera", srs=None,
+                                   geom_type=ogr.wkbPolygon)
+        layer.CreateField(ogr.FieldDefn("DN", ogr.OFTInteger))
+        try:
+            gdal.Polygonize(band, band, layer, 0, [], callback=None)
+        except Exception as exc:                                # noqa: BLE001
+            raise RasterError(
+                "gdal.Polygonize failed: {0}".format(exc),
+                user_message="Impossibile ricavare le aree non idonee dal "
+                             "DEM.", hint=str(exc)) from exc
+
+        parts = []
+        for feature in layer:
+            if int(feature.GetField(0) or 0) != 1:
+                continue                    # 0 is the suitable ground
+            shape = feature.GetGeometryRef()
+            if shape is None:
+                continue
+            geometry = QgsGeometry.fromWkt(shape.ExportToWkt())
+            if geometry is not None and not geometry.isEmpty():
+                parts.append(geometry)
+        layer = vector = raster = band = None
+        if not parts:
+            return None
+        merged = (parts[0] if len(parts) == 1
+                  else QgsGeometry.unaryUnion(parts))
+        if merged is None or merged.isEmpty():
+            return None
+        if clip is not None and not clip.isEmpty():
+            merged = merged.intersection(clip)
+            if merged is None or merged.isEmpty():
+                return None
+        return merged
+
     def release(self) -> None:
         """Let go of the raster written for GDAL, while QGIS is still up.
 

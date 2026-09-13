@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.25.0
+version=1.26.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,27 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.25.0
+changelog=1.26.0
+    - Il limite di pendenza smette di essere una percentuale e diventa
+      superficie tolta. Fino a ieri l'operatore impostava "pendenza
+      massima 35 deg", leggeva "82% idonea" e l'impianto veniva comunque
+      generato su tutta la superficie: il numero non entrava nel piano.
+      [Escludi le aree non idonee] trasforma le celle rifiutate in una
+      geometria, che viene sottratta come qualunque altro vincolo --
+      stessa meccanica, stessa riga in relazione, stesso colore sulla
+      mappa. Misurato su un versante di prova: 237.600 -> 35.640 m2 utili
+      a 11,5 deg.
+    - Il pannello dice se il limite e' gia' stato applicato o no, invece
+      di mostrare una percentuale che non si sa se conta.
+    - Un limite che non lascia nulla viene dichiarato subito, invece di
+      farlo scoprire tre passi dopo al generatore.
+    - La poligonizzazione usa gdal.Polygonize direttamente e non
+      l'algoritmo Processing omonimo: quello invoca uno script esterno
+      che, sull'installazione autonoma 3.40.15, produce un file che QGIS
+      non riesce a riaprire -- verificato su ogni formato di uscita.
+      Stessa funzione C, chiamata direttamente, senza scrivere niente su
+      disco.
+    1.25.0
     - Tutti e sei i formati di esportazione vengono ora scritti e riletti
       nella prova: prima soltanto il GeoPackage era mai stato provato, e
       due degli altri non funzionavano.
