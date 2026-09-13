@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.21.0
+version=1.22.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,22 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.21.0
+changelog=1.22.0
+    - L'impianto naturaliforme e' uno step del flusso, il nono, con un
+      pannello suo. Stava dentro una scheda del Sesto, dove tre
+      lavorazioni diverse (radure, diradamento casuale, distanza minima)
+      finivano in un'unica etichetta di esito: adesso il pannello dice
+      quante radure ha collocato, quante piante ha tolto e quale
+      distanza minima ha misurato.
+    - [Applica al progetto] rigenera l'impianto con le impostazioni
+      correnti, invece di diradare un impianto gia' diradato: chi
+      abbassa l'irregolarita' si aspetta di riavere delle piante, non di
+      perderne altre.
+    - I pannelli continuano a non chiamarsi fra loro: il progetto emette
+      la richiesta di rigenerazione e risponde chi possiede il
+      generatore.
+    - Il flusso ha quattordici step.
+    1.21.0
     - La relazione tecnica si scrive in PDF, in Word (.docx) e in Excel
       (.xlsx). Una sola relazione, costruita dal modello, e tre
       scrittori: i numeri sui tre file non possono divergere di un

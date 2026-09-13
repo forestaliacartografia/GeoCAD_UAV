@@ -334,9 +334,11 @@ check_true("...che porta nome, superficie, sesto e densita'",
            and "x" in str(zone_feature["sesto"])
            and zone_feature["densita"] > 0.0)
 
-scheme.glade_count.setValue(3)
-scheme.glade_radius.setValue(12.0)
-scheme.min_distance.setValue(2.0)
+natural = workspace.context.natural_panel
+natural.glade_count.setValue(3)
+natural.glade_radius.setValue(12.0)
+natural.min_distance.setValue(2.0)
+natural.apply_settings()
 scheme.apply_scheme()
 plan = workspace.context.generate_panel.preview()
 check_true("l'impianto e' stato generato", plan is not None and plan.count > 0)

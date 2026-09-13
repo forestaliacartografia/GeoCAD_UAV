@@ -83,11 +83,12 @@ STEPS = (
     ("scheme", "6. Sesti"),
     ("orientation", "7. Orientamento"),
     ("generate", "8. Genera"),
-    ("optimise", "9. Ottimizza"),
-    ("verify", "10. Verifica"),
-    ("edit", "11. Editing"),
-    ("cartography", "12. Cartografia"),
-    ("outputs", "13. Elaborati"),
+    ("natural", "9. Naturaliforme"),
+    ("optimise", "10. Ottimizza"),
+    ("verify", "11. Verifica"),
+    ("edit", "12. Editing"),
+    ("cartography", "13. Cartografia"),
+    ("outputs", "14. Elaborati"),
 )
 
 #: Visual state of one step. Derived from the model, never set by a widget
@@ -159,6 +160,10 @@ class ProjectState(QObject):
     changed = pyqtSignal()
     statusChanged = pyqtSignal(str, str)        # step key, visual state
     cadastralDataReady = pyqtSignal(dict)
+    #: Asked for by a panel whose settings changed the plan -- the
+    #: naturaliform one. Panels do not call each other: the project says a
+    #: new generation is due and whoever owns the generator answers.
+    regenerateRequested = pyqtSignal()
 
     def __init__(self, iface=None, parent=None):
         super().__init__(parent)
@@ -251,6 +256,9 @@ class ProjectState(QObject):
                         DONE if self.orientation_applied else NOT_STARTED)
         self.set_status("generate",
                         DONE if self.result is not None else NOT_STARTED)
+        self.set_status("natural",
+                        DONE if (self.natural is not None
+                                 and self.natural.is_active) else NOT_STARTED)
         self.set_status("optimise", DONE if self.scenarios else NOT_STARTED)
         self.set_status("edit", DONE if self.edited else NOT_STARTED)
         self.set_status("cartography",
@@ -1318,28 +1326,6 @@ class SchemePanel(Panel):
         self.density_label = QLabel(DASH)
         form.addRow(tr("Densita'"), self.density_label)
 
-        natural = QGroupBox(tr("Naturaliforme"))
-        natural_form = QFormLayout(natural)
-        self.glade_count = QSpinBox()
-        self.glade_count.setRange(0, 200)
-        self.glade_radius = self._spin(10.0, " m")
-        self.glade_margin = self._spin(5.0, " m")
-        self.irregularity = QDoubleSpinBox()
-        self.irregularity.setRange(0.0, natural_mod.MAX_AMPLITUDE * 100.0)
-        self.irregularity.setSuffix(" %")
-        self.min_distance = self._spin(0.0, " m")
-        self.natural_seed = QSpinBox()
-        self.natural_seed.setRange(0, 999999)
-        natural_form.addRow(tr("Radure"), self.glade_count)
-        natural_form.addRow(tr("Raggio radura"), self.glade_radius)
-        natural_form.addRow(tr("Distacco dal bordo"), self.glade_margin)
-        natural_form.addRow(tr("Irregolarita'"), self.irregularity)
-        natural_form.addRow(tr("Distanza minima"), self.min_distance)
-        natural_form.addRow(tr("Seme"), self.natural_seed)
-        self.natural_label = QLabel(tr("nessuna"))
-        self.natural_label.setWordWrap(True)
-        natural_form.addRow(tr("Esito"), self.natural_label)
-        form.addRow(natural)
         self.tabs.addTab(scheme, tr("Sesto"))
 
         # -- the species ---------------------------------------------------
@@ -1370,11 +1356,7 @@ class SchemePanel(Panel):
         self.tabs.addTab(species, tr("Specie"))
 
         for widget in (self.plant_distance, self.row_distance, self.margin,
-                       self.azimuth, self.jitter, self.glade_radius,
-                       self.glade_margin, self.irregularity,
-                       self.min_distance):
-            widget.valueChanged.connect(self.apply_scheme)
-        for widget in (self.glade_count, self.natural_seed):
+                       self.azimuth, self.jitter):
             widget.valueChanged.connect(self.apply_scheme)
         self.pattern.currentIndexChanged.connect(self.apply_scheme)
         self.add_species.clicked.connect(self.on_add_species)
@@ -1409,18 +1391,6 @@ class SchemePanel(Panel):
                 custom_offsets=(0.0, 0.5)
                 if self.pattern.currentData() == spacing_mod.PATTERN_CUSTOM
                 else ())
-        except GeoCadError as exc:
-            self.warn(exc)
-            return
-        try:
-            self.state.natural = natural_mod.NaturalSettings(
-                glade_count=self.glade_count.value(),
-                glade_radius_m=self.glade_radius.value(),
-                glade_margin_m=self.glade_margin.value(),
-                glade_gap_m=self.glade_margin.value(),
-                amplitude=self.irregularity.value() / 100.0,
-                min_distance_m=self.min_distance.value(),
-                seed=self.natural_seed.value())
         except GeoCadError as exc:
             self.warn(exc)
             return
@@ -1470,13 +1440,6 @@ class SchemePanel(Panel):
                                        QTableWidgetItem("{0:g}".format(percent)))
         total = sum(percent for _key, percent in self.state.shares)
         self.total_label.setText(tr("Totale: {0:g} %").format(total))
-        outcome = self.state.natural_outcome
-        if outcome is None or not outcome.removed_total:
-            self.natural_label.setText(tr("nessuna"))
-        else:
-            self.natural_label.setText(tr(
-                "{0:,} piante tolte, minima misurata {1:.2f} m").format(
-                    outcome.removed_total, outcome.measured_min_distance_m))
 
 
 class OrientationPanel(Panel):
@@ -1545,6 +1508,7 @@ class GeneratePanel(Panel):
 
         self.preview_button.clicked.connect(self.preview)
         self.generate_button.clicked.connect(self.generate)
+        state.regenerateRequested.connect(self.preview)
         state.changed.connect(self.refresh)
 
     def preview(self):
@@ -1712,6 +1676,139 @@ class GeneratePanel(Panel):
             self.state.expected_plants()) if self.state.area else DASH)
         self.actual_label.setText("{0:,}".format(self.state.result.count)
                                   if self.state.result else DASH)
+
+
+class NaturalPanel(Panel):
+    """Step 9: making the stand look like a wood rather than an orchard.
+
+    Three different things, applied in this order and reported separately,
+    because an operator has to be able to tell which one cost them plants:
+
+    * **radure** -- real openings, cut out of the stand;
+    * **irregolarita'** -- the rows thinned at random within a bound, which
+      never invents a position outside the scheme;
+    * **distanza minima** -- the floor each species needs, enforced starting
+      from the most demanding, because taken in planting order a species
+      asking 7 m on a 4 m scheme loses every comparison and disappears.
+
+    They are applied by the generator, on whatever it produced -- one area
+    or many zones -- so this panel sets them and reads back what they did.
+    """
+
+    def __init__(self, state, parent=None):
+        super().__init__(tr("Impianto naturaliforme"), state, parent)
+
+        glades = QGroupBox(tr("Radure"))
+        glades_form = QFormLayout(glades)
+        self.glade_count = QSpinBox()
+        self.glade_count.setRange(0, 200)
+        self.glade_radius = self._spin(10.0, " m")
+        self.glade_margin = self._spin(5.0, " m")
+        glades_form.addRow(tr("Numero"), self.glade_count)
+        glades_form.addRow(tr("Raggio"), self.glade_radius)
+        glades_form.addRow(tr("Distacco dal bordo"), self.glade_margin)
+        self.layout.addWidget(glades)
+
+        variation = QGroupBox(tr("Irregolarita' e distanze"))
+        variation_form = QFormLayout(variation)
+        self.irregularity = QDoubleSpinBox()
+        self.irregularity.setRange(0.0, natural_mod.MAX_AMPLITUDE * 100.0)
+        self.irregularity.setSuffix(" %")
+        self.min_distance = self._spin(0.0, " m")
+        self.natural_seed = QSpinBox()
+        self.natural_seed.setRange(0, 999999)
+        variation_form.addRow(tr("Diradamento casuale"), self.irregularity)
+        variation_form.addRow(tr("Distanza minima"), self.min_distance)
+        variation_form.addRow(tr("Seme"), self.natural_seed)
+        self.layout.addWidget(variation)
+
+        self.apply_button = QPushButton(tr("Applica al progetto"))
+        self.layout.addWidget(self.apply_button)
+
+        outcome = QGroupBox(tr("Esito"))
+        outcome_form = QFormLayout(outcome)
+        self.glades_label = QLabel(DASH)
+        self.removed_label = QLabel(DASH)
+        self.measured_label = QLabel(DASH)
+        outcome_form.addRow(tr("Radure collocate"), self.glades_label)
+        outcome_form.addRow(tr("Piante tolte"), self.removed_label)
+        outcome_form.addRow(tr("Distanza minima misurata"),
+                            self.measured_label)
+        self.natural_label = QLabel(tr("nessuna"))
+        self.natural_label.setWordWrap(True)
+        outcome_form.addRow(tr("Riepilogo"), self.natural_label)
+        self.layout.addWidget(outcome)
+        self.layout.addStretch(1)
+
+        for widget in (self.glade_count, self.glade_radius, self.glade_margin,
+                       self.irregularity, self.min_distance,
+                       self.natural_seed):
+            widget.valueChanged.connect(self.apply_settings)
+        self.apply_button.clicked.connect(self.apply_to_project)
+        state.changed.connect(self.refresh)
+
+    def _spin(self, value: float, suffix: str = "") -> QDoubleSpinBox:
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, 10_000.0)
+        spin.setDecimals(2)
+        spin.setValue(value)
+        if suffix:
+            spin.setSuffix(suffix)
+        return spin
+
+    def settings(self):
+        return natural_mod.NaturalSettings(
+            glade_count=self.glade_count.value(),
+            glade_radius_m=self.glade_radius.value(),
+            glade_margin_m=self.glade_margin.value(),
+            glade_gap_m=self.glade_margin.value(),
+            amplitude=self.irregularity.value() / 100.0,
+            min_distance_m=self.min_distance.value(),
+            seed=self.natural_seed.value())
+
+    def apply_settings(self, *_args) -> bool:
+        """Keep the project's settings in step with the controls."""
+        try:
+            self.state.natural = self.settings()
+        except GeoCadError as exc:
+            self.warn(exc)
+            return False
+        self.state.refresh_status()
+        return True
+
+    def apply_to_project(self, *_args):
+        """Re-generate the plan with these settings and show what they did.
+
+        Re-generated rather than applied on top: thinning an already thinned
+        stand would take the plants twice, and an operator who lowers the
+        irregularity expects more plants back, not fewer.
+        """
+        if not self.apply_settings():
+            return None
+        if self.state.result is None:
+            self.warn(GeoCadError(
+                "nothing generated yet",
+                user_message=tr("Genera prima l'impianto.")))
+            return None
+        self.state.regenerateRequested.emit()
+        self.refresh()
+        return self.state.result
+
+    def refresh(self) -> None:
+        outcome = self.state.natural_outcome
+        self.glades_label.setText("{0:,}".format(len(self.state.glades))
+                                  if self.state.glades else DASH)
+        if outcome is None or not outcome.removed_total:
+            self.removed_label.setText(DASH)
+            self.measured_label.setText(DASH)
+            self.natural_label.setText(tr("nessuna"))
+            return
+        self.removed_label.setText("{0:,}".format(outcome.removed_total))
+        self.measured_label.setText("{0:.2f} m".format(
+            outcome.measured_min_distance_m))
+        self.natural_label.setText(tr(
+            "{0:,} piante tolte, minima misurata {1:.2f} m").format(
+                outcome.removed_total, outcome.measured_min_distance_m))
 
 
 class OptimisePanel(Panel):
@@ -2570,6 +2667,7 @@ class ContextDock(QDockWidget):
         self.scheme_panel = SchemePanel(state)
         self.orientation_panel = OrientationPanel(state)
         self.generate_panel = GeneratePanel(state)
+        self.natural_panel = NaturalPanel(state)
         self.optimise_panel = OptimisePanel(state)
         self.verify_panel = VerifyPanel(state)
         self.edit_panel = EditPanel(state)
@@ -2587,6 +2685,7 @@ class ContextDock(QDockWidget):
             "scheme": (self.scheme_panel, SchemePanel.TAB_SCHEME),
             "orientation": (self.orientation_panel, None),
             "generate": (self.generate_panel, None),
+            "natural": (self.natural_panel, None),
             "optimise": (self.optimise_panel, None),
             "verify": (self.verify_panel, None),
             "edit": (self.edit_panel, None),
@@ -2596,7 +2695,8 @@ class ContextDock(QDockWidget):
         for panel in (self.area_panel, self.terrain_panel,
                       self.constraints_panel, self.zones_panel,
                       self.scheme_panel, self.orientation_panel,
-                      self.generate_panel, self.optimise_panel,
+                      self.generate_panel, self.natural_panel,
+                      self.optimise_panel,
                       self.verify_panel, self.edit_panel,
                       self.cartography_panel, self.outputs_panel):
             holder = QScrollArea()

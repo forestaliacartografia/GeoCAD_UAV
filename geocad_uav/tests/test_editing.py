@@ -134,8 +134,9 @@ labels = [workspace.workflow.list.item(i).text()
 print("        {0}".format(labels))
 check("il flusso elenca ogni step", workspace.workflow.list.count(),
       len(wf.STEPS))
-check_true("...e uno si chiama Editing", "11. Editing" in labels)
-workspace.workflow.list.setCurrentRow(labels.index("11. Editing"))
+editing_label = dict(wf.STEPS)["edit"]
+check_true("...e uno si chiama Editing", editing_label in labels)
+workspace.workflow.list.setCurrentRow(labels.index(editing_label))
 check_true("lo step apre il pannello di editing",
            workspace.context.stack.currentWidget()
            is workspace.context.pages["edit"][0].parent()

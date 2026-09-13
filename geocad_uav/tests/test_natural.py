@@ -335,17 +335,21 @@ plain = workspace.context.generate_panel.preview()
 check_true("senza naturaliforme non c'e' esito", state.natural_outcome is None)
 regular_count = plain.count
 
-scheme.glade_count.setValue(3)
-scheme.glade_radius.setValue(10.0)
-scheme.irregularity.setValue(20.0)
-scheme.min_distance.setValue(3.0)
-scheme.natural_seed.setValue(13)
+# v1.22.0: the naturaliform controls are a step of their own.
+natural = workspace.context.natural_panel
+natural.glade_count.setValue(3)
+natural.glade_radius.setValue(10.0)
+natural.irregularity.setValue(20.0)
+natural.min_distance.setValue(3.0)
+natural.natural_seed.setValue(13)
 check_true("le impostazioni arrivano al modello", state.natural.is_active)
 check("...con i valori digitati", state.natural.glade_radius_m, 10.0, 1e-9)
 check("...e l'irregolarita' in frazione", state.natural.amplitude, 0.20,
       1e-9)
 
-natural_plan = workspace.context.generate_panel.preview()
+natural_plan = natural.apply_to_project()
+check_true("[Applica al progetto] ha rigenerato l'impianto",
+           natural_plan is not None and natural_plan is state.result)
 print("        regolare {0:,} -> naturaliforme {1:,}".format(
     regular_count, natural_plan.count))
 check_true("l'impianto e' stato diradato", natural_plan.count < regular_count)
@@ -355,7 +359,13 @@ check("il conto torna anche qui",
       regular_count)
 check_true("le radure sono state collocate", len(state.glades) == 3)
 check_true("il pannello dice quante piante sono state tolte",
-           "piante tolte" in scheme.natural_label.text())
+           "piante tolte" in natural.natural_label.text())
+check_true("...e quante radure ha collocato",
+           natural.glades_label.text() == "3")
+check_true("...e la distanza minima misurata",
+           " m" in natural.measured_label.text())
+check_true("lo step Naturaliforme risulta fatto",
+           state.status("natural") == wf.DONE)
 
 layer = workspace.context.generate_panel.generate()
 check("il layer porta le piante rimaste", layer.featureCount(),
