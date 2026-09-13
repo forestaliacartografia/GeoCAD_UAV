@@ -135,29 +135,35 @@ check("plugin created exactly one QGIS toolbar", len(iface.toolbars), 1)
 toolbar = iface.toolbars[0]
 mounted = real_actions(toolbar)
 print("        toolbar actions: {0}".format([a.text() for a in mounted]))
-# v1.14.0: the three primitives moved onto the QGIS toolbar, one action
-# each, with a single toggle choosing between drawing them and typing them.
-# Four buttons for six registry entries -- and one place to reach a shape.
-check("actions on the QGIS toolbar", len(mounted), 5)
-check_true("the first is still the dock toggle",
-           mounted[0] is plugin.dock_action)
+# v1.28.0: ONE action, and only one. The host toolbar is shared with QGIS
+# and with every other plugin; the shapes and the modifiers moved onto the
+# plugin's own toolbar inside its own dock.
+check("actions on the QGIS toolbar", len(mounted), 1)
+check_true("and it is the suite toggle", mounted[0] is plugin.dock_action)
 check_true("it is checkable", mounted[0].isCheckable())
 toolbar_labels = [a.text() for a in mounted]
-for expected in ("Quadrato", "Rettangolo", "Poligono", "Parametrico"):
-    check_true("'{0}' is on the QGIS toolbar".format(expected),
-               expected in toolbar_labels)
-check_true("no other primitive reached the toolbar",
-           not any(text in toolbar_labels
-                   for text in ("Linea", "Cerchio", "Arco", "Polilinea",
-                                "Poligono regolare")))
-check_true("the three shapes are mutually exclusive",
+print("        label: {0!r}".format(toolbar_labels[0]))
+check_true("it says what it opens",
+           "Rimboschimento" in toolbar_labels[0]
+           and "GeoCad" in toolbar_labels[0])
+for banished in ("Quadrato", "Rettangolo", "Poligono", "Parametrico",
+                 "Linea", "Cerchio", "Arco", "Polilinea",
+                 "Poligono regolare"):
+    check_true("'{0}' is NOT on the QGIS toolbar".format(banished),
+               banished not in toolbar_labels)
+check_true("the three shapes are still mutually exclusive",
            plugin.shape_group is not None and plugin.shape_group.isExclusive())
 check_true("the mode switch is checkable and starts on free drawing",
            plugin.parametric_action.isCheckable()
            and not plugin.parametric_action.isChecked())
-check_true("it carries the plugin name", "GeoCad" in mounted[0].text())
 check_true("the CAD actions are NOT on the QGIS toolbar",
            all(a not in mounted for a in plugin.tool_actions.values()))
+cad_toolbar_labels = [a.text() for a in
+                      real_actions(plugin.dock.cad_toolbar)]
+print("        dock toolbar: {0}".format(cad_toolbar_labels))
+for expected in ("Quadrato", "Rettangolo", "Poligono", "Parametrico"):
+    check_true("'{0}' is on the plugin's own toolbar".format(expected),
+               expected in cad_toolbar_labels)
 check("the three algorithm launchers went to the menu",
       len(iface.menu_actions), 4)          # toggle + 3 algorithms
 
@@ -172,6 +178,7 @@ check_true("the workflow dock is on the left and lists every step",
            and plugin.workspace.workflow.list.count() == len(wf.STEPS))
 check_true("the context dock holds a stack of panels",
            plugin.workspace.context.stack.count() >= 10)
+
 dock = plugin.dock
 # isHidden(), not isVisible(): this QMainWindow is never shown, so every widget
 # inside it reports isVisible() == False whatever setVisible() did, and the
@@ -191,6 +198,20 @@ check_true("the action is unchecked", not plugin.dock_action.isChecked())
 
 plugin.dock_action.trigger()
 check_true("shown again", not dock.isHidden())
+
+# v1.28.0: the reforestation workspace was mounted hidden and nothing ever
+# showed it -- toggle_workspace() existed and no caller ever reached it. The
+# whole fourteen-step dashboard, the cadastral query with it, could not be
+# opened from a running QGIS however well it ran under test.
+workflow_dock = plugin.workspace.workflow
+context_dock = plugin.workspace.context
+check_true("the one button opens the dashboard too",
+           not workflow_dock.isHidden() and not context_dock.isHidden())
+plugin.dock_action.trigger()
+check_true("...and puts it away with the rest",
+           workflow_dock.isHidden() and context_dock.isHidden())
+plugin.dock_action.trigger()
+check_true("...and brings it back", not workflow_dock.isHidden())
 
 # Closing the dock from its own title bar must un-check the toolbar icon.
 # Qt emits visibilityChanged only when visibility genuinely changes, which
@@ -251,16 +272,19 @@ check_true("the dock's CAD toolbar is NOT empty", len(cad_mounted) > 0)
 # v1.5.0: ten became twelve with the digitizer and the manual input.
 # v1.7.0: twelve became nine -- three primitives, each drawn and each typed,
 # plus the three modifiers.
-# v1.14.0: the six primitive entries moved to the QGIS toolbar as three
-# buttons and a mode switch; the dock keeps the modifiers, which are not
-# primitives and have no second input mode.
-check("the dock toolbar carries the modifiers", len(cad_mounted), 3)
+# v1.14.0: the six primitive entries became three buttons and a mode
+# switch. v1.28.0: those four came back off the QGIS toolbar, which carries
+# one icon and nothing else, so the plugin's own toolbar now holds all seven.
+check("the dock toolbar carries every CAD command", len(cad_mounted), 7)
+check_true("...the three modifiers among them",
+           all(label in [a.text() for a in cad_mounted]
+               for label in ("Ruota", "Sposta", "Ridimensiona")))
 labels = {a.text() for a in cad_mounted}
 for expected in ("Ruota", "Sposta", "Ridimensiona"):
     check_true("'{0}' is on the dock toolbar".format(expected),
                expected in labels)
-check_true("no primitive is offered twice",
-           not (labels & {"Quadrato", "Rettangolo", "Poligono"}))
+check("no command is offered twice on it", len(labels),
+      len(cad_mounted))
 for withdrawn in ("Linea", "Polilinea", "Cerchio", "Arco", "Ellisse",
                   "Poligono regolare", "Inserimento manuale"):
     check_true("'{0}' is not offered any more".format(withdrawn),
@@ -271,15 +295,20 @@ check_true("each admitted shape has exactly one button",
            all(drawn in plugin.shape_actions
                for drawn, _typed in cad_tools.ADMITTED_SHAPES.values()))
 check("...three buttons for three shapes", len(plugin.shape_actions), 3)
-check_true("every registered CAD tool is reachable, once",
-           len(cad_mounted) + 2 * len(plugin.shape_actions)
-           == len(cad_tools.TOOL_REGISTRY))
+# Nine registry entries: three shapes x two input modes, plus three
+# modifiers. Seven buttons reach them, because the mode switch decides
+# which of a shape's two entries its one button arms.
+check("every registered CAD tool is reachable, once",
+      len(plugin.tool_actions) + 2 * len(plugin.shape_actions),
+      len(cad_tools.TOOL_REGISTRY))
 check_true("all CAD actions are checkable",
            all(a.isCheckable() for a in cad_mounted))
 check_true("they share one exclusive QActionGroup",
            plugin.tool_group is not None and plugin.tool_group.isExclusive())
-check("the group holds every CAD action", len(plugin.tool_group.actions()),
-      len(cad_mounted))
+check("the modifier group holds the modifiers",
+      len(plugin.tool_group.actions()), len(plugin.tool_actions))
+check("...and the shape group the shapes",
+      len(plugin.shape_group.actions()), len(plugin.shape_actions))
 
 cad_mounted[0].setChecked(True)
 cad_mounted[1].setChecked(True)
@@ -349,12 +378,13 @@ check_true("the canvas no longer uses a plugin map tool",
 
 plugin.initGui()
 check("a second initGui creates the same three docks", len(iface.docks), 3)
-check("...and the same five toolbar actions",
-      len(real_actions(iface.toolbars[-1])), 5)
+check("...and the same single toolbar action",
+      len(real_actions(iface.toolbars[-1])), 1)
 check("...and does not double the menu entries", len(iface.menu_actions), 4)
 check("...and repopulates the dock's CAD toolbar",
       len(real_actions(plugin.dock.cad_toolbar)),
-      len(plugin_mod.EDIT_IN_PLACE_TOOLS))
+      len(plugin_mod.EDIT_IN_PLACE_TOOLS)
+      + len(plugin_mod.SHAPE_ACTIONS) + 1)      # shapes + the mode switch
 check_true("the toolbars were not stacked up",
            len(iface.toolbars) == 2)         # one per initGui, each cleaned
 

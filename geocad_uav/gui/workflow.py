@@ -69,7 +69,10 @@ from ..io import cadastre as cadastre_mod
 from ..io import cartography as carto_mod
 from ..io import documents as docs_mod
 from ..io import project_file as project_mod
+from . import charts as charts_mod
 from . import map_layers as map_layers_mod
+from . import theme as theme_mod
+from .preview import PlanPreview
 from .map_layers import ProjectLayers
 
 M2_PER_HA = 10_000.0
@@ -184,6 +187,8 @@ class ProjectState(QObject):
         #: The project on the map. Every geometry the model holds is drawn
         #: here, and nowhere else: a panel never adds a layer of its own.
         self.layers = ProjectLayers(iface)
+        #: What a plan looks like on the canvas before it is committed.
+        self.preview = PlanPreview(iface)
         self.area = None                        # ReforestationArea
         self.crs = None                         # QgsCoordinateReferenceSystem
         self.terrain = None                     # TerrainAnalysis
@@ -254,6 +259,7 @@ class ProjectState(QObject):
         have to retype the species they added to the first.
         """
         self.layers.remove_all()
+        self.preview.clear()
         if self.terrain is not None:
             self.terrain.release()
         self.area = None
@@ -516,6 +522,31 @@ class ProjectState(QObject):
         self.layers.draw_contours(self.contours)
         self.layers.draw_parcels(self.cadastre)
         self.layers.refresh_canvas()
+
+    def mix_rows(self):
+        """``[(key, label, requested %, achieved %, plants)]`` for the chart.
+
+        Requested from the shares the operator set, achieved measured on the
+        plants that exist right now -- which after an edit are the ones read
+        back off the layer, so the bars move when a species is reassigned.
+        """
+        achieved = composition_mod.achieved_percentages(
+            self.result.plants if self.result is not None else [])
+        counts = {}
+        for record in (self.result.plants if self.result is not None else []):
+            key = composition_mod.species_of(record)
+            if key:
+                counts[key] = counts.get(key, 0) + 1
+        rows = []
+        for key, percent in self.shares:
+            try:
+                record = self.catalog.get(key)
+                label = record.name or key
+            except GeoCadError:
+                label = key
+            rows.append((key, label, float(percent),
+                         float(achieved.get(key, 0.0)), counts.get(key, 0)))
+        return rows
 
     def mix(self) -> Optional[composition_mod.Mix]:
         if not self.shares:
@@ -1779,7 +1810,10 @@ class SchemePanel(Panel):
         row.addWidget(self.add_species)
         row.addWidget(self.remove_species)
         species_layout.addLayout(row)
+        self.mix_chart = charts_mod.SpeciesMixChart()
+        species_layout.addWidget(self.mix_chart)
         self.total_label = QLabel(DASH)
+        theme_mod.mark(self.total_label, metric=True)
         species_layout.addWidget(self.total_label)
 
         catalogue = QHBoxLayout()
@@ -1992,6 +2026,7 @@ class SchemePanel(Panel):
                 "naturaliforme. Zero significa nessuna richiesta."))
             self.species_table.setItem(row, 2, distance_item)
         self.species_table.blockSignals(False)
+        self.mix_chart.set_rows(self.state.mix_rows())
         total = sum(percent for _key, percent in self.state.shares)
         self.total_label.setText(tr("Totale: {0:g} %").format(total))
 
@@ -2054,13 +2089,23 @@ class GeneratePanel(Panel):
         form.addRow(tr("Piante generate"), self.actual_label)
         self.layout.addLayout(form)
 
-        self.preview_button = QPushButton(tr("Anteprima"))
+        self.preview_button = QPushButton(tr("Genera Anteprima"))
         self.generate_button = QPushButton(tr("GENERA IMPIANTO"))
         self.layout.addWidget(self.preview_button)
         self.layout.addWidget(self.generate_button)
         self.layout.addStretch(1)
 
+        self.clear_preview_button = QPushButton(tr("Togli anteprima"))
+        self.clear_preview_button.setEnabled(False)
+        self.layout.addWidget(self.clear_preview_button)
+        self.preview_label = QLabel(tr("nessuna anteprima sulla mappa"))
+        self.preview_label.setWordWrap(True)
+        theme_mod.mark(self.preview_label, muted=True)
+        self.layout.addWidget(self.preview_label)
+        theme_mod.mark(self.generate_button, primary=True)
+
         self.preview_button.clicked.connect(self.preview)
+        self.clear_preview_button.clicked.connect(self.clear_preview)
         self.generate_button.clicked.connect(self.generate)
         state.regenerateRequested.connect(self.preview)
         state.changed.connect(self.refresh)
@@ -2093,6 +2138,7 @@ class GeneratePanel(Panel):
             self.state.verified = False
             self.state.anomalies = []
             self.state.checkpoint()
+            self.show_preview(result)
             self.state.refresh_status()
             return result
         try:
@@ -2109,8 +2155,33 @@ class GeneratePanel(Panel):
         self.state.verified = False
         self.state.anomalies = []
         self.state.checkpoint()
+        self.show_preview(result)
         self.state.refresh_status()
         return result
+
+    def show_preview(self, result):
+        """Put the plan on the canvas, before anything is committed."""
+        geometry = self.state.usable_geometry()
+        drawn = self.state.preview.show(
+            result, geometry, self.state.crs,
+            azimuth_deg=self.state.spec.row_azimuth_deg)
+        showing = self.state.preview.is_showing()
+        self.clear_preview_button.setEnabled(showing)
+        if result is None:
+            self.preview_label.setText(tr("nessuna anteprima sulla mappa"))
+        else:
+            self.preview_label.setText(tr(
+                "anteprima: {0:,} piante, {1:,.0f} piante/ha, sesto {2}"
+            ).format(result.count, result.density_per_ha(),
+                     spacing_mod.PATTERN_LABELS.get(self.state.spec.pattern,
+                                                    self.state.spec.pattern)))
+        return drawn
+
+    def clear_preview(self, *_args) -> int:
+        removed = self.state.preview.clear()
+        self.clear_preview_button.setEnabled(False)
+        self.preview_label.setText(tr("nessuna anteprima sulla mappa"))
+        return removed
 
     def preview_contours(self, geometry):
         """Plant along the contour lines the Terreno panel extracted.
@@ -2163,6 +2234,7 @@ class GeneratePanel(Panel):
         state.anomalies = []
         state.layers.draw_contours(state.contours)
         state.checkpoint()
+        self.show_preview(result)
         state.refresh_status()
         return result
 
@@ -2217,6 +2289,7 @@ class GeneratePanel(Panel):
         layer = spacing_mod.plants_layer(
             result, crs.authid() if crs else "",
             name=tr("Piante"), zone=tr("Progetto"))
+        self.clear_preview()
         QgsProject.instance().addMapLayer(layer)
         self.state.plants_layer = layer
         self.state.layers.adopt("plants", layer)
@@ -3377,6 +3450,10 @@ class Workspace(QObject):
         self.context = ContextDock(self.state)
         self.status = StatusBarInfo(self.state, iface)
 
+        # The plugin's own two docks, and only those: a sheet on the
+        # application would re-skin QGIS and every other plugin's panel.
+        theme_mod.apply(self.workflow, self.context)
+
         # The one connection the whole navigation rests on.
         self.workflow.stepChanged.connect(self.context.show_step)
         self.context.show_step(0)
@@ -3391,6 +3468,7 @@ class Workspace(QObject):
                                  self.context)
 
     def unmount(self) -> None:
+        self.state.preview.dispose()
         self.state.layers.remove_all()
         if self.state.terrain is not None:
             # A QgsRasterLayer the project never adopted: released here,

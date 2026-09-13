@@ -165,13 +165,18 @@ class GeoCadUavPlugin:
         except AttributeError:
             pass
 
-        # THE single icon on the QGIS toolbar.
+        # THE single icon on the QGIS toolbar, and the only one. Everything
+        # else the plugin owns lives on the plugin's own toolbars, inside
+        # its own docks: the host toolbar belongs to QGIS and to the other
+        # plugins sharing it.
         self.dock_action = self._make_action(
-            self.tr("GeoCad UAV Toolkit"), self.toggle_dock, checkable=True,
-            tip=self.tr("Apre il pannello CAD / Rimboschimento / UAV"),
+            self.tr("Suite GeoCad Rimboschimento"), self.toggle_suite,
+            checkable=True,
+            tip=self.tr("Apre la dashboard: rimboschimento, CAD, UAV"),
             host=HOST_TOOLBAR)
 
-        # The dock is built now, hidden, because it hosts the CAD toolbar.
+        # Both docks are built now, hidden: the CAD one hosts the CAD
+        # toolbar, and the workspace hosts the fourteen steps.
         self._ensure_dock()
         self._build_shape_actions()
         self._build_cad_actions()
@@ -219,15 +224,42 @@ class GeoCadUavPlugin:
         self.workspace.set_visible(False)
         return self.workspace
 
-    def toggle_workspace(self, checked=True):
+    def toggle_suite(self, checked=True):
+        """Show or hide everything the plugin owns, from the one button.
+
+        The reforestation workspace was mounted hidden and nothing ever
+        showed it: the fourteen steps, the cadastral query and every panel
+        behind them were unreachable from a running QGIS, however well they
+        worked under test. This is the switch that was missing.
+        """
+        wanted = bool(checked)
         workspace = self._ensure_workspace()
         if workspace is not None:
-            workspace.set_visible(bool(checked))
+            workspace.set_visible(wanted)
+        dock = self._ensure_dock()
+        if dock is not None:
+            dock.setVisible(wanted)
+            if wanted:
+                try:
+                    dock.raise_()
+                except (AttributeError, RuntimeError):
+                    pass
+        return wanted
+
+    #: Kept: the older spelling, still used by the dock's own close button.
+    def toggle_workspace(self, checked=True):
+        return self.toggle_suite(checked)
 
     def _on_dock_visibility(self, visible):
+        """Keep the one icon, the CAD dock and the dashboard in step."""
         if self.dock_action is not None and \
                 self.dock_action.isChecked() != bool(visible):
             self.dock_action.setChecked(bool(visible))
+        if self.workspace is not None:
+            try:
+                self.workspace.set_visible(bool(visible))
+            except (AttributeError, RuntimeError):
+                pass
 
     def _build_shape_actions(self):
         """The three primitives, plus the switch between drawing and typing.
@@ -249,7 +281,7 @@ class GeoCadUavPlugin:
                 checkable=True,
                 tip=self.tr("Disegna o inserisci un {0}").format(
                     label.lower()),
-                host=HOST_TOOLBAR, to_menu=False)
+                host=HOST_DOCK, to_menu=False)
             self._assign_shortcut(action, cad_tools.tool_shortcut(drawn_key))
             self.shape_group.addAction(action)
             self.shape_actions[drawn_key] = action
@@ -259,7 +291,7 @@ class GeoCadUavPlugin:
             checkable=True,
             tip=self.tr("Inserimento parametrico: misure nella finestra, poi "
                         "un click per posizionare. Spento: disegno libero."),
-            host=HOST_TOOLBAR, to_menu=False)
+            host=HOST_DOCK, to_menu=False)
 
     def _parametric_key(self, drawn_key):
         """Which registry entry a shape button activates right now."""
@@ -286,8 +318,7 @@ class GeoCadUavPlugin:
         self._toggle_tool(self._parametric_key(self._active_shape), True)
 
     def _build_cad_actions(self):
-        """The modifiers, on the dock's toolbar. The primitives are on the
-        QGIS one, one action per shape, so a shape has a single place."""
+        """The modifiers, beside the primitives on the dock's own toolbar."""
         from .cad import tools as cad_tools                     # noqa: PLC0415
 
         self.tool_group = QActionGroup(self._main_window())
@@ -462,14 +493,8 @@ class GeoCadUavPlugin:
         return provider
 
     def toggle_dock(self, checked):
-        """Show or hide the single dock. Never creates a second one."""
-        dock = self._ensure_dock()
-        dock.setVisible(bool(checked))
-        if checked:
-            try:
-                dock.raise_()
-            except (AttributeError, RuntimeError):
-                pass
+        """Show or hide the whole suite. Never creates a second dock."""
+        return self.toggle_suite(checked)
 
     def _open_alg(self, alg_id):
         try:

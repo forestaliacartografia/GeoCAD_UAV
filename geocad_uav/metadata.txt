@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.27.0
+version=1.28.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -32,7 +32,33 @@ experimental=False
 deprecated=False
 hasProcessingProvider=yes
 
-changelog=1.27.0
+changelog=1.28.0
+    - Un solo pulsante sulla toolbar di QGIS, "Suite GeoCad
+      Rimboschimento", e apre la dashboard. Erano cinque: il pulsante del
+      dock piu' le tre forme CAD e l'interruttore parametrico. Le quattro
+      sono tornate sulla toolbar del plugin, dentro il dock del plugin,
+      dove stavano gia' i modificatori: la toolbar di QGIS e' di QGIS e
+      degli altri plugin.
+    - Corretto, ed e' il difetto piu' grave trovato finora: la dashboard
+      del rimboschimento veniva montata nascosta e nessuno la mostrava
+      mai. Il metodo che l'avrebbe aperta esisteva e non era chiamato da
+      nessuna parte. I quattordici step, l'interrogazione catastale e
+      ogni pannello dietro di loro erano irraggiungibili da QGIS in
+      funzione, per quanto bene funzionassero sotto test.
+    - Tema scuro ad alta densita' sui due dock del plugin, e soltanto su
+      quelli: un foglio di stile messo sull'applicazione avrebbe
+      ri-vestito QGIS e i pannelli di ogni altro plugin. I colori stanno
+      in una tavolozza unica; il foglio non ne scrive a mano nessuno.
+    - Grafico della mescolanza nel pannello Specie: una barra per specie,
+      percentuale chiesta contro percentuale ottenuta, nei colori che le
+      piante avranno sulla mappa. Disegnato con QPainter, senza librerie
+      che l'operatore dovrebbe installare.
+    - [Genera Anteprima] disegna sulla mappa invece di scrivere un numero
+      in un'etichetta: una banda elastica attorno alla superficie con la
+      direzione delle file attraverso, e un layer temporaneo di piante
+      colorate per specie. Generare l'impianto toglie l'anteprima invece
+      di affiancarla, e [Togli anteprima] la porta via a mano.
+    1.27.0
     - Il catalogo delle specie si apre, si corregge e si salva dal
       pannello Specie. Il plugin non porta con se' nessuna lista di
       specie -- sarebbe vecchia in una stagione e sbagliata in una valle
