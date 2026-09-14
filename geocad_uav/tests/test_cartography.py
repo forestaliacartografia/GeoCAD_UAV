@@ -264,6 +264,63 @@ check_true("la legenda invece c'e' ancora",
 check_true("l'area ci sta anche qui",
            a4_map.extent().contains(AREA.boundingBox()))
 
+# --------------------------------------------------------------------------
+# K6 - ogni formato, in entrambi gli orientamenti
+# --------------------------------------------------------------------------
+print("\n== K6: A4, A3, A2, A1, in verticale e in orizzontale ==")
+MM = {"A4": (210.0, 297.0), "A3": (297.0, 420.0),
+      "A2": (420.0, 594.0), "A1": (594.0, 841.0)}
+panel.north_check.setChecked(True)
+measured = {}
+for page_key in ("A4", "A3", "A2", "A1"):
+    short, long_side = MM[page_key]
+    for orientation, expected in (
+            (carto.ORIENTATION_PORTRAIT, (short, long_side)),
+            (carto.ORIENTATION_LANDSCAPE, (long_side, short))):
+        panel.page_combo.setCurrentIndex(
+            panel.page_combo.findData(page_key))
+        panel.orientation_combo.setCurrentIndex(
+            panel.orientation_combo.findData(orientation))
+        composed = panel.compose()
+        size = composed.pageCollection().page(0).pageSize()
+        frame = composed.itemById(carto.ITEM_MAP)
+        measured[(page_key, orientation)] = (
+            size.width(), size.height(), frame.rect().width(),
+            frame.rect().height(), frame.scale())
+        print("        {0} {1:<9} foglio {2:6.0f} x {3:5.0f} mm  "
+              "mappa {4:6.1f} x {5:5.1f} mm  1:{6:,.0f}".format(
+                  page_key, orientation, size.width(), size.height(),
+                  frame.rect().width(), frame.rect().height(),
+                  frame.scale()))
+        check("{0} {1}: base".format(page_key, orientation),
+              size.width(), expected[0], 0.6)
+        check("{0} {1}: altezza".format(page_key, orientation),
+              size.height(), expected[1], 0.6)
+        check("{0} {1}: la mappa tiene la sua frazione di foglio".format(
+            page_key, orientation),
+            frame.rect().width() / size.width(),
+            carto.FRAME[carto.ITEM_MAP][2], 0.01)
+        check_true("{0} {1}: l'area ci sta".format(page_key, orientation),
+                   frame.extent().contains(AREA.boundingBox()))
+
+# The frame grows with the sheet, and the scale gets finer with it.
+a4 = measured[("A4", carto.ORIENTATION_PORTRAIT)]
+a1 = measured[("A1", carto.ORIENTATION_PORTRAIT)]
+print("        A4 -> A1: mappa da {0:.0f} a {1:.0f} mm di base, "
+      "scala da 1:{2:,.0f} a 1:{3:,.0f}".format(a4[2], a1[2], a4[4], a1[4]))
+check_true("passando da A4 ad A1 il riquadro mappa cresce davvero",
+           a1[2] > 2.5 * a4[2] and a1[3] > 2.5 * a4[3])
+check_true("...e la scala si fa piu' grande, non resta quella di prima",
+           a1[4] < 0.5 * a4[4])
+check_true("ruotare il foglio scambia base e altezza",
+           abs(measured[("A2", carto.ORIENTATION_LANDSCAPE)][0]
+               - measured[("A2", carto.ORIENTATION_PORTRAIT)][1]) < 0.6)
+check("i formati offerti dal pannello sono quelli della tabella",
+      panel.page_combo.count(), len(carto.PAGE_SIZES))
+check_true("...e comprendono A4, A3, A2 e A1",
+           all(panel.page_combo.findData(key) >= 0
+               for key in ("A4", "A3", "A2", "A1")))
+
 arrow = carto.north_arrow_path()
 print("        freccia del nord: {0}".format(arrow))
 check_true("QGIS fornisce una freccia del nord, e la troviamo",

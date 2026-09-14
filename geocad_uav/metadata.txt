@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.39.0
+version=2.0.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,19 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=2.0.0 -- Gold Release
+    - Due moduli separati, ciascuno col proprio percorso di step nel dock
+      sinistro: Rimboschimento (14 step) e Volo UAV (6). Nessuna
+      sovrapposizione, nessuna schermata duplicata altrove.
+    - Serie DJI Mini in libreria per impostazione predefinita, col peso
+      al decollo e la classe sotto i 250 g.
+    - Tabella attributi CAD di cinque colonne: Area, Perimetro, Comune,
+      Foglio, Particella. Nient'altro, niente di nascosto.
+    - Export DJI WPML nativo, scritto sullo schema pubblicato da DJI.
+    - Cartografia su A4, A3, A2, A1 e A0, in verticale e in orizzontale:
+      foglio e riquadro mappa si ridimensionano insieme, verificato
+      formato per formato.
 
 changelog=1.39.0
     - Export DJI WPML: un .kmz con wpmz/template.kml e wpmz/waylines.wpml,
