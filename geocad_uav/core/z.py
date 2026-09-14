@@ -162,6 +162,34 @@ class TerrainModel:
                  np.isfinite(z10) & np.isfinite(z11) & usable & finite)
         return np.where(valid, out, np.nan)
 
+    def sample_report(self, x, y) -> dict:
+        """Sample, and say *why* each miss missed.
+
+        Outside the grid and no-data inside it are different facts about the
+        world -- one is a coverage problem, the other a hole in the data --
+        and a caller that cannot tell them apart cannot report either.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        values = self.sample(x, y)
+        x0, dx, _, y0, _, dy = self.gt
+        col = (x - x0) / dx - 0.5
+        row = (y0 - y) / (-dy) - 0.5
+        finite = np.isfinite(col) & np.isfinite(row)
+        within = (finite & (col >= -0.5) & (col <= self.cols - 0.5)
+                  & (row >= -0.5) & (row <= self.rows - 0.5))
+        valid = np.isfinite(values)
+        return {
+            "values": values,
+            "samples": int(values.size),
+            "valid": int(np.count_nonzero(valid)),
+            # Inside the grid, but the cell (or a neighbour) has no value.
+            "nodata": int(np.count_nonzero(within & ~valid)),
+            "outside": int(np.count_nonzero(~within)),
+            "extent": self.extent,
+            "crs": self.crs_authid,
+        }
+
     def stats_in_mask(self, mask=None):
         """(z_min, z_max, z_mean, nodata_fraction) over the grid or a mask."""
         z = self.z if mask is None else self.z[mask]
@@ -222,6 +250,13 @@ class TerrainModel:
         expands it (use the photogrammetric buffer, so footprints near the AOI
         edge still land on real data).
 
+        The source CRS is **the layer's**, not the one written in the file.
+        QGIS renders, measures and identifies through ``QgsRasterLayer.crs()``,
+        so that is the CRS the operator drew their AOI against; a DEM with a
+        missing or wrong projection corrected in the layer properties is the
+        ordinary case, and taking the file's word for it warps the window to
+        the wrong ground and returns an empty grid.
+
         The grid resolution follows the source resolution expressed in the
         working CRS, coarsened only if the window would exceed ``max_pixels``
         (which is reported as a warning, never applied silently).
@@ -236,6 +271,42 @@ class TerrainModel:
         gdal.UseExceptions()
         osr.UseExceptions()
         warnings: "list[str]" = []
+
+        # Everything the failure messages below are built from, read once.
+        info = dem_diagnostics(raster_layer, work_crs, bbox, margin_m)
+        _log_dem(info)
+
+        if not info["valid"]:
+            raise TerrainError(
+                "The elevation layer is not valid.\n\n{0}".format(
+                    describe_dem_diagnostics(info)))
+        layer_crs = QgsCoordinateReferenceSystem(raster_layer.crs())
+        if not layer_crs.isValid():
+            raise TerrainError(
+                "The elevation layer declares no coordinate reference "
+                "system. Set it in the layer properties -- QGIS cannot "
+                "place the raster without it.\n\n{0}".format(
+                    describe_dem_diagnostics(info)))
+        if info["width"] <= 0 or info["height"] <= 0:
+            raise TerrainError(
+                "The elevation raster has no pixels.\n\n{0}".format(
+                    describe_dem_diagnostics(info)))
+        if info["overlaps"] is False:
+            # Compared in one CRS: the layer's own extent transformed into
+            # the working one. Two rectangles from two CRS never intersect
+            # meaningfully, and comparing them is the bug this replaces.
+            raise TerrainError(
+                "The elevation model does not cover the planning window.\n\n"
+                "{0}\n\n"
+                "Load a DEM over this area, or check the CRS of the layer: "
+                "it is the CRS QGIS places the raster with.".format(
+                    describe_dem_diagnostics(info)))
+        if info["crs_mismatch"]:
+            warnings.append(
+                "The DEM file declares {0} while the layer is set to {1}. "
+                "The layer's CRS is used, as QGIS does everywhere else -- "
+                "check it is the right one.".format(info["file_crs"],
+                                                    info["layer_crs"]))
 
         source = raster_layer.source()
         # Strip QGIS provider decorations that GDAL will not understand.
@@ -289,6 +360,8 @@ class TerrainModel:
         nodata_out = -3.4028234663852886e+38
         warp_opts = gdal.WarpOptions(
             format="MEM",
+            # The layer's CRS, not the file's. See the note in the docstring.
+            srcSRS=layer_crs.toWkt(),
             dstSRS=work_crs.toWkt(),
             outputBounds=(xmin, ymin, xmax, ymax),
             xRes=res_work, yRes=res_work,
@@ -319,12 +392,156 @@ class TerrainModel:
         model = cls(arr, gt, crs_authid=work_crs.authid(), source=source,
                     is_surface_model=is_surface_model,
                     vertical_datum=vertical_datum)
+        if model.nodata_fraction >= 1.0:
+            # Caught here, where the DEM and the window are both in hand,
+            # rather than four call levels later where all that is left is
+            # a profile of NaN and a guess about why.
+            raise TerrainError(
+                "The elevation model is empty over the planning window: "
+                "every cell came back as no-data after reprojection.\n\n"
+                "{0}\n\n"
+                "The extents above overlap, so this is a hole in the data "
+                "rather than a coverage problem: check the raster's no-data "
+                "value and its band.".format(describe_dem_diagnostics(info)))
         if model.nodata_fraction > 0.0:
             warnings.append(
                 "Elevation model has {0:.2%} no-data over the planning window. "
                 "The route is NOT extrapolated across holes; affected "
                 "waypoints are flagged.".format(model.nodata_fraction))
         return model, warnings
+
+
+def dem_diagnostics(raster_layer, work_crs, bbox=None,
+                    margin_m: float = 0.0) -> dict:
+    """Everything needed to answer "can this DEM be sampled for this route?".
+
+    Reads the layer the way QGIS reads it and the file the way GDAL reads
+    it, and puts the two side by side: when they disagree, that disagreement
+    is the answer. Never raises -- it is what an error message is built
+    from, and a diagnostic that can fail is no diagnostic.
+    """
+    from qgis.core import (QgsCoordinateReferenceSystem,        # noqa: PLC0415
+                           QgsCoordinateTransform, QgsProject,
+                           QgsRectangle)
+
+    out = {
+        "layer_name": "", "source": "", "valid": False,
+        "layer_crs": "", "file_crs": "", "crs_mismatch": False,
+        "work_crs": work_crs.authid() if work_crs is not None else "",
+        "width": 0, "height": 0, "res_x": float("nan"), "res_y": float("nan"),
+        "layer_extent": None, "layer_extent_in_work_crs": None,
+        "window": None, "overlaps": None, "error": "",
+    }
+    try:
+        out["layer_name"] = raster_layer.name()
+        out["source"] = raster_layer.source()
+        out["valid"] = bool(raster_layer.isValid())
+        out["layer_crs"] = raster_layer.crs().authid() or "(non dichiarato)"
+        out["width"] = int(raster_layer.width())
+        out["height"] = int(raster_layer.height())
+        out["res_x"] = float(raster_layer.rasterUnitsPerPixelX())
+        out["res_y"] = float(raster_layer.rasterUnitsPerPixelY())
+        extent = raster_layer.extent()
+        out["layer_extent"] = (extent.xMinimum(), extent.yMinimum(),
+                               extent.xMaximum(), extent.yMaximum())
+    except (AttributeError, RuntimeError) as exc:
+        out["error"] = str(exc)
+        return out
+
+    # What the file itself claims, which is what GDAL would have used.
+    try:
+        from osgeo import gdal, osr                             # noqa: PLC0415
+
+        source = out["source"].split("|", 1)[0]
+        dataset = gdal.Open(source, gdal.GA_ReadOnly)
+        if dataset is not None:
+            wkt = dataset.GetProjection()
+            if wkt:
+                srs = osr.SpatialReference()
+                srs.ImportFromWkt(wkt)
+                code = srs.GetAuthorityCode(None)
+                name = srs.GetAuthorityName(None)
+                out["file_crs"] = ("{0}:{1}".format(name, code)
+                                   if code and name else srs.GetName())
+            else:
+                out["file_crs"] = "(nessuna proiezione nel file)"
+        dataset = None
+    except Exception as exc:                                    # noqa: BLE001
+        out["file_crs"] = "(non leggibile: {0})".format(exc)
+
+    layer_crs = QgsCoordinateReferenceSystem(out["layer_crs"])
+    file_crs = QgsCoordinateReferenceSystem(out["file_crs"])
+    out["crs_mismatch"] = bool(
+        layer_crs.isValid() and file_crs.isValid() and layer_crs != file_crs)
+
+    # The one comparison that has to be made in a single CRS.
+    if work_crs is not None and out["layer_extent"] is not None:
+        rect = QgsRectangle(*out["layer_extent"])
+        try:
+            if raster_layer.crs() != work_crs:
+                rect = QgsCoordinateTransform(
+                    raster_layer.crs(), work_crs,
+                    QgsProject.instance()).transformBoundingBox(rect)
+            out["layer_extent_in_work_crs"] = (
+                rect.xMinimum(), rect.yMinimum(),
+                rect.xMaximum(), rect.yMaximum())
+        except Exception as exc:                                # noqa: BLE001
+            out["error"] = "trasformazione dell'extent non riuscita: " \
+                           "{0}".format(exc)
+            return out
+        if bbox is not None:
+            xmin, ymin, xmax, ymax = bbox
+            window = QgsRectangle(xmin - margin_m, ymin - margin_m,
+                                  xmax + margin_m, ymax + margin_m)
+            out["window"] = (window.xMinimum(), window.yMinimum(),
+                             window.xMaximum(), window.yMaximum())
+            out["overlaps"] = bool(rect.intersects(window))
+    return out
+
+
+def describe_dem_diagnostics(info: dict) -> str:
+    """The diagnostics as the lines an operator and a log both want."""
+    def box(values):
+        if not values:
+            return "(non disponibile)"
+        return "({0:,.1f}, {1:,.1f}) - ({2:,.1f}, {3:,.1f})".format(*values)
+
+    lines = [
+        "DEM: {0}".format(info.get("layer_name") or "(senza nome)"),
+        "  sorgente:            {0}".format(info.get("source") or "-"),
+        "  CRS del layer QGIS:  {0}".format(info.get("layer_crs") or "-"),
+        "  CRS scritto nel file:{0}".format(info.get("file_crs") or "-"),
+        "  CRS di lavoro:       {0}".format(info.get("work_crs") or "-"),
+        "  dimensioni:          {0} x {1} px, {2:.3g} x {3:.3g} unita'/px"
+        .format(info.get("width"), info.get("height"),
+                info.get("res_x"), info.get("res_y")),
+        "  extent del DEM:      {0}".format(box(info.get("layer_extent"))),
+        "  extent nel CRS di lavoro: {0}".format(
+            box(info.get("layer_extent_in_work_crs"))),
+        "  finestra richiesta:  {0}".format(box(info.get("window"))),
+    ]
+    if info.get("overlaps") is not None:
+        lines.append("  sovrapposizione:     {0}".format(
+            "si'" if info["overlaps"] else "NO"))
+    if info.get("crs_mismatch"):
+        lines.append(
+            "  ATTENZIONE: il file dichiara un CRS diverso da quello del "
+            "layer. QGIS usa quello del layer.")
+    if info.get("error"):
+        lines.append("  errore: {0}".format(info["error"]))
+    return "\n".join(lines)
+
+
+def _log_dem(info: dict) -> None:
+    """Put the diagnostics in the QGIS log. Never the cause of a failure."""
+    try:
+        from qgis.core import Qgis, QgsApplication                # noqa: PLC0415
+
+        QgsApplication.messageLog().logMessage(
+            describe_dem_diagnostics(info), "GeoCad UAV",
+            Qgis.Warning if info.get("overlaps") is False else Qgis.Info)
+    except Exception:                                           # noqa: BLE001
+        pass
 
 
 def _source_resolution_in_crs(src_ds, src_gt, src_crs, work_crs):

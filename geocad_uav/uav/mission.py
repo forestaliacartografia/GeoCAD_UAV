@@ -369,7 +369,8 @@ def _build_leg(leg, plan, terrain, geometry, params, budget, sample_step,
     elif params.altitude_mode == AltitudeMode.SINGLE_AMSL:
         profile.z_flight = np.full_like(profile.z_flight, aoi_z_mean + lift)
 
-    warnings.extend(tf.fill_profile_gaps(profile, params.gap_mode))
+    warnings.extend(tf.fill_profile_gaps(profile, params.gap_mode,
+                                         terrain=terrain))
 
     # -- thin, never dropping an exposure ---------------------------------
     photo_idx = np.searchsorted(profile.s, photo_chain)

@@ -114,12 +114,18 @@ def build_flight_profile(terrain: TerrainModel, polyline, h_agl_m: float,
     )
 
 
-def fill_profile_gaps(profile: FlightProfile, mode: str = "hold_max"):
+def fill_profile_gaps(profile: FlightProfile, mode: str = "hold_max",
+                      terrain=None):
     """Give the aircraft a defined height across DEM holes.
 
     The DEM is *not* extrapolated; instead the commanded height across a gap is
     made explicitly conservative and the gap stays flagged in ``gap_mask`` so
     the report and the QA layers can show it.
+
+    ``terrain`` is the model the profile was sampled from. Given it, a
+    profile with nothing usable in it can say whether the samples fell off
+    the grid or onto no-data inside it -- two different problems with two
+    different answers, and the message used to assume the first.
 
     ``mode``:
         ``"hold_max"``   -- fly the highest commanded height of the surrounding
@@ -140,9 +146,7 @@ def fill_profile_gaps(profile: FlightProfile, mode: str = "hold_max"):
 
     valid = ~gaps
     if not valid.any():
-        raise TerrainError(
-            "The whole route falls outside the elevation model. Check that the "
-            "DEM covers the AOI and that both are in the same CRS.")
+        raise TerrainError(_no_usable_terrain(profile, terrain))
 
     if mode == "interpolate":
         z[gaps] = np.interp(profile.s[gaps], profile.s[valid], z[valid])
@@ -156,6 +160,45 @@ def fill_profile_gaps(profile: FlightProfile, mode: str = "hold_max"):
     return ["{0} profile samples fall on DEM no-data; commanded height was {1} "
             "them. These segments are flagged in the output layers and must be "
             "checked before flying.".format(int(gaps.sum()), note)]
+
+
+def _no_usable_terrain(profile: FlightProfile, terrain=None) -> str:
+    """Why not one sample of this profile has a height under it.
+
+    Counted, not assumed: off the grid and no-data inside it are different
+    problems, and the operator is the one who has to fix whichever it is.
+    """
+    total = int(profile.z_flight.size)
+    if terrain is None:
+        return ("No sample of the route has an elevation under it "
+                "({0} samples, none valid). The elevation model could not be "
+                "read for this route: check that the DEM covers the area and "
+                "that the layer's CRS is the right one.".format(total))
+    report = terrain.sample_report(profile.xy[:, 0], profile.xy[:, 1])
+    xs, ys = profile.xy[:, 0], profile.xy[:, 1]
+    route_box = (float(np.nanmin(xs)), float(np.nanmin(ys)),
+                 float(np.nanmax(xs)), float(np.nanmax(ys)))
+    head = ("No sample of the route has an elevation under it: "
+            "{0} samples, {1} valid, {2} on DEM no-data, {3} outside the "
+            "grid.".format(report["samples"], report["valid"],
+                           report["nodata"], report["outside"]))
+    where = ("\n  route extent ({0}): ({1:,.1f}, {2:,.1f}) - "
+             "({3:,.1f}, {4:,.1f})"
+             "\n  DEM window    ({0}): ({5:,.1f}, {6:,.1f}) - "
+             "({7:,.1f}, {8:,.1f})".format(
+                 report["crs"] or "CRS di lavoro", route_box[0], route_box[1],
+                 route_box[2], route_box[3], *report["extent"]))
+    if report["outside"] and not report["nodata"]:
+        why = ("\nThe route lies outside the elevation window. Both "
+               "rectangles above are in the same CRS.")
+    elif report["nodata"] and not report["outside"]:
+        why = ("\nThe route lies inside the elevation window, but every "
+               "cell under it is no-data: this is a hole in the data, "
+               "not a coverage problem.")
+    else:
+        why = ("\nPart of the route is off the grid and part is on "
+               "no-data.")
+    return head + where + why
 
 
 # --------------------------------------------------------------------------

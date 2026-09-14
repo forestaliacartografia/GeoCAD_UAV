@@ -66,9 +66,9 @@ about=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
   il DEM del terrain following, e il progetto forestale genera la
   missione di volo che lo documenta.
 
-  Creato dal Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO).
-version=2.2.0
-author=Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO)
+  Creato dal Cap. Niccolò Marco Mancini — RGPBIO.
+version=2.2.1
+author=Cap. Niccolò Marco Mancini — RGPBIO
 email=niccolomarco.mancini@gmail.com
 
 # No public repository exists for this plugin yet. The keys stay, empty:

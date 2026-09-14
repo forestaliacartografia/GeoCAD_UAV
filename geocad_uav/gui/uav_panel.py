@@ -41,7 +41,7 @@ from ..core import grid as grid_mod
 from ..core.errors import GeoCadError
 from ..core.models import AltitudeMode
 from ..core.units import format_duration
-from ..core.z import TerrainModel
+from ..core.z import TerrainError, TerrainModel
 from ..io import layer_factory as lf
 from ..settings import settings as app_settings
 from ..uav import cameras as cam_lib
@@ -121,6 +121,9 @@ class UavPanel(QWidget):
         self.last_terrain = None
         self.last_aoi = None
         self.last_report = None
+        #: The last terrain diagnostic, in full. The message bar gets its
+        #: first line; this is what a test and an operator read.
+        self.last_terrain_error = ""
         self._cameras = cam_lib.load_library()
         self._drones = drone_lib.load_library()
         self._build()
@@ -976,14 +979,36 @@ class UavPanel(QWidget):
                 (box.xMinimum(), box.yMinimum(), box.xMaximum(),
                  box.yMaximum()),
                 margin_m=margin)
+        except TerrainError as exc:
+            # Shown as it comes: it already names the CRS of the layer, the
+            # CRS of the file, both extents in one CRS and the sample
+            # counts. Wrapping it in "DEM non leggibile" renamed a coverage
+            # problem into a reading problem and dropped the numbers that
+            # say which of the two it is.
+            self.last_mission = None
+            self.last_terrain = None
+            self.last_aoi = None
+            self.last_report = None
+            self.clear_preview()
+            self.last_terrain_error = str(exc)
+            self._notify_user(str(exc).splitlines()[0], Qgis.Critical)
+            self._log(str(exc))
+            self.recompute()
+            # After the refresh, not before: recompute() rewrites this box
+            # with the parameter table, and a diagnostic written into a box
+            # that is about to be cleared is a diagnostic nobody reads.
+            self.summary.setPlainText(str(exc))
+            return None
         except Exception as exc:                                # noqa: BLE001
             self.last_mission = None
             self.last_terrain = None
             self.last_aoi = None
             self.last_report = None
             self.clear_preview()
+            self.last_terrain_error = str(exc)
             self._notify_user(
                 tr("DEM non leggibile: {0}").format(exc), Qgis.Critical)
+            self._log(str(exc))
             self.recompute()
             return None
 
@@ -1183,6 +1208,16 @@ class UavPanel(QWidget):
             "Creati {0} layer: {1:,} waypoint, {2:,} scatti.").format(
                 len(layers), len(mission.waypoints), len(mission.photos)))
         return layers
+
+    def _log(self, text: str) -> None:
+        """The full diagnostic to the QGIS log, where it can be read back."""
+        try:
+            from qgis.core import QgsApplication                 # noqa: PLC0415
+
+            QgsApplication.messageLog().logMessage(text, "GeoCad UAV",
+                                                   Qgis.Warning)
+        except Exception:                                        # noqa: BLE001
+            pass
 
     def _notify_user(self, text, level=None):
         if self.iface is None:

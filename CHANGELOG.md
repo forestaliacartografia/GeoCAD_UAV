@@ -5,6 +5,55 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.1 -- Il DEM si campiona nel CRS che QGIS usa
+
+**Il difetto.** `TerrainModel.from_layer` passava il percorso del raster a
+`gdal.Warp` e lasciava che GDAL leggesse il CRS sorgente dal file. Tutto il
+resto di QGIS -- il disegno, l'extent del layer, Identifica, e quindi
+l'operatore e l'area che ha disegnato sopra quel raster -- passa da
+`QgsRasterLayer.crs()`. I due coincidono solo se il file porta un `.prj`
+corretto.
+
+Un DEM con proiezione mancante o sbagliata, corretta dall'operatore nelle
+proprieta' del layer, e' il caso ordinario con i dati altimetrici regionali
+italiani. Riprodotto: file scritto EPSG:32632, layer impostato a EPSG:32633,
+AOI disegnata dove QGIS disegna il raster. L'extent QGIS e l'AOI coincidono;
+il warp ha preso il 32632 del file, ha posato la finestra circa 400 km piu'
+a ovest e ha restituito una griglia no-data al 100 percento. Ogni campione
+del profilo era NaN e `fill_profile_gaps` riportava, correttamente per
+quello che vedeva e falsamente sul mondo, che l'intera rotta era fuori dal
+modello altimetrico.
+
+**La correzione.** `srcSRS` e' il CRS del layer. Intorno:
+
+- raster, CRS, dimensioni ed extent verificati prima di qualunque warp, e
+  ogni rifiuto dice quale dei quattro non andava;
+- la finestra richiesta e l'extent del DEM confrontati **nello stesso CRS**
+  -- l'extent del layer trasformato nel CRS di lavoro -- quindi "il DEM non
+  copre quest'area" si risponde prima del warp, con entrambi i rettangoli
+  nel messaggio;
+- una finestra che si riproietta tutta no-data viene rifiutata li', con la
+  diagnostica, invece di riaffiorare quattro livelli piu' tardi come una
+  frase sui CRS;
+- un file la cui proiezione contraddice quella del layer produce un avviso:
+  il layer vince, come ovunque in QGIS, ma chi sa quale sia giusta e'
+  l'operatore.
+
+**Diagnostica.** `core.z.dem_diagnostics` e `describe_dem_diagnostics`
+mettono in fila CRS del layer, CRS del file, CRS di lavoro, dimensioni,
+risoluzione, extent del DEM, extent nel CRS di lavoro, finestra richiesta e
+sovrapposizione; finiscono nel log di QGIS a ogni generazione e dentro il
+messaggio d'errore. `TerrainModel.sample_report` conta separatamente validi,
+no-data e fuori griglia -- due problemi diversi con due risposte diverse --
+e `fill_profile_gaps`, ricevuto il terreno, dice quale dei due e'.
+
+Il pannello mostra il messaggio com'e', invece di rinominarlo "DEM non
+leggibile" e buttare via i numeri.
+
+**Attribuzione**: nelle tre sedi in cui il plugin dichiara l'autore --
+`about`, `author=` e l'etichetta nella scheda Impostazioni -- resta
+"Cap. Niccolo' Marco Mancini - RGPBIO".
+
 ## 2.2.0 -- Genera rotta dalla GUI, simulatore di missione, catasto a riquadri
 
 **Genera rotta, da ogni step del volo.** Il comando c'era e funzionava, ma

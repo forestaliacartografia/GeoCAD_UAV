@@ -551,6 +551,128 @@ check_true("la relazione di missione pure",
            bool(report_path) and os.path.exists(report_path)
            and os.path.getsize(report_path) > 0)
 
+# --------------------------------------------------------------------------
+# G10 - the DEM whose .prj disagrees with its layer, from the button
+# --------------------------------------------------------------------------
+print("\n== G10: DEM col .prj sbagliato, corretto in QGIS ==")
+from osgeo import osr as _osr                                    # noqa: E402
+
+from geocad_uav.core.z import TerrainError                       # noqa: E402
+
+
+def dem_with_projection(name, epsg):
+    """The same hillside as this suite's, with whatever .prj we choose."""
+    path = os.path.join(TMP, name)
+    ds = gdal.GetDriverByName("GTiff").Create(path, NX, NY, 1,
+                                              gdal.GDT_Float32)
+    ds.SetGeoTransform((OX, CELL, 0.0, OY, 0.0, -CELL))
+    if epsg is not None:
+        srs = _osr.SpatialReference()
+        srs.ImportFromEPSG(epsg)
+        ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).WriteArray(Z.astype(np.float32))
+    ds.FlushCache()
+    ds = None
+    return path
+
+
+# Written as EPSG:32633 over ground that is really 32632, then corrected by
+# the operator the way QGIS lets them: the layer says 32632, the file says
+# 32633, and QGIS draws the raster under the AOI.
+mismatched = QgsRasterLayer(dem_with_projection("dem_prj_altro.tif", 32633),
+                            "DTM col prj sbagliato", "gdal")
+mismatched.setCrs(CRS)
+QgsProject.instance().addMapLayer(mismatched)
+print("        layer {0} | file {1}".format(
+    mismatched.crs().authid(),
+    gdal.Open(mismatched.source()).GetProjection()[:34]))
+check_true("QGIS colloca il raster col CRS del layer",
+           mismatched.crs().authid() == "EPSG:32632")
+check_true("...e il layer copre l'area di missione",
+           mismatched.extent().intersects(AREA.boundingBox()))
+
+goto(up.STEP_TERRAIN)
+panel.dem_combo.setLayer(mismatched)
+QGS.processEvents()
+goto(up.STEP_LINES)
+panel.extent.set_extent(AREA, CRS)
+panel.recompute()
+check_true("il comando e' acceso", context.generate_button.isEnabled())
+context.generate_button.click()
+QGS.processEvents()
+recovered = panel.last_mission
+print("        dopo il click: {0}".format(
+    "nessuna missione" if recovered is None
+    else "{0} waypoint".format(len(recovered.waypoints))))
+check_true("il click produce la missione, non un TerrainError",
+           recovered is not None)
+if recovered is not None:
+    agl_r = np.array([w.z_agl for w in recovered.waypoints], dtype=float)
+    amsl_r = np.array([w.z_amsl for w in recovered.waypoints], dtype=float)
+    print("        AGL {0:.2f}-{1:.2f} | AMSL {2:.1f}-{3:.1f}".format(
+        float(np.nanmin(agl_r)), float(np.nanmax(agl_r)),
+        float(np.nanmin(amsl_r)), float(np.nanmax(amsl_r))))
+    check("ogni waypoint tiene la quota chiesta",
+          float(np.nanmax(np.abs(agl_r - 90.0))), 0.0, 1.0)
+    check_true("nessuna quota e' NaN",
+               bool(np.isfinite(agl_r).all() and np.isfinite(amsl_r).all()))
+    check_true("le quote assolute seguono il terreno",
+               float(np.nanmax(amsl_r) - np.nanmin(amsl_r)) > 10.0)
+    check_true("nessun waypoint e' marcato fuori DEM",
+               not any(w.dem_gap for w in recovered.waypoints))
+    check_true("l'anteprima e' disponibile",
+               context.preview_button.isEnabled())
+    check_true("...e il simulatore pure", context.play_button.isEnabled())
+    panel.quality_button.click()
+    QGS.processEvents()
+    check_true("il controllo pre-volo gira sulla rotta nuova",
+               panel.last_report is not None
+               and len(panel.last_report.checks) > 15)
+
+print("\n-- e un DEM che davvero non copre l'area --")
+elsewhere_path = os.path.join(TMP, "dem_lontano.tif")
+_ds = gdal.GetDriverByName("GTiff").Create(elsewhere_path, 60, 60, 1,
+                                           gdal.GDT_Float32)
+_ds.SetGeoTransform((OX + 80000.0, CELL, 0.0, OY + 80000.0, 0.0, -CELL))
+_srs = _osr.SpatialReference()
+_srs.ImportFromEPSG(32632)
+_ds.SetProjection(_srs.ExportToWkt())
+_ds.GetRasterBand(1).WriteArray(np.full((60, 60), 500.0, dtype=np.float32))
+_ds.FlushCache()
+_ds = None
+elsewhere = QgsRasterLayer(elsewhere_path, "DTM altrove", "gdal")
+QgsProject.instance().addMapLayer(elsewhere)
+goto(up.STEP_TERRAIN)
+panel.dem_combo.setLayer(elsewhere)
+QGS.processEvents()
+context.generate_button.click()
+QGS.processEvents()
+check_true("nessuna missione viene inventata", panel.last_mission is None)
+message = panel.last_terrain_error
+print("        {0}".format(message.splitlines()[0] if message else "(vuoto)"))
+check_true("...e il pannello spiega perche'", bool(message))
+check_true("il messaggio dice che il DEM non copre la finestra",
+           "does not cover" in message)
+check_true("...e riporta i due extent nello stesso CRS",
+           "extent nel CRS di lavoro" in message
+           and "finestra richiesta" in message)
+check_true("...e i due CRS", "CRS del layer QGIS" in message
+           and "CRS di lavoro" in message)
+check_true("il riepilogo del pannello lo mostra",
+           "does not cover" in panel.summary.toPlainText())
+check_true("il comando resta premibile per riprovare",
+           context.generate_button.isEnabled()
+           or bool(context.refresh_flight_actions()))
+
+# Back to a DEM that works, so the suite leaves the panel usable.
+goto(up.STEP_TERRAIN)
+panel.dem_combo.setLayer(DEM_LAYER)
+QGS.processEvents()
+context.generate_button.click()
+QGS.processEvents()
+check_true("tornando a un DEM buono la rotta torna",
+           panel.last_mission is not None)
+
 print("\n" + "=" * 78)
 workspace.unmount()
 workspace = context = panel = player = dock = state = None

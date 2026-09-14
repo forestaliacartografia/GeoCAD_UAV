@@ -480,14 +480,17 @@ about_text = _cp.get("general", "about")
 check_true("about names the author",
            "Cap. Niccol\u00f2 Marco Mancini" in about_text)
 check_true("about names the unit", "RGPBIO" in about_text)
-# v2.0.1: the attribution is one formulation, used everywhere -- the rank,
-# the name and the Raggruppamento, and no further qualification.
-check_true("about names the Raggruppamento",
-           "Raggruppamento Carabinieri Biodiversit\u00e0" in about_text)
-check_true("author= carries the rank and the unit",
+# v2.2.1: the attribution is one formulation, used in both places the plugin
+# states it -- the rank, the name and the acronym, and nothing else. The
+# spelled-out unit was dropped on request; it must not creep back into one
+# of the two and leave them disagreeing.
+check_true("the unit is the acronym, spelled out nowhere",
+           "Raggruppamento Carabinieri" not in metadata)
+check_true("author= carries the rank, the name and RGPBIO",
            "author=Cap. Niccol\u00f2 Marco Mancini" in metadata
-           and "Raggruppamento Carabinieri Biodiversit\u00e0 (RGPBIO)"
-           in metadata)
+           and "Mancini \u2014 RGPBIO" in metadata)
+check_true("about and author= say the same thing",
+           "Cap. Niccol\u00f2 Marco Mancini \u2014 RGPBIO" in about_text)
 check_true("email is present and untouched",
            re.search(r"^email=\S+@\S+$", metadata, re.M) is not None)
 check_true("no marketing comparison in the metadata",
@@ -554,8 +557,12 @@ credit = fresh.dock.credit.text()
 print("        credit: {0}".format(credit))
 check_true("the dock shows the credit line",
            "RGPBIO" in credit
-           and "Cap. Niccol\u00f2 Marco Mancini" in credit
-           and "Raggruppamento Carabinieri" in credit)
+           and "Cap. Niccol\u00f2 Marco Mancini" in credit)
+# v2.2.1: one formulation in all three places the plugin states its
+# authorship -- about, author= and this label.
+check_true("...the same one the metadata carries",
+           "Raggruppamento Carabinieri" not in credit
+           and credit.strip().rstrip(".").endswith("RGPBIO"))
 fresh.unload()
 
 print("\n" + "=" * 78)
