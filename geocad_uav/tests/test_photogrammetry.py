@@ -223,6 +223,69 @@ check_true("...e l'assenza di tipo vale RGB",
                      sensor_h_mm=8.8, image_w_px=5472,
                      image_h_px=3648).kind == pg.KIND_RGB)
 
+# ------------------------------------------------------- DJI Mini (1.37) --
+print("\n== la serie DJI Mini e' in libreria, e l'ottica torna ==")
+from geocad_uav.uav import drones as _drone_lib                  # noqa: E402
+
+_drones = _drone_lib.load_library()
+
+for _key, _name in (("dji_mini1", "DJI Mini (1)"),
+                    ("dji_mini2", "DJI Mini 2"),
+                    ("dji_mini3", "DJI Mini 3"),
+                    ("dji_mini3pro", "DJI Mini 3 Pro")):
+    check_true("il drone {0} c'e' di default".format(_name),
+               _key in _drones and _drones[_key].name == _name)
+for _key in ("dji_mini1", "dji_mini2", "dji_mini3", "dji_mini3pro_48",
+             "dji_mini3pro_12"):
+    check_true("la camera {0} c'e' di default".format(_key), _key in _library)
+
+# What the operator gave, as the library holds it.
+check("Mini 1: 249 g", _drones["dji_mini1"].weight_g, 249.0)
+check("Mini 1: 30 min", _drones["dji_mini1"].endurance_min, 30.0)
+check("Mini 1: 13 m/s", _drones["dji_mini1"].v_max_ms, 13.0)
+check("Mini 2: 31 min", _drones["dji_mini2"].endurance_min, 31.0)
+check("Mini 2: 16 m/s", _drones["dji_mini2"].v_max_ms, 16.0)
+check("Mini 3 Pro: 34 min", _drones["dji_mini3pro"].endurance_min, 34.0)
+check("...e 47 con la batteria Plus",
+      _drones["dji_mini3pro_plus"].endurance_min, 47.0)
+check_true("i Mini standard sono in classe sotto i 250 g",
+           all(_drones[k].is_sub_250g for k in
+               ("dji_mini1", "dji_mini2", "dji_mini3", "dji_mini3pro")))
+check_true("...e quello con la Plus no, perche' pesa di piu'",
+           not _drones["dji_mini3pro_plus"].is_sub_250g)
+check_true("un peso non dichiarato non vale 'leggero'",
+           not _drone_lib.DroneProfile(key="x", name="x").is_sub_250g)
+
+# The pixel count is what was given, and the two pitch estimates agree.
+check("Mini 2: 12 MP a 4000x3000",
+      _library["dji_mini2"].image_w_px * _library["dji_mini2"].image_h_px,
+      4000 * 3000)
+check("Mini 3 Pro: 48 MP a 8064x6048",
+      _library["dji_mini3pro_48"].image_w_px
+      * _library["dji_mini3pro_48"].image_h_px, 8064 * 6048)
+for _key in ("dji_mini1", "dji_mini2", "dji_mini3", "dji_mini3pro_48",
+             "dji_mini3pro_12"):
+    check_true("{0}: le due stime del passo pixel concordano".format(_key),
+               not _cam_lib.check_camera(_library[_key]))
+
+# And the GSD calculator uses them: H * passo / focale, ricalcolato qui.
+for _key, _h in (("dji_mini2", 100.0), ("dji_mini3pro_48", 100.0),
+                 ("dji_mini1", 50.0)):
+    _cam = _library[_key]
+    _own = _h * (_cam.sensor_w_mm / _cam.image_w_px) / _cam.focal_mm
+    _engine = pg.gsd_from_height(_cam, _h)
+    print("        {0} a {1:.0f} m -> {2:.3f} cm/px".format(
+        _key, _h, 100.0 * _engine))
+    check("{0}: il GSD e' quello dell'ottica".format(_key), _engine, _own,
+          1e-12)
+    check("...e la quota si ritrova dal GSD",
+          pg.height_from_gsd(_cam, _engine), _h, 1e-9)
+
+# The 1/1.3" optic has one focal in the library, not two.
+check("Mini 3 Pro e Mini 4 Pro condividono la stessa focale",
+      _library["dji_mini3pro_48"].focal_mm,
+      _library["dji_mini4pro_48"].focal_mm, 1e-12)
+
 # ------------------------------------------------------------------ verdict --
 print("\n" + "=" * 72)
 if FAILURES:

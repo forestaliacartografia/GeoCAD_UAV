@@ -390,7 +390,7 @@ class MoveTool(CadMapTool):
         except (AttributeError, RuntimeError):
             return None, False
         try:
-            record = pa.read_record(feature)
+            record = pa.read_record(feature, self.source_layer)
         except GeoCadError:
             # Unparseable cad_params: the geometry still moves, but the
             # operator has to be told the record was left behind rather than
@@ -421,8 +421,10 @@ class MoveTool(CadMapTool):
             self._warn(
                 "I parametri CAD non descrivono piu' la forma spostata: "
                 "sono stati marcati come non validi.")
+            pa.store_record(self.source_layer, self.feature_id, record)
             return {pa.PARAMS_FIELD: record.to_json()}, False
 
+        pa.store_record(self.source_layer, self.feature_id, updated)
         return pa.record_to_attributes(updated), True
 
 

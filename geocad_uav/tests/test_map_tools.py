@@ -287,18 +287,28 @@ check("WKT matches the engine within geom_eps",
 check("area matches the engine exactly", r_geom.area(), expected_rect.area(),
       1e-9)
 
-r_record = pa.read_record(r_feature)
-check_true("cad_params round-trips off the feature", r_record is not None)
+# v1.38.0: the record is read through the layer now, because where it
+# lives depends on the layer. This fixture carries the old cad_params
+# column, so the column is what answers; the plugin's own five-column CAD
+# layers keep it beside the feature instead (AT4).
+r_committed = rect_layer.getFeature(r_tool.last_feature_id)
+r_record = pa.read_record(r_committed, rect_layer)
+check_true("the parametric record round-trips off the layer",
+           r_record is not None)
+check_true("...and on this layer it is the column that carries it",
+           bool(str(r_committed[pa.PARAMS_FIELD] or "").strip()))
 check("cad_params width", r_record.params["width_m"], 30.0)
 check("cad_params height", r_record.params["height_m"], 20.0)
 check("cad_params rotation", r_record.params["azimuth_deg"], 15.0)
 check_true("cad_params records the reference",
            r_record.params["mode"] == rect_tool.REFERENCE_CORNER)
 check_true("tool identifier stored", r_record.tool == pr.TOOL_RECTANGLE)
-check("denormalised width column", r_feature["width"], 30.0)
-check("denormalised height column", r_feature["height"], 20.0)
-check("denormalised rotation column", r_feature["rotation"], 15.0)
-check("denormalised area column", r_feature["area"], 600.0, 1e-6)
+# Read off the committed feature: the QgsFeature commit() returns was
+# built before the write and carries only the five CAD columns now.
+check("denormalised width column", r_committed["width"], 30.0)
+check("denormalised height column", r_committed["height"], 20.0)
+check("denormalised rotation column", r_committed["rotation"], 15.0)
+check("denormalised area column", r_committed["area"], 600.0, 1e-6)
 rebuilt, _ = pr.rebuild(r_record)
 check("record rebuilds the identical geometry",
       max_vertex_gap(rebuilt, r_geom), 0.0, 1e-9)
@@ -2078,7 +2088,7 @@ def newest(layer):
 print("\n== AT1: rectangle 50 x 30 ==")
 at_layer = scratch_layer("Polygon", "cad_attrs")
 check_true("the fixture layer starts without the CAD columns",
-           lf.CAD_ID_FIELD not in {f.name() for f in at_layer.fields()})
+           lf.AREA_FIELD not in {f.name() for f in at_layer.fields()})
 
 at_session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CENTER)
 at_tool = tb.BaseCadTool(at_session)
@@ -2089,16 +2099,18 @@ at_session.submit("0d")
 first = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
 
 names = {f.name() for f in at_layer.fields()}
-check_true("cad_id was added to the layer", lf.CAD_ID_FIELD in names)
 check_true("Area was added", lf.AREA_FIELD in names)
 check_true("Perimetro was added", lf.PERIMETER_FIELD in names)
-check_true("cad_params is still there", pa.PARAMS_FIELD in names)
-
+# This fixture is a layer that already carries the old columns, which is
+# the case the plugin has to keep working for: the record goes in the
+# column. A five-column CAD layer keeps it beside the feature (AT4).
+check_true("cad_params is still there on a layer that has it",
+           pa.PARAMS_FIELD in names)
 written = newest(at_layer)
-print("        cad_id {0}, Area {1} m2, Perimetro {2} m".format(
-    written[lf.CAD_ID_FIELD], written[lf.AREA_FIELD],
-    written[lf.PERIMETER_FIELD]))
-check("cad_id is 1 on the first feature", written[lf.CAD_ID_FIELD], 1)
+check_true("...and the record is in it",
+           pa.read_record(written, at_layer) is not None)
+print("        Area {0} m2, Perimetro {1} m".format(
+    written[lf.AREA_FIELD], written[lf.PERIMETER_FIELD]))
 check("Area is 1500 m2", written[lf.AREA_FIELD], 1500.0, 1e-9)
 check("Perimetro is 2*(50+30)", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
 check("the area column agrees with the engine's measure()",
@@ -2111,8 +2123,9 @@ at_session.submit("30")
 at_session.submit("0d")
 second = at_tool.commit(at_layer, WORK_CRS, at_layer.crs())
 second = newest(at_layer)
-check("the second feature takes cad_id 2", second[lf.CAD_ID_FIELD], 2)
 check("...with the same area", second[lf.AREA_FIELD], 1500.0, 1e-9)
+check_true("...and the tool reports the id the layer gave it",
+           at_tool.last_feature_id == second.id())
 check("two features on the layer", at_layer.featureCount(), 2)
 
 print("\n== AT2: circle r = 10 ==")
@@ -2136,7 +2149,6 @@ check("Perimetro is the measured perimeter, not 2 pi r",
       ci_written[lf.PERIMETER_FIELD], round(engine_perimeter, 3), 1e-9)
 check_true("...which is shorter than the true circumference",
            ci_written[lf.PERIMETER_FIELD] < 2.0 * math.pi * 10.0)
-check("cad_id is 1 on its own layer", ci_written[lf.CAD_ID_FIELD], 1)
 
 print("\n== AT3: a line has no area ==")
 ln_layer = scratch_layer("LineString", "cad_attrs_line")
@@ -2150,42 +2162,49 @@ ln_written = newest(ln_layer)
 check("Area is 0.00 for a line", ln_written[lf.AREA_FIELD], 0.0)
 check("perimeter_m carries the length", ln_written[lf.PERIMETER_FIELD],
       100.0, 1e-6)
-check("cad_id is 1", ln_written[lf.CAD_ID_FIELD], 1)
 check("the geometry really is 100 m long",
       ln_written.geometry().length(), 100.0, 1e-6)
 
-print("\n== AT4: ids continue from what the layer already holds ==")
-seeded = lf.memory_layer("Polygon", "cad_attrs_seeded", WORK_CRS.authid(),
-                         pa.METADATA_FIELDS + lf.CAD_ATTRIBUTE_FIELDS)
-seed_geom, seed_record = pr.build(
-    pr.TOOL_RECTANGLE, {"mode": "center", "x": OX, "y": OY, "width_m": 10.0,
-                        "height_m": 10.0, "azimuth_deg": 0.0},
-    WORK_CRS.authid())
-seed = QgsFeature(seeded.fields())
-seed.setGeometry(seed_geom)
-seed_attrs = pa.record_to_attributes(seed_record)
-seed_attrs[lf.CAD_ID_FIELD] = 7
-seeded.dataProvider().addFeatures([seed])
-index = seeded.fields().indexOf(lf.CAD_ID_FIELD)
-seeded.dataProvider().changeAttributeValues(
-    {max(f.id() for f in seeded.getFeatures()): {index: 7}})
-check("the seeded feature carries cad_id 7",
-      max(seeded.getFeatures(), key=lambda f: f.id())[lf.CAD_ID_FIELD], 7)
-check("next_cad_id reads the maximum, not the count",
-      lf.next_cad_id(seeded), 8)
+print("\n== AT4: cinque colonne, in quest'ordine, e nient'altro ==")
+five = lf.memory_layer("Polygon", "cad_five", WORK_CRS.authid(),
+                       lf.CAD_LAYER_FIELDS)
+print("        {0}".format([f.name() for f in five.fields()]))
+check_true("il layer CAD nasce con esattamente cinque colonne",
+           [f.name() for f in five.fields()]
+           == ["Area", "Perimetro", "Comune", "Foglio", "Particella"])
+check("...cinque", len(five.fields()), 5)
+check_true("Area e Perimetro sono numeri",
+           five.fields().field("Area").typeName()
+           == five.fields().field("Perimetro").typeName())
+check_true("...e i tre catastali stringhe",
+           five.fields().field("Comune").typeName()
+           == five.fields().field("Particella").typeName()
+           != five.fields().field("Area").typeName())
 
-seed_session = rect_tool.RectangleSession(
-    reference=rect_tool.REFERENCE_CENTER)
-seed_tool = tb.BaseCadTool(seed_session)
-seed_session.set_origin(OX + 100, OY)
-seed_session.submit("20")
-seed_session.submit("20")
-seed_session.submit("0d")
-eighth = seed_tool.commit(seeded, WORK_CRS, seeded.crs())
-check("the new feature takes cad_id 8",
-      newest(seeded)[lf.CAD_ID_FIELD], 8)
-check("Area of a 20 x 20", newest(seeded)[lf.AREA_FIELD],
-      400.0, 1e-9)
+five_session = rect_tool.RectangleSession(reference=rect_tool.REFERENCE_CENTER)
+five_tool = tb.BaseCadTool(five_session)
+five_session.set_origin(OX, OY)
+five_session.submit("40")
+five_session.submit("25")
+five_session.submit("0d")
+five_tool.commit(five, WORK_CRS, five.crs())
+check_true("disegnare non aggiunge colonne",
+           [f.name() for f in five.fields()]
+           == ["Area", "Perimetro", "Comune", "Foglio", "Particella"])
+five_written = newest(five)
+check("Area 40 x 25", five_written[lf.AREA_FIELD], 1000.0, 1e-9)
+check("Perimetro 2*(40+25)", five_written[lf.PERIMETER_FIELD], 130.0, 1e-6)
+check_true("nessun campo legacy resta sul layer",
+           not any(name in {f.name() for f in five.fields()}
+                   for name in ("cad_id", "cad_params", "tool", "width",
+                                "height", "radius", "rotation", "area",
+                                "perimeter", "created")))
+check_true("il record parametrico c'e' comunque, accanto alla feature",
+           pa.stored_record(five, five_tool.last_feature_id) is not None)
+check_true("...e l'id trovato e' quello che il layer tiene davvero",
+           five_tool.last_feature_id
+           in {f.id() for f in five.getFeatures()})
+five_tool.commit_observer = None
 
 print("\n== AT5: a layer that refuses new columns still gets the geometry ==")
 
@@ -2245,7 +2264,7 @@ print("        {0}".format(ro_tool.attribute_warning))
 
 check_true("a layer that accepts them says so instead",
            lf.ensure_cad_fields(scratch_layer("Polygon", "cad_attrs_ok"))
-           == [lf.CAD_ID_FIELD, lf.AREA_FIELD, lf.PERIMETER_FIELD])
+           == [lf.AREA_FIELD, lf.PERIMETER_FIELD])
 
 print("\n== AT6: the shapes from 1.4.0 and 1.4.1 still commit ==")
 mixed = scratch_layer("Polygon", "cad_attrs_mixed")
@@ -2260,13 +2279,14 @@ for index, (session, submissions) in enumerate((
         session.submit(text)
     feature = tool.commit(mixed, WORK_CRS, mixed.crs())
     stored = newest(mixed)
-    expected_ids.append(stored[lf.CAD_ID_FIELD])
+    expected_ids.append(tool.last_feature_id)
     check_true("{0} wrote an area".format(session.title),
                stored[lf.AREA_FIELD] > 0.0)
     check("{0}: Area matches its own geometry".format(session.title),
           stored[lf.AREA_FIELD],
           round(stored.geometry().area(), 2), 1e-9)
-check_true("the ids are 1 and 2 in order", expected_ids == [1, 2])
+check_true("each commit reported the id its feature really has",
+           expected_ids == sorted(f.id() for f in mixed.getFeatures()))
 check("two features", mixed.featureCount(), 2)
 check("no canvas.refresh() was added by the attribute work",
       canvas.refresh_calls - baseline_refresh, 0)
@@ -2401,9 +2421,8 @@ check("a sweep of 0 is read as a full turn, not as nothing",
 
 print("\n== AR4: the arc carries the CAD attributes ==")
 ar4 = newest(ar_layer)
-print("        cad_id {0}, Area {1} m2, Perimetro {2} m".format(
-    ar4[lf.CAD_ID_FIELD], ar4[lf.AREA_FIELD], ar4[lf.PERIMETER_FIELD]))
-check("cad_id is 1", ar4[lf.CAD_ID_FIELD], 1)
+print("        Area {0} m2, Perimetro {1} m".format(
+    ar4[lf.AREA_FIELD], ar4[lf.PERIMETER_FIELD]))
 check("an arc has no area", ar4[lf.AREA_FIELD], 0.0)
 check("perimeter_m is the measured length, not the true arc",
       ar4[lf.PERIMETER_FIELD], round(measured, 3), 1e-9)
@@ -2580,25 +2599,25 @@ written = newest(atv_layer)
 
 print("        visible: {0}".format(visible_fields(atv_layer)))
 print("        hidden : {0}".format(hidden_fields(atv_layer)))
-check("cad_id is 1", written[lf.CAD_ID_FIELD], 1)
 check("Area is 1500 m2", written[lf.AREA_FIELD], 1500.0, 1e-9)
 check("perimeter_m is 160.000", written[lf.PERIMETER_FIELD], 160.0, 1e-6)
-check("exactly three columns are visible", len(visible_fields(atv_layer)), 3)
-check_true("...and they are the three that mean something",
+# v1.38.0: cad_id is gone, so two measured columns are visible, not three.
+check("exactly two columns are visible", len(visible_fields(atv_layer)), 2)
+check_true("...and they are the two that mean something",
            set(visible_fields(atv_layer))
-           == {lf.CAD_ID_FIELD, lf.AREA_FIELD, lf.PERIMETER_FIELD})
+           == {lf.AREA_FIELD, lf.PERIMETER_FIELD})
 check_true("they are in reading order",
-           visible_fields(atv_layer) == [lf.CAD_ID_FIELD, lf.AREA_FIELD,
-                                         lf.PERIMETER_FIELD])
+           visible_fields(atv_layer) == [lf.AREA_FIELD, lf.PERIMETER_FIELD])
 
-print("\n== ATV2: the second commit takes the next id ==")
+print("\n== ATV2: the second commit keeps the same visible columns ==")
 atv_session.set_origin(OX + 200, OY)
 atv_session.submit("50")
 atv_session.submit("30")
 atv_session.submit("0d")
 atv.commit(atv_layer, WORK_CRS, atv_layer.crs())
-check("cad_id is 2", newest(atv_layer)[lf.CAD_ID_FIELD], 2)
-check("still three visible columns", len(visible_fields(atv_layer)), 3)
+check_true("the second feature has its own id",
+           atv.last_feature_id == newest(atv_layer).id())
+check("still two visible columns", len(visible_fields(atv_layer)), 2)
 
 print("\n== ATV3: a line has no area ==")
 atv_line_layer = scratch_layer("LineString", "cad_visible_line")
@@ -2612,8 +2631,8 @@ line_written = newest(atv_line_layer)
 check("Area is 0.00", line_written[lf.AREA_FIELD], 0.0)
 check("perimeter_m carries the length", line_written[lf.PERIMETER_FIELD],
       100.0, 1e-6)
-check("three visible columns on a line layer too",
-      len(visible_fields(atv_line_layer)), 3)
+check("two visible columns on a line layer too",
+      len(visible_fields(atv_line_layer)), 2)
 
 print("\n== ATV4: a circle's area comes from measure(), not from pi r^2 ==")
 atv_circle_layer = scratch_layer("Polygon", "cad_visible_circle")
@@ -2656,10 +2675,8 @@ atv6_feature = build_feature(atv6_layer, pr.TOOL_RECTANGLE,
                               "width_m": 50.0, "height_m": 30.0,
                               "azimuth_deg": 0.0})
 lf.ensure_cad_fields(atv6_layer)
-index = atv6_layer.fields().indexOf(lf.CAD_ID_FIELD)
 atv6_layer.dataProvider().changeAttributeValues(
     {atv6_feature.id(): {
-        index: 1,
         atv6_layer.fields().indexOf(lf.AREA_FIELD): 1500.0,
         atv6_layer.fields().indexOf(lf.PERIMETER_FIELD): 160.0}})
 before = [newest(atv6_layer)[name] for name in lf.VISIBLE_CAD_FIELDS]
@@ -2676,8 +2693,8 @@ check_true("the three columns survive the move unchanged", before == after)
 check("the geometry really moved",
       moved_atv.boundingBox().center().x() - OX, 10.0, 1e-9)
 check("the area did not change", moved_atv.area(), 1500.0, 1e-6)
-check("three columns are still the visible ones",
-      len(visible_fields(atv6_layer)), 3)
+check("two columns are still the visible ones",
+      len(visible_fields(atv6_layer)), 2)
 mv_atv.deactivate()
 
 
@@ -2901,8 +2918,8 @@ check("the measured area travelled with the record",
 check("Area is the measured area in square metres",
       dg1_written[lf.AREA_FIELD], 1200.0, 1e-9)
 check("Perimetro too", dg1_written[lf.PERIMETER_FIELD], 140.0, 1e-6)
-check("three visible columns, as everywhere else",
-      len(visible_fields(dg_layer)), 3)
+check("two visible columns, as everywhere else",
+      len(visible_fields(dg_layer)), 2)
 
 print("\n== DG4: two vertices are a line drawn twice, not a polygon ==")
 dg4_layer = scratch_layer("Polygon", "cad_digitize_short")

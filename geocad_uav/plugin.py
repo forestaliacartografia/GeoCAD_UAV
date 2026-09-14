@@ -477,13 +477,13 @@ class GeoCadUavPlugin:
         from .io import layer_factory as lf                     # noqa: PLC0415
 
         crs = self.iface.mapCanvas().mapSettings().destinationCrs()
-        # The five columns an operator reads -- Area, Perimetro, Comune,
-        # Foglio, Particella -- are part of the schema, not something the
-        # layer grows if a network call happens to succeed.
+        # Five columns, in this order, and nothing else: Area, Perimetro,
+        # Comune, Foglio, Particella. The parametric record the Move,
+        # Rotate and Resize tools read lives beside the feature, in the
+        # layer's custom properties, not in a column.
         layer = lf.memory_layer(
             geometry_type, "GeoCad {0}".format(geometry_type),
-            crs.authid(),
-            list(parametric_mod.METADATA_FIELDS) + list(lf.CAD_LAYER_FIELDS))
+            crs.authid(), list(lf.CAD_LAYER_FIELDS))
         QgsProject.instance().addMapLayer(layer)
         self._scratch_layers[geometry_type] = layer
         return layer

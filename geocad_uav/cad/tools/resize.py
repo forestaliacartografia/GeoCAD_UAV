@@ -280,7 +280,7 @@ class ResizeTool(CadMapTool):
             raise LayerError("empty geometry",
                              user_message="La geometria selezionata e' vuota.")
         try:
-            record = pa.read_record(feature)
+            record = pa.read_record(feature, self.source_layer)
         except GeoCadError:
             record = None
         if record is None:
@@ -402,6 +402,7 @@ class ResizeTool(CadMapTool):
 
         attributes = ({pa.PARAMS_FIELD: updated.to_json()} if broken
                       else pa.record_to_attributes(updated))
+        pa.store_record(self.source_layer, self.feature_id, updated)
         layer = self.source_layer
         fields = layer.fields()
         with undo.edit_command(layer, "GeoCad: Ridimensiona"):

@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.36.0
+version=1.38.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,35 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.38.0
+    - La tabella attributi delle geometrie CAD ha cinque colonne, in
+      quest'ordine, e nient'altro: Area, Perimetro, Comune, Foglio,
+      Particella. Niente cad_id, niente colonne denormalizzate, niente
+      cad_params fra le colonne, e niente campi nascosti.
+    - Il record parametrico che Sposta, Ruota e Ridimensiona leggono non
+      e' sparito: vive accanto alla feature, nelle proprieta'
+      personalizzate del layer, e i tre strumenti continuano a
+      funzionare. Un layer scelto dall'operatore che porti gia' la
+      colonna cad_params continua a usarla.
+    - Il commit trova da solo la feature che ha appena scritto: l'id che
+      addFeature restituisce dentro il buffer di modifica e'
+      provvisorio (misurato: -2, -3, -4 mentre il layer tiene 1, 2, 3),
+      quindi si legge dalla differenza degli id presenti prima e dopo la
+      scrittura. Ed e' la feature del layer, non quella costruita prima
+      della scrittura, che commit() restituisce.
+
+changelog=1.37.0
+    - Serie DJI Mini in libreria, disponibile senza doverla scrivere a
+      mano: Mini (1), Mini 2, Mini 3, Mini 3 Pro e Mini 3 Pro con
+      batteria Plus, con le rispettive camere. Peso, autonomia e
+      velocita' massima sono quelli dichiarati; l'ottica reale (focale e
+      area utile del sensore), che nessun costruttore pubblica, e'
+      ricavata dall'equivalente 35 mm e dal formato del sensore, e la
+      derivazione e' scritta in ogni scheda.
+    - Il profilo drone porta anche il peso al decollo, con la classe
+      sotto i 250 g calcolata da li'. Un peso non dichiarato non vale
+      "leggero".
 
 changelog=1.36.0
     - Due moduli, due percorsi. Il dock sinistro porta un selettore

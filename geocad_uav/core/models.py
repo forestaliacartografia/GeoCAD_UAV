@@ -157,6 +157,9 @@ class DroneProfile:
     key: str
     name: str
     kind: str = "multirotor"            # multirotor | fixedwing
+    #: Maximum take-off weight in grams, 0 when the library does not say.
+    #: Nothing in the route depends on it; the 250 g line does.
+    weight_g: float = 0.0
     v_max_ms: float = 15.0
     v_cruise_ms: float = 8.0
     climb_ms: float = 4.0
@@ -170,6 +173,15 @@ class DroneProfile:
     export_formats: tuple = ()
     source: str = ""
     notes: str = ""
+
+    @property
+    def is_sub_250g(self) -> bool:
+        """Whether the airframe is in the lightest regulatory class.
+
+        False when the weight is unknown: "not recorded" must never read as
+        "light enough".
+        """
+        return 0.0 < self.weight_g <= 250.0
 
     @property
     def is_fixed_wing(self) -> bool:

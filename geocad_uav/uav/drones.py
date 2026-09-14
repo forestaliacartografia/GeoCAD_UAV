@@ -42,6 +42,7 @@ def drone_from_dict(entry: dict) -> DroneProfile:
             key=str(entry["key"]),
             name=str(entry["name"]),
             kind=kind,
+            weight_g=float(entry.get("weight_g", 0.0)),
             v_max_ms=float(entry.get("v_max_ms", 15.0)),
             v_cruise_ms=float(entry.get("v_cruise_ms", 8.0)),
             climb_ms=float(entry.get("climb_ms", 4.0)),
@@ -125,8 +126,12 @@ def check_drone(profile: DroneProfile) -> "list[str]":
 
 
 def describe(profile: DroneProfile) -> str:
-    return ("{0} | {1} | Vmax {2:g} m/s | salita {3:g} / discesa {4:g} m/s | "
-            "autonomia {5:g} min (utile {6:.0f} min) | max {7} waypoint").format(
-        profile.name, profile.kind, profile.v_max_ms, profile.climb_ms,
-        profile.descent_ms, profile.endurance_min,
+    weight = ("{0:g} g{1}".format(
+        profile.weight_g, " (classe < 250 g)" if profile.is_sub_250g else "")
+        if profile.weight_g > 0 else "peso non dichiarato")
+    return ("{0} | {1} | {2} | Vmax {3:g} m/s | salita {4:g} / discesa "
+            "{5:g} m/s | autonomia {6:g} min (utile {7:.0f} min) | "
+            "max {8} waypoint").format(
+        profile.name, profile.kind, weight, profile.v_max_ms,
+        profile.climb_ms, profile.descent_ms, profile.endurance_min,
         profile.usable_endurance_s / 60.0, profile.waypoint_limit)

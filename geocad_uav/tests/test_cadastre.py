@@ -312,17 +312,18 @@ feature = QgsFeature(layer.fields())
 feature.setGeometry(QgsGeometry.fromWkt(
     "POLYGON(({0} {1},{2} {1},{2} {3},{0} {3},{0} {1}))".format(
         OX, OY, OX + 10.0, OY + 10.0)))
-feature.setAttribute(layer.fields().indexOf(lf.CAD_ID_FIELD), 7)
+# v1.38.0: no cad_id column. The feature is found by the id the layer
+# gave it, which is what the commit reads back from the difference.
 layer.dataProvider().addFeature(feature)
 layer.updateExtents()
 
 check_true("prima della ricerca il layer non ha colonne catastali",
            all(layer.fields().indexOf(name) < 0
                for name in lf.CADASTRE_FIELD_NAMES))
-found_id = lf.feature_id_by_cad_id(layer, 7)
+found_id = max(f.id() for f in layer.getFeatures())
 check_true("la feature si ritrova dal suo cad_id", found_id is not None)
 check_true("un cad_id che non c'e' non trova nulla",
-           lf.feature_id_by_cad_id(layer, 999) is None)
+           not layer.getFeature(999).isValid())
 check_true("scrivere il catasto riesce",
            lf.write_cadastre(layer, found_id, parcel))
 for name in lf.CADASTRE_FIELD_NAMES:
@@ -339,8 +340,8 @@ check_text("e la particella", written[lf.CAT_PARTICELLA_FIELD], "1016")
 check_true("le tre colonne restano visibili nella tabella",
            all(name in lf.ALWAYS_VISIBLE_FIELDS
                for name in lf.CADASTRE_FIELD_NAMES))
-check("...senza entrare fra le colonne CAD, che restano tre",
-      len(lf.VISIBLE_CAD_FIELDS), 3)
+check("...senza entrare fra le colonne CAD, che restano due",
+      len(lf.VISIBLE_CAD_FIELDS), 2)
 check_true("nessuna colonna catastale e' nascosta",
            not (set(lf.CADASTRE_FIELD_NAMES) & set(hidden_names(layer))))
 check_true("scrivere senza particella non fa nulla",

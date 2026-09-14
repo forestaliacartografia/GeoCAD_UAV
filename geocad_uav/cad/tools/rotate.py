@@ -381,7 +381,7 @@ class RotateHandleTool(CadMapTool):
 
     def _params_anchor(self, feature):
         try:
-            record = pa.read_record(feature)
+            record = pa.read_record(feature, self.source_layer)
         except GeoCadError:
             return None
         if record is None:
@@ -524,7 +524,7 @@ class RotateHandleTool(CadMapTool):
         except (AttributeError, RuntimeError):
             return None, False
         try:
-            record = pa.read_record(feature)
+            record = pa.read_record(feature, self.source_layer)
         except GeoCadError:
             record = None
         if record is None:
@@ -549,8 +549,10 @@ class RotateHandleTool(CadMapTool):
             self._warn(
                 "I parametri CAD non descrivono piu' la forma ruotata: "
                 "sono stati marcati come non validi.")
+            pa.store_record(self.source_layer, self.feature_id, record)
             return {pa.PARAMS_FIELD: record.to_json()}, False
 
+        pa.store_record(self.source_layer, self.feature_id, updated)
         return pa.record_to_attributes(updated), True
 
 

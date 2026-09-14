@@ -112,8 +112,7 @@ CY = float(INSIDE.constGet().y())
 def cad_layer(name, crs=CRS6706):
     """A CAD scratch layer, built exactly as the plugin builds one."""
     layer = lf.memory_layer("Polygon", name, crs.authid(),
-                            list(pa.METADATA_FIELDS)
-                            + list(lf.CAD_LAYER_FIELDS))
+                            list(lf.CAD_LAYER_FIELDS))
     QgsProject.instance().addMapLayer(layer)
     return layer
 
@@ -185,7 +184,9 @@ print("        Area {0}, Perimetro {1}".format(written["Area"],
 check("la feature e' sul layer appena posata", layer.featureCount(), 1)
 check("...con l'Area in metri quadri", written["Area"], 1600.0, 1e-6)
 check("...e il Perimetro in metri", written["Perimetro"], 160.0, 1e-6)
-check_true("...e un identificativo CAD", written[lf.CAD_ID_FIELD] == 1)
+check_true("...e nient'altro: cinque colonne in tutto",
+           [f.name() for f in layer.fields()]
+           == ["Area", "Perimetro", "Comune", "Foglio", "Particella"])
 check_true("il commit non ha aspettato la rete: e' tornato subito",
            feature is not None)
 

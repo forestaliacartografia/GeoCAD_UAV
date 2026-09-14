@@ -46,12 +46,50 @@ def record_to_attributes(record: ParametricRecord) -> dict:
     }
 
 
-def read_record(feature) -> Optional[ParametricRecord]:
-    """Load the record from a feature, or None when it carries none."""
+#: Where the record lives on a layer whose attribute table does not carry
+#: it. A layer custom property, keyed by feature id: saved with the QGIS
+#: project, invisible in the attribute table, and read by the same three
+#: tools that used to read the column.
+PARAMS_PROPERTY = "geocad/cad_params"
+
+
+def property_key(feature_id) -> str:
+    return "{0}/{1}".format(PARAMS_PROPERTY, int(feature_id))
+
+
+def store_record(layer, feature_id, record) -> bool:
+    """Keep a record beside the feature. Returns False when it could not."""
+    if layer is None or feature_id is None or record is None:
+        return False
     try:
-        raw = feature[PARAMS_FIELD]
-    except (KeyError, IndexError):
+        layer.setCustomProperty(property_key(feature_id), record.to_json())
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+    return True
+
+
+def stored_record(layer, feature_id) -> Optional[ParametricRecord]:
+    """The record kept beside a feature, or None."""
+    if layer is None or feature_id is None:
         return None
+    try:
+        raw = layer.customProperty(property_key(feature_id), "")
+    except (AttributeError, RuntimeError, TypeError):
+        return None
+    return _parse(raw)
+
+
+def drop_record(layer, feature_id) -> None:
+    """Forget a record, for a feature that is gone."""
+    if layer is None or feature_id is None:
+        return
+    try:
+        layer.removeCustomProperty(property_key(feature_id))
+    except (AttributeError, RuntimeError, TypeError):
+        pass
+
+
+def _parse(raw) -> Optional[ParametricRecord]:
     if raw is None or str(raw).strip() in ("", "NULL"):
         return None
     try:
@@ -61,6 +99,47 @@ def read_record(feature) -> Optional[ParametricRecord]:
             "corrupt parametric record: {0}".format(exc),
             user_message="I parametri memorizzati non sono leggibili.",
             hint="La geometria puo' essere modificata solo manualmente.") from exc
+
+
+def read_record(feature, layer=None) -> Optional[ParametricRecord]:
+    """Load the record for a feature, from wherever this layer keeps it.
+
+    The column first, for a layer that still has one -- an operator may be
+    drawing into a layer of their own that carries ``cad_params`` -- then
+    the side store, which is where the plugin's own CAD layers keep it
+    since 1.38.0.
+    """
+    raw = None
+    try:
+        raw = feature[PARAMS_FIELD]
+    except (KeyError, IndexError):
+        raw = None
+    record = _parse(raw)
+    if record is not None:
+        return record
+    try:
+        feature_id = feature.id()
+    except (AttributeError, RuntimeError):
+        return None
+    return stored_record(layer, feature_id)
+
+
+def write_record(layer, feature_id, record) -> dict:
+    """Persist a record and return the attributes a caller should write.
+
+    The attributes are empty for a layer without the columns, which is the
+    normal case now: the record went to the side store instead.
+    """
+    attributes = record_to_attributes(record) if record is not None else {}
+    try:
+        names = {field.name() for field in layer.fields()}
+    except (AttributeError, RuntimeError):
+        names = set()
+    if PARAMS_FIELD in names:
+        return attributes
+    store_record(layer, feature_id, record)
+    return {name: value for name, value in attributes.items()
+            if name in names}
 
 
 def check_integrity(feature, record: ParametricRecord) -> ParametricRecord:

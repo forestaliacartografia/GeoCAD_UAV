@@ -105,7 +105,6 @@ def _num(value):
 # CAD attributes
 # --------------------------------------------------------------------------
 
-CAD_ID_FIELD = "cad_id"
 #: Square metres, not hectares. A column called plainly "Area" on a CAD
 #: polygon is read as square metres, and ``primitives.measure`` already
 #: holds the value in those: this takes a conversion out rather than
@@ -113,11 +112,8 @@ CAD_ID_FIELD = "cad_id"
 AREA_FIELD = "Area"
 PERIMETER_FIELD = "Perimetro"
 
-#: Written on every feature the CAD tools create, on top of the parametric
-#: columns in ``cad.parametric.METADATA_FIELDS``. They exist because an
-#: operator reads the attribute table, not the JSON in ``cad_params``.
+#: The measurements, written on every feature the CAD tools create.
 CAD_ATTRIBUTE_FIELDS = [
-    (CAD_ID_FIELD, "int"),
     (AREA_FIELD, "double"),
     (PERIMETER_FIELD, "double"),
 ]
@@ -147,27 +143,30 @@ CADASTRE_FIELD_NAMES = tuple(name for name, _kind in CADASTRE_FIELDS)
 #: that apart from "asked, and there is nothing".
 NOT_AVAILABLE = "N/D"
 
-#: The five columns an operator meets in the attribute table of a CAD layer:
-#: what was drawn, how big it is, and where it is in the cadastre.
+#: The five columns of a CAD layer, in this order, and no others: how big
+#: the shape is, and where it is in the cadastre. Since 1.38.0 this is the
+#: whole schema -- there is nothing behind it to hide. The parametric record
+#: the Move, Rotate and Resize tools read lives in the layer's custom
+#: properties (``cad.parametric.store_record``), not in a column.
 CAD_LAYER_FIELDS = CAD_ATTRIBUTE_FIELDS + CADASTRE_FIELDS
 
+CAD_FIELD_NAMES = tuple(name for name, _kind in CAD_LAYER_FIELDS)
+
 #: The CAD columns proper -- geometry measurements, not cadastral answers.
-VISIBLE_CAD_FIELDS = (CAD_ID_FIELD, AREA_FIELD, PERIMETER_FIELD)
+VISIBLE_CAD_FIELDS = (AREA_FIELD, PERIMETER_FIELD)
 
 #: What the visibility pass leaves showing: the measurements and the parcel.
 ALWAYS_VISIBLE_FIELDS = VISIBLE_CAD_FIELDS + CADASTRE_FIELD_NAMES
 
 
 def apply_cad_field_visibility(layer) -> int:
-    """Hide every column except the three that mean something to a reader.
+    """Hide any column that is not one of the five.
 
-    Hidden, never dropped. ``cad_params`` is what ``primitives.rebuild``,
-    Rotate, Move and Resize all read: delete it and those tools go blind on
-    the feature. The denormalised columns (``width``, ``radius``, ``area``
-    and the rest) are write-only today -- ``read_record`` reads
-    ``cad_params`` and nothing else -- but they are still written on every
-    commit, and a project may already style or filter on them, so they are
-    hidden rather than removed.
+    On the plugin's own CAD layers this now hides nothing, because there is
+    nothing else there. It still matters for a layer the operator chose
+    themselves: the CAD tools will write the five columns into it, and the
+    columns it already had are none of this plugin's business to delete --
+    so they are hidden from the CAD reading, not dropped.
 
     Returns how many columns were hidden. Never raises: a layer that will not
     take the setting keeps its columns visible, which is untidy, not broken.
@@ -271,6 +270,30 @@ def write_cadastre_unavailable(layer, feature_id) -> bool:
         return False
 
 
+def write_attributes(layer, feature_id, values) -> bool:
+    """Write ``{name: value}`` onto one committed feature.
+
+    Names the layer does not have are skipped, not created: this is the
+    write that follows a commit, and growing a column here would undo the
+    five-column schema the CAD layers are built with.
+    """
+    if layer is None or feature_id is None or not values:
+        return False
+    try:
+        fields = layer.fields()
+        changes = {}
+        for name, value in values.items():
+            index = fields.indexOf(name)
+            if index >= 0:
+                changes[index] = value
+        if not changes:
+            return False
+        return bool(layer.dataProvider().changeAttributeValues(
+            {int(feature_id): changes}))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def _ensure(layer, specs):
     if layer is None:
         return None
@@ -301,25 +324,40 @@ def _ensure(layer, specs):
     return [name for name, _kind in missing]
 
 
-def feature_id_by_cad_id(layer, cad_id):
-    """The feature carrying this ``cad_id``, or None.
+def ids_near(layer, geometry, margin: float = 1.0):
+    """The ids of the features whose bounding box meets this geometry's.
 
-    The id a provider hands back at commit time is provisional until it is
-    written; ``cad_id`` is assigned by this module and unique within the
-    layer, so it is what a callback arriving later can still find the
-    feature by.
+    Local on purpose: the commit only needs to know which ids were there a
+    moment ago *where the new shape is*, and walking a whole layer for that
+    would make every CAD commit cost O(features).
     """
-    if layer is None or cad_id is None:
-        return None
+    if layer is None or geometry is None:
+        return set()
     try:
-        index = layer.fields().indexOf(CAD_ID_FIELD)
-        if index < 0:
-            return None
-        for feature in layer.getFeatures():
-            if feature[index] == cad_id:
-                return feature.id()
-    except (AttributeError, RuntimeError):
-        return None
+        from qgis.core import QgsFeatureRequest                   # noqa: PLC0415
+
+        box = geometry.boundingBox()
+        box.grow(float(margin))
+        request = QgsFeatureRequest().setFilterRect(box)
+        request.setNoAttributes()
+        return {feature.id() for feature in layer.getFeatures(request)}
+    except (AttributeError, RuntimeError, TypeError):
+        return set()
+
+
+def added_feature_id(layer, geometry, before, margin: float = 1.0):
+    """The id of the feature just added, or None when it cannot be told.
+
+    ``before`` is what :func:`ids_near` returned before the write. Measured
+    on a memory layer: ``addFeature`` reports a provisional negative id
+    (-2, -3, -4) while the layer ends up holding 1, 2, 3 -- so the id the
+    caller has in hand is not the one to come back to. The difference of the
+    two sets is, and it needs no column to carry it.
+    """
+    after = ids_near(layer, geometry, margin)
+    fresh = after - set(before or ())
+    if len(fresh) == 1:
+        return fresh.pop()
     return None
 
 
@@ -351,37 +389,8 @@ def write_cadastre(layer, feature_id, parcel) -> bool:
         return False
 
 
-def next_cad_id(layer) -> int:
-    """The next progressive id on ``layer``: ``max(cad_id) + 1``, else 1.
-
-    Deliberately not a running count of features: after a delete the ids must
-    not be handed out twice, and ``max + 1`` keeps every id unique for the
-    life of the layer without renumbering anything that already exists.
-    """
-    if layer is None:
-        return 1
-    try:
-        index = layer.fields().indexOf(CAD_ID_FIELD)
-    except (AttributeError, RuntimeError):
-        return 1
-    if index < 0:
-        return 1
-    highest = 0
-    try:
-        for feature in layer.getFeatures():
-            value = feature.attribute(index)
-            try:
-                value = int(value)
-            except (TypeError, ValueError):
-                continue
-            highest = max(highest, value)
-    except (AttributeError, RuntimeError):
-        return 1
-    return highest + 1
-
-
-def cad_attributes(record, layer) -> dict:
-    """The three CAD columns for one freshly built record.
+def cad_attributes(record, layer=None) -> dict:
+    """The two measured CAD columns for one freshly built record.
 
     The numbers come from ``primitives.measure`` -- which already stored them
     in the record at build time, in the metric working CRS -- so the tool
@@ -393,7 +402,6 @@ def cad_attributes(record, layer) -> dict:
     perimeter = (params.get("measured_perimeter_m")
                  or params.get("measured_length_m"))
     return {
-        CAD_ID_FIELD: next_cad_id(layer),
         AREA_FIELD: round(float(area_m2), 2) if area_m2 else 0.0,
         PERIMETER_FIELD: round(float(perimeter), 3) if perimeter else 0.0,
     }

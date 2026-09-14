@@ -429,7 +429,6 @@ class CommitReport:
 
     layer_name: str = ""
     feature_id: object = None
-    cad_id: object = None
     area_m2: float = 0.0
     perimeter_m: float = 0.0
     comune: str = ""
@@ -465,25 +464,22 @@ def _text(value) -> str:
     return str(value)
 
 
-def commit_report(layer, cad_id, pending: bool = False,
+def commit_report(layer, feature_id, pending: bool = False,
                   warning: str = "") -> CommitReport:
     """Read one CAD feature back and describe it.
 
-    Takes the feature id from ``cad_id`` rather than from the QgsFeature the
-    commit built: inside an edit buffer that feature carries a provisional
-    negative id, and the value the table shows is the one that matters.
+    ``feature_id`` is the id the layer settled on after the commit, not the
+    provisional one ``addFeature`` reported inside the edit buffer.
     """
-    report = CommitReport(cad_id=cad_id, pending=bool(pending),
+    report = CommitReport(feature_id=feature_id, pending=bool(pending),
                           warning=warning or "")
-    if layer is None or cad_id is None:
+    if layer is None or feature_id is None:
         return report
     try:
         report.layer_name = layer.name()
-        feature_id = lf.feature_id_by_cad_id(layer, cad_id)
-        if feature_id is None:
-            return report
-        report.feature_id = feature_id
         feature = layer.getFeature(feature_id)
+        if not feature.isValid():
+            return report
         fields = layer.fields()
         if fields.indexOf(lf.AREA_FIELD) >= 0:
             report.area_m2 = float(feature[lf.AREA_FIELD] or 0.0)
@@ -543,8 +539,10 @@ class BaseCadTool:
         #: hands in a recorded one so the whole commit path can be driven
         #: without a network, and without pretending there was one.
         self.cadastre_transport = None
-        #: Last shape this tool wrote, as the attribute table holds it.
+        #: Last shape this tool wrote, as the attribute table holds it,
+        #: and the id the layer gave it.
         self.last_commit = None
+        self.last_feature_id = None
         #: Optional ``callable(CommitReport)`` a panel installs to follow the
         #: commits. Called on the main thread, twice per shape: once when the
         #: feature lands, once when the cadastral task answers.
@@ -598,10 +596,12 @@ class BaseCadTool:
         if layer_crs is not None and work_crs is not None and layer_crs != work_crs:
             geometry = crs_svc.transform_geometry(geometry, work_crs, layer_crs)
 
-        # The CAD columns an operator actually reads in the attribute table.
-        # Added here because commit() is the one place a feature is written;
-        # a layer that refuses them still gets its geometry, with a warning.
-        attributes = pa.record_to_attributes(record)
+        # The five columns an operator reads in the attribute table. Added
+        # here because commit() is the one place a feature is written; a
+        # layer that refuses them still gets its geometry, with a warning.
+        # The parametric record is NOT one of them: it goes beside the
+        # feature after the write, once the real id is known.
+        attributes = {}
         self.attribute_warning = ""
         if lf.ensure_cad_fields(layer) is None:
             self.attribute_warning = (
@@ -618,6 +618,10 @@ class BaseCadTool:
             if index >= 0:
                 feature.setAttribute(index, value)
 
+        # What is already there, where the new shape is going. The id
+        # addFeature reports is provisional inside the edit buffer, so the
+        # real one is read off the difference once the write is committed.
+        before = lf.ids_near(layer, geometry)
         with undo.edit_command(layer, "GeoCad: {0}".format(self.session.title)):
             if not layer.addFeature(feature):
                 raise LayerError(
@@ -625,22 +629,40 @@ class BaseCadTool:
                     user_message="Inserimento della geometria non riuscito sul "
                                  "layer '{0}'.".format(layer.name()))
         layer.updateExtents()
-        self.request_cadastre(layer, geometry, attributes)
+        feature_id = lf.added_feature_id(layer, geometry, before)
+        #: The feature this commit wrote, as the layer now numbers it.
+        self.last_feature_id = feature_id
+        if feature_id is not None:
+            # Where the parametric record lives now: beside the feature, not
+            # in a column. Move, Rotate and Resize read it from here. A
+            # layer that already carries the old columns -- one the operator
+            # chose themselves -- gets them filled as well.
+            lf.write_attributes(layer, feature_id,
+                                pa.write_record(layer, feature_id, record))
+        self.request_cadastre(layer, geometry, feature_id)
         # Announced after the lookup is started, so the report can say
         # whether an answer is still on its way.
-        self.announce(layer, attributes.get(lf.CAD_ID_FIELD),
+        self.announce(layer, feature_id,
                       pending=self.cadastre_task is not None)
         self.session.reset()
+        if feature_id is not None:
+            # Hand back the feature as the LAYER holds it, not the one built
+            # before the write: that object carries a provisional negative id
+            # and only the attributes set before addFeature, which is a trap
+            # every caller fell into at least once.
+            committed = layer.getFeature(feature_id)
+            if committed.isValid():
+                return committed
         return feature
 
-    def announce(self, layer, cad_id, pending: bool = False) -> CommitReport:
+    def announce(self, layer, feature_id, pending: bool = False) -> CommitReport:
         """Publish what the table now holds for one shape.
 
         Always records it on the tool; calls the observer only when a panel
         installed one. The observer is GUI code and must never be able to
         break a commit, so it is called inside a guard.
         """
-        report = commit_report(layer, cad_id, pending=pending,
+        report = commit_report(layer, feature_id, pending=pending,
                                warning=self.cadastre_warning)
         self.last_commit = report
         if self.commit_observer is not None:
@@ -652,7 +674,7 @@ class BaseCadTool:
 
     # -- cadastral parcel --------------------------------------------------
 
-    def request_cadastre(self, layer, geometry, attributes):
+    def request_cadastre(self, layer, geometry, feature_id):
         """Ask the Agenzia delle Entrate which parcel this shape sits on.
 
         Started by :meth:`commit` on every geometry, and never on the
@@ -682,8 +704,7 @@ class BaseCadTool:
         except Exception:                                       # noqa: BLE001
             return None
 
-        cad_id = (attributes or {}).get(lf.CAD_ID_FIELD)
-        if cad_id is None or layer is None or geometry is None:
+        if feature_id is None or layer is None or geometry is None:
             return None
         try:
             centroid = geometry.centroid()
@@ -697,14 +718,13 @@ class BaseCadTool:
 
         def _apply(parcel, error):
             self.cadastre_warning = error or ""
-            feature_id = lf.feature_id_by_cad_id(layer, cad_id)
-            if feature_id is None:
+            if not layer.getFeature(feature_id).isValid():
                 return                  # the operator deleted it meanwhile
             if parcel is None or parcel.is_empty:
                 lf.write_cadastre_unavailable(layer, feature_id)
             else:
                 lf.write_cadastre(layer, feature_id, parcel)
-            self.announce(layer, cad_id, pending=False)
+            self.announce(layer, feature_id, pending=False)
 
         try:
             self.cadastre_task = cad_svc.lookup_task(
