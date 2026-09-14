@@ -5,6 +5,27 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.2 -- Pubblicazione sul repository ufficiale QGIS
+
+L'upload veniva rifiutato con: "Please provide valid url link for the
+following key(s) in the metadata source: tracker, repository, homepage".
+I tre campi erano vuoti di proposito -- non esisteva un repository pubblico,
+e un campo vuoto lo dice onestamente dove un placeholder mente. Ora esiste.
+
+- `repository`, `homepage` e `tracker` puntano a
+  https://github.com/forestaliacartografia/GeoCAD_UAV (verificati: 200).
+- `description` e `about` passano all'inglese, che e' quello che le linee
+  guida del repository chiedono; l'italiano non si perde, diventa
+  `description[it]` e `about[it]`, il meccanismo di localizzazione che QGIS
+  usa gia': un QGIS italiano mostra l'italiano, la pagina del repository e
+  tutti gli altri mostrano l'inglese.
+- README.md in inglese alla radice del repository: e' la pagina che il link
+  `homepage` apre.
+- Il pacchettizzatore applica le stesse regole dell'upload: un pacchetto con
+  uno dei tre link vuoto, con un placeholder, o con la descrizione rimasta
+  in italiano non si costruisce piu'. La verifica avviene su questa macchina
+  invece che dopo una sottomissione.
+
 ## 2.2.1 -- Il DEM si campiona nel CRS che QGIS usa
 
 **Il difetto.** `TerrainModel.from_layer` passava il percorso del raster a

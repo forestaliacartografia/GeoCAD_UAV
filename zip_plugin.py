@@ -110,21 +110,56 @@ PLACEHOLDER_HOSTS = ("example.invalid", "example.com", "example.org",
                      "your-domain", "yourdomain", "TODO")
 
 
+#: Keys the official plugin repository requires to be valid links. Its
+#: rejection reads "Please provide valid url link for the following key(s)
+#: in the metadata source: tracker, repository, homepage", so the build
+#: fails on exactly those three rather than letting an upload discover it.
+LINK_KEYS = ("homepage", "tracker", "repository")
+
+
 def _placeholders_in(values):
-    """Complaints about metadata URLs that do not point anywhere real."""
+    """Complaints about the three metadata links the repository reads."""
     problems = []
-    for key in ("homepage", "tracker", "repository"):
+    for key in LINK_KEYS:
         url = (values.get(key) or "").strip()
         if not url:
+            problems.append(
+                "{0}= is empty: the official plugin repository refuses a "
+                "package whose tracker, repository and homepage are not "
+                "valid links.".format(key))
             continue
         lowered = url.lower()
         if any(host in lowered for host in PLACEHOLDER_HOSTS):
             problems.append(
-                "{0}= is a placeholder ({1}): leave it empty until there is "
-                "a real URL.".format(key, url))
+                "{0}= is a placeholder ({1}): it has to be a real, publicly "
+                "reachable URL.".format(key, url))
         elif not lowered.startswith(("http://", "https://")):
             problems.append(
                 "{0}= is not a URL ({1}).".format(key, url))
+    return problems
+
+
+#: Words that mean the description was left in Italian. The repository asks
+#: for English, and the Italian text lives in description[it]/about[it].
+ITALIAN_MARKERS = (" per ", " con ", " della ", " delle ", " degli ",
+                   " che ", " sono ", " questo ", " un'", "progettazione",
+                   "rilievo", "impianto")
+
+
+def _english_description(values):
+    """Complaints about a description the repository would not accept."""
+    problems = []
+    text = (values.get("description") or "").strip()
+    if not text:
+        problems.append("description= is empty.")
+        return problems
+    lowered = " " + text.lower() + " "
+    hits = [word for word in ITALIAN_MARKERS if word in lowered]
+    if hits:
+        problems.append(
+            "description= looks like Italian ({0}): the plugin repository "
+            "asks for English. Put the Italian in description[it]."
+            .format(", ".join(sorted(set(w.strip() for w in hits))[:3])))
     return problems
 
 
@@ -186,6 +221,7 @@ def check_metadata() -> "list[str]":
 
     problems.extend(_history_in(values))
     problems.extend(_placeholders_in(values))
+    problems.extend(_english_description(values))
 
     icon = values.get("icon", "").strip()
     if icon and not os.path.isfile(os.path.join(SOURCE, icon)):

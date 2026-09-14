@@ -491,6 +491,9 @@ check_true("author= carries the rank, the name and RGPBIO",
            and "Mancini \u2014 RGPBIO" in metadata)
 check_true("about and author= say the same thing",
            "Cap. Niccol\u00f2 Marco Mancini \u2014 RGPBIO" in about_text)
+check_true("...and the Italian about says it as well",
+           "Cap. Niccol\u00f2 Marco Mancini \u2014 RGPBIO"
+           in _cp.get("general", "about[it]"))
 check_true("email is present and untouched",
            re.search(r"^email=\S+@\S+$", metadata, re.M) is not None)
 check_true("no marketing comparison in the metadata",
@@ -505,10 +508,36 @@ check_true("no placeholder host anywhere in the metadata",
            not any(host in metadata.lower()
                    for host in ("example.invalid", "example.com",
                                 "example.org", "changeme", "your-domain")))
+# v2.2.2: the official plugin repository refuses a package whose tracker,
+# repository and homepage are not valid links, so "empty" is no longer one
+# of the accepted answers.
 for _key in ("homepage", "tracker", "repository"):
     _value = _cp.get("general", _key, fallback="").strip()
-    check_true("{0}= is empty or a real URL".format(_key),
-               not _value or _value.startswith(("http://", "https://")))
+    print("        {0:<11} = {1}".format(_key, _value or "(vuoto)"))
+    check_true("{0}= is a real URL".format(_key),
+               _value.startswith("https://") and len(_value) > 12)
+
+# The repository page is read by people who do not speak Italian; the
+# guidelines ask for English. The Italian is not dropped, it is localised.
+_description = _cp.get("general", "description")
+_about = _cp.get("general", "about")
+check_true("description= is in English",
+           not any(word in (" " + _description.lower() + " ")
+                   for word in (" per ", " con ", " della ",
+                                "progettazione")))
+check_true("...and reads like a description of this plugin",
+           "photogrammetry" in _description.lower()
+           and "cad" in _description.lower())
+check_true("about= is in English too",
+           "QGIS plugin" in _about and "Created by" in _about)
+check_true("the Italian description is kept, localised",
+           _cp.has_option("general", "description[it]")
+           and "progettazione" in _cp.get("general", "description[it]"))
+check_true("...and so is the Italian about",
+           _cp.has_option("general", "about[it]")
+           and len(_cp.get("general", "about[it]")) > 1000)
+check_true("the two abouts describe the same plugin",
+           "RGPBIO" in _about and "RGPBIO" in _cp.get("general", "about[it]"))
 
 # v2.2.0: every key pyplugin_installer.installer_data.getInstalledPlugin
 # looks up, so it records no missing-option in error_details. The locale

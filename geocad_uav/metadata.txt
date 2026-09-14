@@ -2,8 +2,72 @@
 name=GeoCad UAV Toolkit
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
-description=Suite tecnica per progettazione forestale e fotogrammetria UAV: CAD parametrico con interrogazione catastale automatica, progettazione di impianti di rimboschimento su DEM e pianificazione di missioni di volo con terrain following reale.
-about=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
+description=Technical suite for forestry design and UAV photogrammetry: parametric CAD with automatic Italian cadastral lookup, reforestation planning on a DEM, and flight mission planning with real terrain following.
+description[it]=Suite tecnica per progettazione forestale e fotogrammetria UAV: CAD parametrico con interrogazione catastale automatica, progettazione di impianti di rimboschimento su DEM e pianificazione di missioni di volo con terrain following reale.
+about=GeoCad UAV Toolkit is a QGIS plugin for integrated geospatial
+  work: technical CAD drawing, reforestation design, and UAV
+  photogrammetric mission planning. The three modules share one geometry
+  engine, one terrain model and one cadastral service.
+
+  CAD. Parametric geometry -- square, rectangle, regular polygon, circle,
+  arc, line, polyline -- with dimensional input (side, angle, radius) and
+  native QGIS snapping. Move, rotate and resize preserve the construction
+  parameters. Every shape placed queries the cadastre on its own geometry
+  rather than on a point: the attribute table carries five columns (Area,
+  Perimeter, Municipality, Sheet, Parcel) and the full reading -- every
+  municipality, every sheet, every parcel, with cadastral area, intersected
+  area and percentage -- stays in the panel and on the map.
+
+  REFORESTATION. A sixteen-step workflow: area definition, cadastral data,
+  elevation model, constraints and setbacks, homogeneous zones, species
+  catalogue and composition, density and planting pattern with
+  trigonometric slope correction, row orientation, plant generation,
+  naturalistic pass (glades, irregularity, per-species minimum distances),
+  comparative optimisation, anomaly checks, plant editing on the layer, map
+  composition and deliverables.
+
+  UAV. Photogrammetric planning in twelve steps: mission area from a
+  polygon or from a linear axis for corridors, drone and sensor libraries,
+  bidirectional GSD calculator (flight height and ground resolution are two
+  ends of the same optical relation), real terrain following on the DEM
+  with an elevation profile, acquisition parameters and overlaps, strip
+  generation with a measured azimuth, waypoints and exposure stations,
+  safety checks against obstacles and endurance, mission preview on the
+  map, flight simulation with ground footprints and live coverage,
+  pre-flight validation and export.
+
+  CADASTRE. Queries the INSPIRE WFS service of the Italian Agenzia delle
+  Entrate, with real geometric intersection. A geometry spanning several
+  municipalities returns all of them, every sheet and every parcel
+  involved, each with its cadastral area, intersected area, percentage of
+  the parcel and percentage of the project; Belfiore codes are resolved to
+  municipality names. Large bounding boxes are tiled, merged and
+  deduplicated, so a provider that stops at its own feature ceiling does
+  not silently truncate the answer. The same engine serves the CAD module
+  and the reforestation module.
+
+  DEM AND TERRAIN. One terrain model for the whole plugin: slope and
+  aspect for the planting pattern, flight height for the UAV mission. The
+  raster is reprojected from the CRS the QGIS layer declares, which is the
+  one QGIS draws it with. Waypoint heights really follow the ground.
+
+  CARTOGRAPHY AND EXPORT. Map sheets on QgsPrintLayout from A4 to A0,
+  portrait and landscape, with legend, scale bar, north arrow and grid.
+  Reports in PDF, Word and Excel. Missions in GeoPackage, GeoJSON, KML,
+  KMZ, GPX, CSV, Litchi, MAVLink and native DJI WPML, the last one
+  restricted to the aircraft DJI documents as compatible.
+
+  INTEGRATION. GIS, CAD, cadastre, reforestation, UAV, photogrammetry and
+  cartography work on the same data: the area drawn with the CAD tools is
+  the reforestation project area, the reforestation DEM is the terrain
+  following DEM, and the forestry project generates the flight mission
+  that documents it.
+
+  Interface and reports are in Italian.
+
+  Created by Cap. Niccolò Marco Mancini — RGPBIO.
+
+about[it]=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
   gestione di attivita' geospaziali integrate: disegno tecnico CAD,
   progettazione di impianti di rimboschimento e pianificazione di
   missioni fotogrammetriche con drone. I tre moduli condividono un solo
@@ -67,16 +131,16 @@ about=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
   missione di volo che lo documenta.
 
   Creato dal Cap. Niccolò Marco Mancini — RGPBIO.
-version=2.2.1
+version=2.2.2
 author=Cap. Niccolò Marco Mancini — RGPBIO
 email=niccolomarco.mancini@gmail.com
 
-# No public repository exists for this plugin yet. The keys stay, empty:
-# QGIS reads them, and an empty field says "there is none" while a
-# placeholder URL says "there is one" and sends whoever clicks it nowhere.
-tracker=
-repository=
-homepage=
+# The public repository. All three have to resolve: the official plugin
+# repository refuses a package whose links do not, and so it should --
+# a tracker nobody can open is not a tracker.
+tracker=https://github.com/forestaliacartografia/GeoCAD_UAV/issues
+repository=https://github.com/forestaliacartografia/GeoCAD_UAV
+homepage=https://github.com/forestaliacartografia/GeoCAD_UAV
 
 # QGIS reads this key when it builds the Plugin Manager entry; missing, it
 # records the miss in error_details. The release history is in CHANGELOG.md
