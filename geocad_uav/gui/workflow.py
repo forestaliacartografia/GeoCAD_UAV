@@ -127,11 +127,36 @@ UAV_STEPS = (
     (uav_mod.STEP_EXPORT, "V6. Export"),
 )
 
-#: Everything the step list shows, in order.
+#: Every step there is, in order. Used for the status map and for the
+#: lookups that do not care which module a step belongs to; it is **not**
+#: what the list shows -- see :data:`MODULES`.
 ALL_STEPS = STEPS + UAV_STEPS
 
-#: Where a section title goes, by index into ALL_STEPS.
-SECTIONS = {0: "RIMBOSCHIMENTO", len(STEPS): "VOLO UAV"}
+#: The two modules, each with its own navigation path. Rimboschimento and
+#: volo are different jobs with different models behind them, and putting
+#: their steps in one list made a twenty-item scroll out of two short ones.
+MODULE_FOREST = "forest"
+MODULE_UAV = "uav"
+
+MODULES = (
+    (MODULE_FOREST, "Rimboschimento", STEPS),
+    (MODULE_UAV, "Volo UAV", UAV_STEPS),
+)
+
+
+def module_of(key: str) -> str:
+    """Which module a step belongs to. Empty for a key that is neither."""
+    for module, _label, steps in MODULES:
+        if any(step == key for step, _label2 in steps):
+            return module
+    return ""
+
+
+def steps_of(module: str):
+    for key, _label, steps in MODULES:
+        if key == module:
+            return steps
+    return ()
 
 #: Visual state of one step. Derived from the model, never set by a widget
 #: for its own convenience.
@@ -948,7 +973,9 @@ PROJECT_COMMANDS = (
 class WorkflowDock(QDockWidget):
     """The steps, the state each one is in, and the project commands."""
 
-    stepChanged = pyqtSignal(int)
+    #: The step key that is now being looked at. A key and not a row:
+    #: rows mean different steps in the two modules.
+    stepChanged = pyqtSignal(str)
 
     def __init__(self, state: ProjectState, parent=None):
         super().__init__(tr("Rimboschimento"), parent)
@@ -967,17 +994,27 @@ class WorkflowDock(QDockWidget):
                 action.setShortcut(shortcut)
             action.triggered.connect(getattr(self, method))
             self.actions[key] = action
+        # The module selector. Two jobs, two paths: the list below shows
+        # one of them at a time and never both.
+        self.module_bar = QHBoxLayout()
+        self.module_buttons = {}
+        for module, label, _steps in MODULES:
+            button = QPushButton(tr(label))
+            button.setCheckable(True)
+            button.setToolTip(tr("Passa al modulo {0}").format(tr(label)))
+            button.clicked.connect(
+                lambda _checked=False, key=module: self.set_module(key))
+            self.module_bar.addWidget(button)
+            self.module_buttons[module] = button
+
         self.list = QListWidget()
         self.list.setAlternatingRowColors(True)
         self.list.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection)
         self.list.setUniformItemSizes(True)
-        for key, label in ALL_STEPS:
-            item = QListWidgetItem(swatch(STATE_COLORS[NOT_STARTED]), label)
-            item.setData(Qt.ItemDataRole.UserRole, key)
-            self.list.addItem(item)
-        self.list.setCurrentRow(0)
-        self.list.currentRowChanged.connect(self.stepChanged.emit)
+        self.list.currentRowChanged.connect(self._on_row)
+        #: Which module's steps the list is showing.
+        self.module = ""
         # A panel that finishes its own job and hands over to another step
         # asks for it here rather than reaching into the list.
         state.stepRequested.connect(self.select_step)
@@ -989,6 +1026,7 @@ class WorkflowDock(QDockWidget):
         layout = QVBoxLayout(holder)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.toolbar)
+        layout.addLayout(self.module_bar)
         layout.addWidget(self.list)
         layout.addWidget(self.file_label)
         self.setWidget(holder)
@@ -996,7 +1034,43 @@ class WorkflowDock(QDockWidget):
 
         state.statusChanged.connect(self.set_status)
         state.changed.connect(self.refresh_commands)
+        self.set_module(MODULE_FOREST)
         self.refresh_commands()
+
+    # -- the two modules ---------------------------------------------------
+
+    def set_module(self, module: str, row: int = 0) -> bool:
+        """Show one module's steps. Returns False for a name it does not know.
+
+        Rebuilding the list rather than hiding rows: a hidden row is still a
+        row, and every count, index and keyboard step would have to know
+        about the ones that are not there.
+        """
+        steps = steps_of(module)
+        if not steps:
+            return False
+        if module == self.module:
+            return True
+        self.module = module
+        for key, button in self.module_buttons.items():
+            button.setChecked(key == module)
+        self.list.blockSignals(True)
+        self.list.clear()
+        for key, label in steps:
+            item = QListWidgetItem(
+                swatch(STATE_COLORS[self.state.status(key)]), label)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.list.addItem(item)
+        self.list.blockSignals(False)
+        self.list.setCurrentRow(max(0, min(int(row), len(steps) - 1)))
+        return True
+
+    def _on_row(self, row: int) -> None:
+        """A row was chosen. The key is what the context dock is told."""
+        item = self.list.item(row) if row >= 0 else None
+        key = item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
+        if key:
+            self.stepChanged.emit(key)
 
     # -- the project commands ----------------------------------------------
 
@@ -1138,10 +1212,21 @@ class WorkflowDock(QDockWidget):
         return item.data(Qt.ItemDataRole.UserRole) if item else ""
 
     def select_step(self, key: str) -> bool:
-        """Move to a step by name. Used when one step hands over to another."""
+        """Move to a step by name, switching module when it belongs to the other.
+
+        This is what makes a hand-over work across the two paths: "Genera
+        missione UAV" is pressed on a planting step and lands on a flight
+        one.
+        """
+        module = module_of(key)
+        if not module:
+            return False
+        if module != self.module and not self.set_module(module):
+            return False
         for row in range(self.list.count()):
             if self.list.item(row).data(Qt.ItemDataRole.UserRole) == key:
                 self.list.setCurrentRow(row)
+                self._on_row(row)
                 return True
         return False
 
@@ -3880,11 +3965,15 @@ class ContextDock(QDockWidget):
             except Exception:                                   # noqa: BLE001
                 pass
 
-    def show_step(self, row: int) -> None:
-        """Called by the workflow list. Rows map to pages, sometimes to tabs."""
-        if row < 0 or row >= len(ALL_STEPS):
-            return
-        key = ALL_STEPS[row][0]
+    def show_step(self, key) -> None:
+        """Called by the workflow list, with the key of the chosen step."""
+        if isinstance(key, int):
+            # A row, from a caller that has not been told about the two
+            # modules. Read it against the steps that are showing.
+            row = key
+            if row < 0 or row >= len(ALL_STEPS):
+                return
+            key = ALL_STEPS[row][0]
         panel, tab = self.pages.get(key, self.flight_pages.get(key,
                                                                (None, None)))
         if panel is None:
@@ -3972,7 +4061,7 @@ class Workspace(QObject):
 
         # The one connection the whole navigation rests on.
         self.workflow.stepChanged.connect(self.context.show_step)
-        self.context.show_step(0)
+        self.context.show_step(STEPS[0][0])
         self.state.refresh_status()
 
     def mount(self) -> None:

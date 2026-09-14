@@ -1,17 +1,17 @@
 """
 Dock panel: the CAD tools, what they just drew, and the settings.
 
-Three tabs, and only what has nowhere better to be. The CAD tab carries the
+Two tabs, and only what has nowhere better to be. The CAD tab carries the
 map-tool toolbar, the numeric fields of the active tool and the cadastral
-readout of the shape it just placed; Rimboschimento keeps the quick forest
-panel; Impostazioni holds the stored preferences.
+readout of the shape it just placed; Impostazioni holds the stored
+preferences.
 
-The flight planner used to be a fourth tab here, with a fifth for its
-exports. Since 1.32.0 both are steps of the dashboard workflow instead --
-``gui.workflow`` builds one ``UavPanel`` and lays its controls out as six
-pages -- because two homes for one job is exactly what the single entry
-point was meant to end. GUI calls services; services never import widgets
-(spec section 2).
+Everything else that was here has gone to the dashboard, where it belongs
+to a module with its own navigation path: the flight planner and its
+exports in 1.32.0, and the reforestation panel in 1.36.0. That panel was a
+second, simpler planting -- no zones, no species mix, no constraints, no
+cadastre -- and two ways to lay out the same stand is one too many. GUI
+calls services; services never import widgets (spec section 2).
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
 from ..settings import settings as app_settings
-from .forest_panel import ForestPanel
 
 
 def tr(text):
@@ -68,7 +67,9 @@ class GeoCadDock(QDockWidget):
     # v1.4.5: the Grid tab was withdrawn; the lattice engine (core.grid) is
     # still there and still feeds the reforestation schemes.
     # v1.32.0: UAV and Layer/Export went to the dashboard workflow.
-    TAB_CAD, TAB_FOREST, TAB_SETTINGS = range(3)
+    # v1.36.0: so did Rimboschimento, which had a simpler planting of its
+    # own here. Two tabs left, and neither duplicates a module.
+    TAB_CAD, TAB_SETTINGS = range(2)
 
     def _scroll_page(self, widgets):
         """A scrollable tab page holding the given widgets, top-aligned."""
@@ -177,11 +178,6 @@ class GeoCadDock(QDockWidget):
         self.tabs.addTab(self._scroll_page([self.cad_toolbar, self.cad_box,
                                             self.cadastre_box]),
                          tr("CAD"))
-
-        # ------------------------------------------------------------ FORESTA
-        self.forest_panel = ForestPanel(self.iface)
-        self.tabs.addTab(self._scroll_page([self.forest_panel]),
-                         tr("Rimboschimento"))
 
         # ------------------------------------------------------- IMPOSTAZIONI
         self.tabs.addTab(self._scroll_page(self._build_settings_widgets()),
@@ -396,12 +392,6 @@ class GeoCadDock(QDockWidget):
         if self._cad_tool is not None:
             self._cad_tool.commit_observer = None
         self._cad_tool = None
-        for panel in (getattr(self, "forest_panel", None),):
-            if panel is not None:
-                try:
-                    panel.teardown()
-                except Exception:                               # noqa: BLE001
-                    pass
 
     # -- CAD tool binding --------------------------------------------------
 

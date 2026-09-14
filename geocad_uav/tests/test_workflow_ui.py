@@ -117,8 +117,18 @@ check_true("...e contiene un QListWidget",
 # v1.32.0: fourteen planting steps, then six flight ones in the same list.
 check("gli step del rimboschimento sono quattordici", len(wf.STEPS), 14)
 check("...e quelli del volo sei", len(wf.UAV_STEPS), 6)
-check("la lista li porta tutti", workspace.workflow.list.count(),
-      len(wf.ALL_STEPS))
+# v1.36.0: due moduli, due percorsi. La lista ne mostra uno alla volta.
+check("la lista porta gli step del modulo in corso",
+      workspace.workflow.list.count(), len(wf.STEPS))
+check_true("...che all'avvio e' il rimboschimento",
+           workspace.workflow.module == wf.MODULE_FOREST)
+check_true("si passa al volo", workspace.workflow.set_module(wf.MODULE_UAV))
+check("...e la lista mostra i suoi sei step",
+      workspace.workflow.list.count(), len(wf.UAV_STEPS))
+check_true("...e nessuno step di rimboschimento resta in vista",
+           not any(workspace.workflow.list.item(i).text().startswith("1")
+                   for i in range(workspace.workflow.list.count())))
+workspace.workflow.set_module(wf.MODULE_FOREST)
 labels = [workspace.workflow.list.item(i).text()
           for i in range(workspace.workflow.list.count())]
 print("        {0}".format(labels))

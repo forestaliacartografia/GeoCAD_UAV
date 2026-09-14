@@ -182,13 +182,13 @@ class GeoCadUavPlugin:
         self._build_cad_actions()
         self._ensure_workspace()
 
-        # Menu only: the same algorithms are reachable from the dock tabs.
-        self._make_action(self.tr("Piano di volo UAV..."), self.open_flight_alg,
-                          tip=self.tr("Algoritmo di pianificazione volo"))
+        # One menu entry, for the one thing the dashboard has no step for.
+        # The flight and planting algorithms had entries here too, opening a
+        # second way into jobs the two modules already own; they remain in
+        # the Processing toolbox, which is where a QGIS user looks for an
+        # algorithm to put in a model or a batch.
         self._make_action(self.tr("Griglia parametrica..."), self.open_grid_alg,
                           tip=self.tr("Algoritmo griglia"))
-        self._make_action(self.tr("Sesto d'impianto..."), self.open_forest_alg,
-                          tip=self.tr("Algoritmo di impianto forestale"))
 
         for note in self._shortcut_notes:
             QgsApplication.messageLog().logMessage(note, MENU_TITLE, Qgis.Info)
@@ -509,11 +509,5 @@ class GeoCadUavPlugin:
                 MENU_TITLE,
                 self.tr("Impossibile aprire l'algoritmo: {0}").format(exc))
 
-    def open_flight_alg(self):
-        self._open_alg("planflight")
-
     def open_grid_alg(self):
         self._open_alg("creategrid")
-
-    def open_forest_alg(self):
-        self._open_alg("forestplanting")

@@ -164,8 +164,19 @@ print("        dock toolbar: {0}".format(cad_toolbar_labels))
 for expected in ("Quadrato", "Rettangolo", "Poligono", "Parametrico"):
     check_true("'{0}' is on the plugin's own toolbar".format(expected),
                expected in cad_toolbar_labels)
-check("the three algorithm launchers went to the menu",
-      len(iface.menu_actions), 4)          # toggle + 3 algorithms
+# v1.36.0: the flight and planting launchers left the menu. Both opened a
+# second way into a job a module already owns; the algorithms stay in the
+# Processing toolbox. What is left is the toggle and the lattice, which no
+# workflow step covers.
+check("only the lattice algorithm is left in the menu",
+      len(iface.menu_actions), 2)          # toggle + creategrid
+check_true("...and it is the lattice one",
+           any("riglia" in action.text()
+               for _menu, action in iface.menu_actions))
+check_true("no menu entry duplicates a module",
+           not any("volo" in action.text().lower()
+                   or "impianto" in action.text().lower()
+                   for _menu, action in iface.menu_actions))
 
 # --------------------------------------------------------------------------
 # U2 - the toggle drives the dock, both ways
@@ -175,7 +186,7 @@ print("\n== U2: toggle shows and hides the dock ==")
 check("three docks registered", len(iface.docks), 3)
 check_true("the workflow dock is on the left and lists every step",
            plugin.workspace is not None
-           and plugin.workspace.workflow.list.count() == len(wf.ALL_STEPS))
+           and plugin.workspace.workflow.list.count() == len(wf.STEPS))
 check_true("the context dock holds a stack of panels",
            plugin.workspace.context.stack.count() >= 10)
 
@@ -246,16 +257,19 @@ print("        tabs: {0}".format(titles))
 # v1.32.0: the UAV tab and the Layer/Export tab moved into the dashboard
 # workflow, where they are six steps with a state marker each. What is left
 # in this dock is what has nowhere better to be.
-check("tab count", tabs.count(), 3)
+# v1.36.0: the Rimboschimento tab went too -- it was a second, simpler
+# planting, and reforestation now exists only as the workflow module.
+check("tab count", tabs.count(), 2)
 check_true("titles and order match the contract",
-           titles == ["CAD", "Rimboschimento", "Impostazioni"])
-check_true("the flight planner is not a tab any more",
-           not any("UAV" in t or "Export" in t for t in titles))
+           titles == ["CAD", "Impostazioni"])
+check_true("no module has a tab of its own here",
+           not any("UAV" in t or "Export" in t or "Rimbosch" in t
+                   for t in titles))
 check_true("...it is six steps of the workflow instead",
            all(plugin.workspace.workflow.select_step(key)
                for key, _label in wf.UAV_STEPS))
-check_true("the forestry tab is named for the work, not the subject",
-           "Foresta" not in titles and "Rimboschimento" in titles)
+check_true("reforestation has no tab here at all: it is a module",
+           not any("Foresta" in t or "Rimbosch" in t for t in titles))
 check_true("no Grid tab is left, not even an empty one",
            not any("rigli" in t for t in titles))
 check_true("no MISSIONI tab was added",
@@ -387,7 +401,7 @@ plugin.initGui()
 check("a second initGui creates the same three docks", len(iface.docks), 3)
 check("...and the same single toolbar action",
       len(real_actions(iface.toolbars[-1])), 1)
-check("...and does not double the menu entries", len(iface.menu_actions), 4)
+check("...and does not double the menu entries", len(iface.menu_actions), 2)
 check("...and repopulates the dock's CAD toolbar",
       len(real_actions(plugin.dock.cad_toolbar)),
       len(plugin_mod.EDIT_IN_PLACE_TOOLS)

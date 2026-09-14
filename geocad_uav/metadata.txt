@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.35.0
+version=1.36.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,23 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.36.0
+    - Due moduli, due percorsi. Il dock sinistro porta un selettore
+      Rimboschimento / Volo UAV e mostra gli step di uno solo alla volta:
+      quattordici o sei, non venti in un'unica lista. Il passaggio da un
+      modulo all'altro e' un clic, e nessuno quando e' un pannello a
+      chiederlo ("Genera missione UAV" parte da uno step di
+      rimboschimento e arriva su uno di volo).
+    - Il rimboschimento esiste solo li'. La scheda "Rimboschimento" del
+      pannello CAD e' stata rimossa insieme al modulo che la disegnava:
+      era una seconda progettazione piu' semplice, senza zone, mix di
+      specie, vincoli, naturaliforme ne' catasto, e due modi di
+      progettare lo stesso impianto sono uno di troppo.
+    - Tolti dal menu del plugin anche i due avvii che ripetevano il
+      lavoro dei moduli ("Piano di volo UAV...", "Sesto d'impianto..."):
+      gli algoritmi restano dove un utente QGIS li cerca, nella cassetta
+      degli strumenti di Processing.
 
 changelog=1.35.0
     - Relazione di missione in PDF, Word ed Excel, oltre all'HTML. E' la

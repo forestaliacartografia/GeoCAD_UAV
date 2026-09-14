@@ -37,7 +37,6 @@ from geocad_uav.forest.reforestation import spacing as sp       # noqa: E402
 from geocad_uav.forest.reforestation import species as spx      # noqa: E402
 from geocad_uav.forest.reforestation import symbology as sym    # noqa: E402
 from geocad_uav.forest.reforestation import terrain as tr       # noqa: E402
-from geocad_uav.gui import forest_panel as fp                   # noqa: E402
 from geocad_uav.io import dem_source                            # noqa: E402
 
 FAILURES = []
@@ -394,18 +393,30 @@ check("...senza toccare la rete", len(REQUESTED), 0)
 # --------------------------------------------------------------------------
 # M5 - the two alignment options are gone
 # --------------------------------------------------------------------------
-print("\n== M5: le due opzioni di allineamento sono sparite ==")
-for name in ("azimuth_from_map", "azimuth_from_edge", "_pick_azimuth",
-             "_azimuth_from_edge"):
-    check_true("ForestPanel non ha piu' {0}".format(name),
-               not hasattr(fp.ForestPanel, name))
-source = open(fp.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-for text in ("Da due click", "Parallelo a un lato"):
-    check_true("...ne' il testo '{0}'".format(text),
-               text not in source)
-check_true("la misura della distanza in mappa invece resta",
-           "Misura distanza in mappa" in source)
-check_true("e l'azimut si scrive ancora a mano", "self.azimuth" in source)
+# v1.36.0: quelle due opzioni stavano su ForestPanel, il pannello che
+# rifaceva il rimboschimento in piccolo dentro il dock CAD. Il pannello non
+# c'e' piu': il modulo vive solo come percorso di step, e questo e' cio' che
+# va verificato adesso.
+print("\n== M5: il pannello rimboschimento duplicato non esiste piu' ==")
+import os as _os                                                # noqa: E402
+
+_gui_dir = _os.path.join(_os.path.dirname(_os.path.dirname(
+    _os.path.abspath(__file__))), "gui")
+check_true("gui/forest_panel.py e' stato rimosso",
+           not _os.path.exists(_os.path.join(_gui_dir, "forest_panel.py")))
+_dock_source = open(_os.path.join(_gui_dir, "dock.py"),
+                    encoding="utf-8").read()
+check_true("il dock CAD non lo importa ne' lo nomina",
+           "forest_panel" not in _dock_source
+           and "ForestPanel" not in _dock_source)
+check_true("...e non ha piu' una scheda Rimboschimento",
+           'tr("Rimboschimento")' not in _dock_source)
+_imported = True
+try:
+    from geocad_uav.gui import forest_panel                     # noqa: F401
+except ImportError:
+    _imported = False
+check_true("...e il modulo non e' nemmeno importabile", not _imported)
 
 
 print("\n" + "=" * 78)

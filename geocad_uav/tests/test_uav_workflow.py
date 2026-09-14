@@ -157,12 +157,19 @@ def owns(page, widget):
 # W1 - the six steps are there, and they show the planner's own controls
 # --------------------------------------------------------------------------
 print("\n== W1: sei step, con i comandi del pianificatore ==")
+check_true("all'avvio si e' nel modulo rimboschimento",
+           dock.module == wf.MODULE_FOREST)
+check_true("nessuno step di volo e' in quella lista",
+           not any(key in keys_in_list() for key, _l in wf.UAV_STEPS))
+dock.set_module(wf.MODULE_UAV)
 listed = keys_in_list()
 for key, label in wf.UAV_STEPS:
-    check_true("lo step '{0}' e' nella lista".format(label), key in listed)
+    check_true("lo step '{0}' e' nella lista del volo".format(label),
+               key in listed)
 check("gli step del volo sono sei", len(wf.UAV_STEPS), 6)
-check("...e la lista li porta dopo i quattordici del rimboschimento",
-      listed.index(wf.UAV_STEPS[0][0]), len(wf.STEPS))
+check("...e sono i soli nella lista", len(listed), len(wf.UAV_STEPS))
+check_true("...e nessuno step di rimboschimento ci compare",
+           not any(key in listed for key, _l in wf.STEPS))
 
 for key, widget, what in (
         (up.STEP_AREA, panel.extent, "il selettore dell'area"),
