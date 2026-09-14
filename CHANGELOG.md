@@ -5,6 +5,27 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.3 -- LICENSE nel pacchetto
+
+L'upload veniva rifiutato con: "Cannot find LICENSE in the plugin package.
+This file is required".
+
+- `geocad_uav/LICENSE`: il testo della GNU General Public License versione 2,
+  verbatim, preso da gnu.org e verificato (17.984 byte, sha256
+  edaef632...233f6) invece che riscritto a mano -- un documento legale non si
+  parafrasa. Lo stesso file alla radice del repository, dove GitHub lo legge.
+- La scelta della licenza non e' libera: il plugin usa PyQt e le API QGIS,
+  entrambe GPL, quindi una licenza GPL-compatibile e' una condizione, non una
+  preferenza. GPL v2 o successiva e' quella che il QGIS Plugin Builder genera
+  ed e' lo standard di fatto dei plugin QGIS.
+- L'avviso che la GPL chiede -- titolare, versione della licenza, assenza di
+  garanzia -- e' in testa a `geocad_uav/__init__.py`, con `__license__` e
+  `__copyright__` dichiarati.
+- Il pacchettizzatore ha `LICENSE` fra i file obbligatori e ne guarda il
+  contenuto: un file vuoto o troncato passa un controllo di esistenza e fa
+  fallire l'upload. Provato in entrambe le direzioni.
+- README: sezione sulla licenza, con il perche' del vincolo GPL.
+
 ## 2.2.2 -- Pubblicazione sul repository ufficiale QGIS
 
 L'upload veniva rifiutato con: "Please provide valid url link for the

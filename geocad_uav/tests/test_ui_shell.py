@@ -446,6 +446,30 @@ metadata = open(os.path.join(PACKAGE_DIR, "metadata.txt"),
                 encoding="utf-8").read()
 check_true("metadata declares the raster icon",
            "icon=icon.png" in metadata)
+
+# v2.2.3: the official plugin repository refuses a package with no LICENSE
+# ("Cannot find LICENSE in the plugin package"). It has to be inside the
+# packaged folder -- beside metadata.txt, not only at the repository root.
+_licence_path = os.path.join(PACKAGE_DIR, "LICENSE")
+check_true("the package carries a LICENSE file",
+           os.path.isfile(_licence_path))
+_licence = open(_licence_path, encoding="utf-8").read()
+print("        LICENSE: {0:,} characters".format(len(_licence)))
+check_true("...and it is a GNU General Public License",
+           "GNU GENERAL PUBLIC LICENSE" in _licence)
+check_true("...version 2, the one QGIS plugins are published under",
+           "Version 2, June 1991" in _licence)
+check_true("...the whole text, not a stub", len(_licence) > 17000)
+check_true("...unmodified: it still names the Free Software Foundation",
+           "Free Software Foundation" in _licence)
+check_true("the entry point carries the licence notice",
+           "GNU General Public License" in open(
+               os.path.join(PACKAGE_DIR, "__init__.py"),
+               encoding="utf-8").read())
+import geocad_uav as _package                                    # noqa: E402
+
+check_true("...and declares which licence",
+           _package.__license__ == "GPL-2.0-or-later")
 check_true("the icon file is in the package", os.path.isfile(
     os.path.join(PACKAGE_DIR, "icon.png")))
 

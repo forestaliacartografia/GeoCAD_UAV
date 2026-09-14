@@ -35,8 +35,11 @@ EXCLUDE_NAMES = {".DS_Store", "Thumbs.db"}
 OPTIONAL_DIRS = {"tests"}
 
 #: Files that must be present, or the archive is not installable.
+#: Files without which the package is refused -- by QGIS, by the official
+#: plugin repository ("Cannot find LICENSE in the plugin package"), or by
+#: this plugin's own loader. Checked before anything is zipped.
 REQUIRED = ["metadata.txt", "__init__.py", "plugin.py", "icon.png",
-            "icon.svg",
+            "icon.svg", "LICENSE",
             os.path.join("profiles", "cameras.json"),
             os.path.join("profiles", "drones.json")]
 
@@ -231,6 +234,22 @@ def check_metadata() -> "list[str]":
     for relative in REQUIRED:
         if not os.path.isfile(os.path.join(SOURCE, relative)):
             problems.append("missing required file: {0}".format(relative))
+
+    # An empty or truncated LICENSE passes a file-exists check and fails the
+    # upload, so the content is looked at as well.
+    licence_path = os.path.join(SOURCE, "LICENSE")
+    if os.path.isfile(licence_path):
+        with open(licence_path, "r", encoding="utf-8") as handle:
+            licence = handle.read()
+        if "GNU GENERAL PUBLIC LICENSE" not in licence:
+            problems.append(
+                "LICENSE does not contain a GPL licence text. QGIS plugins "
+                "link against PyQt and the QGIS API and have to be "
+                "GPL-compatible.")
+        elif len(licence) < 10000:
+            problems.append(
+                "LICENSE is only {0} characters: that is not the full "
+                "licence text.".format(len(licence)))
     return problems
 
 

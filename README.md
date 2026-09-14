@@ -146,4 +146,12 @@ Created by **Cap. Niccolò Marco Mancini — RGPBIO**.
 
 ## Licence
 
-See the repository for licensing terms.
+Released under the **GNU General Public License, version 2 or (at your
+option) any later version** — the full text is in [LICENSE](LICENSE), and a
+copy ships inside the plugin package as required by the QGIS plugin
+repository.
+
+QGIS plugins link against PyQt and the QGIS API, both GPL, so a
+GPL-compatible licence is not a preference here but a condition.
+
+Copyright (C) 2026 Cap. Niccolò Marco Mancini — RGPBIO.
