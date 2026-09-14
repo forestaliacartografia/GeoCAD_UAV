@@ -104,6 +104,9 @@ class UavPanel(QWidget):
         super().__init__(parent)
         self.iface = iface
         self._band = None
+        #: Called at the end of every recompute, so a host that mounts these
+        #: controls elsewhere can follow their state without polling.
+        self._recompute_listeners = []
         #: Point bands for the preview: waypoints and exposure stations.
         self._point_bands = {}
         #: The layers "Anteprima missione" put on the map, so a second
@@ -281,6 +284,18 @@ class UavPanel(QWidget):
             "non sa che ci sono."))
         safety_form.addRow(tr("Franco sulla vegetazione"),
                            self.vegetation_clearance)
+        # -1 keeps the drone profile's own reserve; anything else overrides
+        # it, and the override reaches the sub-mission split, not only the
+        # warning after it.
+        self.reserve_pct = self._spin(-1.0, -1.0, 80.0, " %")
+        self.reserve_pct.setToolTip(tr(
+            "Riserva di batteria, in percentuale dell'autonomia nominale. "
+            "-1 usa quella del profilo drone. Alzarla accorcia le tratte e "
+            "puo' aggiungere una batteria: e' quello che deve fare."))
+        safety_form.addRow(tr("Riserva batteria"), self.reserve_pct)
+        self.battery_note = QLabel()
+        self.battery_note.setWordWrap(True)
+        safety_form.addRow(self.battery_note)
         self.obstacle_combo = QgsMapLayerComboBox()
         self.obstacle_combo.setFilters(QgsMapLayerProxyModel.VectorLayer)
         self.obstacle_combo.setAllowEmptyLayer(True, tr("(nessun ostacolo)"))
@@ -338,6 +353,7 @@ class UavPanel(QWidget):
                 (self.sidelap, "valueChanged"),
                 (self.safety_margin, "valueChanged"),
                 (self.vegetation_clearance, "valueChanged"),
+                (self.reserve_pct, "valueChanged"),
                 (self.user_margin, "valueChanged"),
                 (self.corridor_width, "valueChanged"),
                 (self.pattern_combo, "currentIndexChanged"),
@@ -378,7 +394,10 @@ class UavPanel(QWidget):
             STEP_TERRAIN: [self.terrain_box],
             STEP_CAPTURE: [self.capture_box],
             STEP_LINES: [self.lines_box],
-            STEP_WAYPOINTS: [self.button_row, self.summary],
+            # The action row is NOT here: it belongs to every flight
+            # step, not to this one, and the dock mounts it once under the
+            # whole stack. See ContextDock._build_flight_actions.
+            STEP_WAYPOINTS: [self.summary],
             STEP_SAFETY: [self.safety_box],
             STEP_SIMULATION: [],
             STEP_VALIDATION: [self.quality_box],
@@ -474,6 +493,8 @@ class UavPanel(QWidget):
             altitude_mode=AltitudeMode.TERRAIN,
             safety_margin_m=self.safety_margin.value(),
             vegetation_clearance_m=self.vegetation_clearance.value(),
+            reserve_pct=(None if self.reserve_pct.value() < 0.0
+                         else self.reserve_pct.value()),
             user_margin_m=self.user_margin.value(),
             pattern=self.pattern_combo.currentData()
             or sv.PATTERN_BOUSTROPHEDON,
@@ -684,6 +705,43 @@ class UavPanel(QWidget):
 
     # -- readiness ---------------------------------------------------------
 
+    def on_recompute(self, callback) -> None:
+        """Follow every parameter change. The dock keeps its bar in step."""
+        self._recompute_listeners.append(callback)
+
+    def battery_plan(self):
+        """The endurance arithmetic for the route on hand, or None."""
+        if self.last_mission is None:
+            return None
+        return val.battery_plan(self.last_mission, self.build_params())
+
+    def battery_summary(self) -> str:
+        """One line about batteries, next to the control that sets them."""
+        plan = self.battery_plan()
+        if plan is None:
+            drone = self.current_drone()
+            reserve = (drone.rth_reserve_pct if self.reserve_pct.value() < 0.0
+                       else self.reserve_pct.value())
+            return tr(
+                "Autonomia nominale {0:.0f} min, riserva {1:g} %: {2:.1f} "
+                "min utili per batteria. Genera la rotta per il "
+                "conteggio.").format(
+                    drone.endurance_min, reserve,
+                    drone.endurance_min * (1.0 - reserve / 100.0))
+        return tr(
+            "{0:.1f} min di volo su {1:.1f} min utili per batteria "
+            "(nominali {2:.1f}, riserva {3:g} %): {4} batterie, margine "
+            "{5:+.1f} min, tempo operativo {6:.0f} min.").format(
+                plan["per_battery_s"] / 60.0, plan["usable_s"] / 60.0,
+                plan["nominal_s"] / 60.0, plan["reserve_pct"],
+                plan["batteries_needed"], plan["margin_s"] / 60.0,
+                plan["operative_s"] / 60.0)
+
+    def blocking_reason(self) -> str:
+        """Why Genera rotta is off, in one line, or empty when it is on."""
+        ready, reason = self.readiness()
+        return "" if ready else str(reason or "")
+
     def readiness(self):
         """``(can_generate, italian_reason)``. The reason is never empty."""
         if self.dem_layer() is None:
@@ -797,6 +855,7 @@ class UavPanel(QWidget):
             notes.append(reason)
 
         mission = self.last_mission
+        self.battery_note.setText(self.battery_summary())
         if mission is not None:
             stats = mission.stats
             rows.extend([
@@ -823,6 +882,11 @@ class UavPanel(QWidget):
             notes.extend(mission.warnings[:6])
 
         self.summary.setHtml(self._html(rows, notes))
+        for callback in self._recompute_listeners:
+            try:
+                callback()
+            except (GeoCadError, RuntimeError):
+                pass
 
     def _pair_height_and_gsd(self, geometry):
         """Write the derived end of the optical relation into its own box.
@@ -1142,6 +1206,7 @@ class UavPanel(QWidget):
         self.frontlap.setValue(app_settings.get("uav/frontlap") * 100.0)
         self.sidelap.setValue(app_settings.get("uav/sidelap") * 100.0)
         self.h_agl.setValue(app_settings.get("uav/h_agl_m"))
+        self.reserve_pct.setValue(app_settings.get("uav/reserve_pct"))
         self.recompute()
 
     def save_settings(self):
@@ -1150,6 +1215,7 @@ class UavPanel(QWidget):
         app_settings.set("uav/frontlap", self.frontlap.value() / 100.0)
         app_settings.set("uav/sidelap", self.sidelap.value() / 100.0)
         app_settings.set("uav/h_agl_m", self.h_agl.value())
+        app_settings.set("uav/reserve_pct", self.reserve_pct.value())
 
     def teardown(self):
         for signal, slot in self._connections:

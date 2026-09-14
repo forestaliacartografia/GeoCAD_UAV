@@ -56,7 +56,8 @@ def read_version() -> str:
 METADATA_KEYS = ("name", "qgisMinimumVersion", "qgisMaximumVersion",
                  "description", "about", "version", "author", "email",
                  "icon", "category", "tags", "experimental", "deprecated",
-                 "supportsQt6")
+                 "supportsQt6", "changelog", "homepage", "tracker",
+                 "repository")
 
 #: Keys the Plugin Manager renders inside the plugin's own entry. A release
 #: history there is history where a description belongs: it goes to
@@ -101,6 +102,32 @@ def parse_metadata(text: str):
     return values, problems
 
 
+#: Hosts that mean "we had to write something here". A metadata URL
+#: pointing at one of these is worse than an empty field: it tells whoever
+#: clicks it that there is a repository.
+PLACEHOLDER_HOSTS = ("example.invalid", "example.com", "example.org",
+                     "example.net", "localhost", "127.0.0.1", "changeme",
+                     "your-domain", "yourdomain", "TODO")
+
+
+def _placeholders_in(values):
+    """Complaints about metadata URLs that do not point anywhere real."""
+    problems = []
+    for key in ("homepage", "tracker", "repository"):
+        url = (values.get(key) or "").strip()
+        if not url:
+            continue
+        lowered = url.lower()
+        if any(host in lowered for host in PLACEHOLDER_HOSTS):
+            problems.append(
+                "{0}= is a placeholder ({1}): leave it empty until there is "
+                "a real URL.".format(key, url))
+        elif not lowered.startswith(("http://", "https://")):
+            problems.append(
+                "{0}= is not a URL ({1}).".format(key, url))
+    return problems
+
+
 def _history_in(values):
     """Complaints about version history found in the plugin's description.
 
@@ -110,10 +137,14 @@ def _history_in(values):
     import re                                                   # noqa: PLC0415
 
     problems = []
-    if values.get("changelog"):
+    # The key itself has to be there -- QGIS reads it and records the miss in
+    # error_details -- but it has to be empty. Content in it is the release
+    # history showing up on the plugin's public page.
+    if (values.get("changelog") or "").strip():
         problems.append(
-            "metadata.txt carries a changelog= key: the Plugin Manager shows "
-            "it inside the plugin's entry. Move the history to CHANGELOG.md.")
+            "metadata.txt carries a non-empty changelog=: the Plugin Manager "
+            "shows it inside the plugin's entry. Leave the key empty and put "
+            "the history in CHANGELOG.md.")
     for key in DESCRIPTION_KEYS:
         text = values.get(key) or ""
         versions = re.findall(r"\b\d+\.\d+\.\d+\b", text)
@@ -154,6 +185,7 @@ def check_metadata() -> "list[str]":
             "{1!r}".format(values.get("version", ""), found.group(1)))
 
     problems.extend(_history_in(values))
+    problems.extend(_placeholders_in(values))
 
     icon = values.get("icon", "").strip()
     if icon and not os.path.isfile(os.path.join(SOURCE, icon)):

@@ -3958,10 +3958,61 @@ class ContextDock(QDockWidget):
         state.uav = self.uav_panel
         state.uav_export = self.export_panel
         self.uav_panel.load_settings()
+        self.flight_actions = self._build_flight_actions()
+        self.uav_panel.on_recompute(self.refresh_flight_actions)
         self._wire_player()
 
-        self.setWidget(self.stack)
+        # The stack, and under it the flight action bar. The bar is shown
+        # for every flight step and hidden for every planting one, so the
+        # command that turns parameters into a route is never more than a
+        # glance away from the parameters.
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(4)
+        body_layout.addWidget(self.stack, 1)
+        body_layout.addWidget(self.flight_actions, 0)
+        self.flight_actions.setVisible(False)
+        self.setWidget(body)
         self.setMinimumWidth(240)
+
+    def _build_flight_actions(self):
+        """The three commands that act on the mission, always in reach."""
+        box = QGroupBox(tr("Missione"))
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 6)
+        row = QHBoxLayout()
+        # The planner's own buttons, reparented. One button, one slot, one
+        # planner: a second "Genera rotta" of the dock's own would be a
+        # second command that could disagree with the first.
+        self.generate_button = self.uav_panel.generate_button
+        self.generate_button.setToolTip(tr(
+            "Dai parametri alla rotta: strisciate, waypoint, punti di "
+            "scatto e impronte, sul DEM scelto. Rigenerando, la missione "
+            "precedente viene sostituita."))
+        self.preview_button = QPushButton(tr("Anteprima"))
+        self.preview_button.setToolTip(tr(
+            "Mette la missione sulla mappa come layer veri: strisciate, "
+            "waypoint, punti di scatto e impronte. Sono le stesse feature "
+            "che finiscono nell'export, non un disegno a parte."))
+        self.preview_button.setEnabled(False)
+        self.confirm_button = self.uav_panel.confirm_button
+        for widget in (self.generate_button, self.preview_button,
+                       self.confirm_button):
+            row.addWidget(widget)
+        layout.addLayout(row)
+        self.flight_hint = QLabel()
+        self.flight_hint.setWordWrap(True)
+        self.flight_hint.setStyleSheet("color:#8a6100")
+        layout.addWidget(self.flight_hint)
+        return box
+
+    def refresh_flight_actions(self, *_args) -> str:
+        """Enable the commands, and say why when the first one is off."""
+        reason = self.uav_panel.blocking_reason()
+        self.flight_hint.setText(reason)
+        self.flight_hint.setVisible(bool(reason))
+        return reason
 
     def _page(self, widgets):
         """A scrollable page holding the given widgets, added to the stack."""
@@ -4004,7 +4055,8 @@ class ContextDock(QDockWidget):
         self.stop_button = QPushButton(tr("Stop"))
         self.rate_combo = QComboBox()
         for rate in PLAYER_RATES:
-            self.rate_combo.addItem("{0}x".format(rate), rate)
+            self.rate_combo.addItem("{0:g}x".format(rate), rate)
+        self.rate_combo.setCurrentIndex(self.rate_combo.findData(1.0))
         for widget in (self.start_button, self.back_button, self.play_button,
                        self.pause_button, self.forward_button,
                        self.end_button, self.stop_button, self.rate_combo):
@@ -4028,14 +4080,6 @@ class ContextDock(QDockWidget):
 
         self.profile_chart = charts_mod.ElevationProfile()
         layout.addWidget(self.profile_chart)
-
-        self.preview_button = QPushButton(tr("Anteprima missione"))
-        self.preview_button.setToolTip(tr(
-            "Mette la missione sulla mappa come layer veri: strisciate, "
-            "waypoint, punti di scatto e impronte. Sono le stesse feature "
-            "che finiscono nell'export, non un disegno a parte."))
-        self.preview_button.setEnabled(False)
-        layout.addWidget(self.preview_button)
 
         self.footprint_button = QPushButton(tr("Mostra le impronte a terra"))
         self.footprint_button.setToolTip(tr(
@@ -4062,6 +4106,8 @@ class ContextDock(QDockWidget):
                 (self.uav_panel.generate_button.clicked,
                  self.refresh_player),
                 (self.uav_panel.generate_button.clicked,
+                 self.refresh_flight_actions),
+                (self.uav_panel.generate_button.clicked,
                  self.export_panel.refresh),
                 (self.uav_panel.generate_button.clicked,
                  self.state.refresh_status),
@@ -4080,7 +4126,8 @@ class ContextDock(QDockWidget):
                 "Nessuna rotta da simulare: premi Genera rotta nello step "
                 "Waypoint."))
             return False
-        if not self.player.play(mission):
+        if not self.player.play(mission,
+                                getattr(self.uav_panel, "last_aoi", None)):
             self.player_status.setText(self.player.message)
             return False
         self.refresh_player()
@@ -4170,10 +4217,13 @@ class ContextDock(QDockWidget):
                        self.forward_button):
             button.setEnabled(mission is not None)
         if mission is not None and mission is not self.player.mission:
-            # Loaded here rather than on Play, so the cursor and the profile
-            # answer about the route on screen before anyone presses
-            # anything.
-            self.player.load(mission)
+            # Loaded here rather than on Play, so the cursor, the profile and
+            # the coverage answer about the route on screen before anyone
+            # presses anything. The AOI comes with it: coverage is a
+            # fraction of an area, and without the area it is a number of
+            # square metres with nothing to divide by.
+            self.player.load(mission, getattr(self.uav_panel, "last_aoi",
+                                              None))
         samples = self.profile_chart.set_mission(mission)
         self.time_slider.setEnabled(mission is not None
                                     and self.player.duration_s > 0)
@@ -4234,6 +4284,10 @@ class ContextDock(QDockWidget):
         layer.setName(tr("Impronte a terra ({0} scatti)").format(
             layer.featureCount()))
         QgsProject.instance().addMapLayer(layer)
+        # The simulator can now say how much ground is under the shutter as
+        # the flight goes, which it could not while there were no footprints.
+        self.player.refresh_coverage(getattr(self.uav_panel, "last_aoi",
+                                             None))
         self.player_status.setText(tr(
             "{0} impronte disegnate: dove il colore si scurisce le foto si "
             "sovrappongono.").format(layer.featureCount()))
@@ -4333,6 +4387,11 @@ class ContextDock(QDockWidget):
             self.stack.setCurrentIndex(index)
         if tab is not None:
             self.scheme_panel.tabs.setCurrentIndex(tab)
+        # The mission commands belong to the flight and to nothing else.
+        on_flight = key in self.flight_pages
+        self.flight_actions.setVisible(on_flight)
+        if on_flight:
+            self.refresh_flight_actions()
         self.state.set_current_step(key)
 
 

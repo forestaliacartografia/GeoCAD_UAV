@@ -24,7 +24,8 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                                  QGroupBox, QHBoxLayout, QHeaderView, QLabel,
                                  QMessageBox, QPushButton, QScrollArea,
                                  QSpinBox, QTableWidget, QTableWidgetItem,
-                                 QTabWidget, QToolBar, QVBoxLayout, QWidget)
+                                 QTabWidget, QToolBar, QTreeWidget,
+                                 QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
@@ -178,6 +179,21 @@ class GeoCadDock(QDockWidget):
         self.cadastre_status.setWordWrap(True)
         cadastre_form.addRow(self.cadastre_status)
 
+        # COMUNE -> FOGLIO -> PARTICELLA. The reading a cadastral answer
+        # actually has, navigable: pick a comune and its parcels light up,
+        # pick a sheet and that sheet's do, pick a parcel and it is framed.
+        cadastre_form.addRow(QLabel(tr("Comune / Foglio / Particella")))
+        self.cadastre_tree = QTreeWidget()
+        self.cadastre_tree.setColumnCount(4)
+        self.cadastre_tree.setHeaderLabels(
+            [tr("Elemento"), tr("Sup. catastale"), tr("Sup. interessata"),
+             tr("% part. / % prog.")])
+        self.cadastre_tree.setMaximumHeight(200)
+        self.cadastre_tree.setToolTip(tr(
+            "Scegli un Comune, un foglio o una particella: la selezione si "
+            "riflette sulla mappa."))
+        cadastre_form.addRow(self.cadastre_tree)
+
         # RIEPILOGO PER COMUNE. A CAD shape can lie across two comuni, and
         # one of them being named in a label is how the other gets lost.
         cadastre_form.addRow(QLabel(tr("Riepilogo per Comune")))
@@ -223,8 +239,17 @@ class GeoCadDock(QDockWidget):
         self.cadastre_show_button.setEnabled(False)
         self.cadastre_details_button = QPushButton(tr("Dettagli"))
         self.cadastre_details_button.setEnabled(False)
+        self.cadastre_export_button = QPushButton(tr("Esporta"))
+        self.cadastre_export_button.setToolTip(tr(
+            "Scrive un CSV con una riga per particella: Comune, Belfiore, "
+            "foglio, particella, superficie catastale, superficie "
+            "interessata, percentuale sulla particella, percentuale sul "
+            "progetto e geometrie. Niente di quello che e' stato misurato "
+            "resta dentro."))
+        self.cadastre_export_button.setEnabled(False)
         for button in (self.cadastre_button, self.cadastre_show_button,
-                       self.cadastre_details_button):
+                       self.cadastre_details_button,
+                       self.cadastre_export_button):
             cadastre_buttons.addWidget(button)
         cadastre_form.addRow(cadastre_buttons)
 
@@ -333,6 +358,10 @@ class GeoCadDock(QDockWidget):
                 (self.cadastre_button, "clicked", self.query_cadastre),
                 (self.cadastre_show_button, "clicked", self.show_parcels),
                 (self.cadastre_details_button, "clicked", self.show_details),
+                (self.cadastre_export_button, "clicked",
+                 self.export_cadastre),
+                (self.cadastre_tree, "itemSelectionChanged",
+                 self.on_tree_picked),
                 (self.comune_table, "itemSelectionChanged",
                  self.on_comune_picked),
                 (self.parcel_table, "itemSelectionChanged",
@@ -593,6 +622,7 @@ class GeoCadDock(QDockWidget):
         self.cadastre_status.setText(tr("Nessuna geometria disegnata."))
         self.fill_cadastre_tables(None)
         self.cadastre_button.setEnabled(False)
+        self.cadastre_export_button.setEnabled(False)
 
     # -- the cadastre, on demand -------------------------------------------
 
@@ -702,10 +732,103 @@ class GeoCadDock(QDockWidget):
                     item.setData(Qt.ItemDataRole.UserRole,
                                  row.get("belfiore", ""))
                 self.comune_table.setItem(index, column, item)
+        self.fill_cadastre_tree(result)
         has_rows = bool(rows)
         self.cadastre_show_button.setEnabled(has_rows)
         self.cadastre_details_button.setEnabled(has_rows)
+        self.cadastre_export_button.setEnabled(has_rows)
         return len(rows)
+
+    def fill_cadastre_tree(self, result) -> int:
+        """Comune -> Foglio -> Particella. Returns the number of leaves.
+
+        Every node carries the row index of the shares beneath it, so
+        selecting one is a selection on the map without a second lookup.
+        """
+        self.cadastre_tree.clear()
+        if result is None or not result.shares:
+            return 0
+        position = {id(share): index
+                    for index, share in enumerate(result.shares)}
+        leaves = 0
+        for code, comune, group in result.comuni():
+            name = comune.label() if comune is not None else code
+            taken = sum(s.intersection_area_m2 for s in group)
+            cadastral = sum(s.parcel_area_m2 for s in group)
+            project = sum(s.percent_of_project for s in group)
+            node = QTreeWidgetItem([
+                "{0} [{1}]".format(name, code),
+                "{0:,.0f} m2".format(cadastral),
+                "{0:,.0f} m2".format(taken),
+                "{0:.2f} / {1:.2f}".format(
+                    100.0 * taken / cadastral if cadastral else 0.0, project)])
+            node.setData(0, Qt.ItemDataRole.UserRole,
+                         [position[id(s)] for s in group])
+            self.cadastre_tree.addTopLevelItem(node)
+            for foglio, shares in result.fogli(code):
+                sheet_taken = sum(s.intersection_area_m2 for s in shares)
+                sheet_cad = sum(s.parcel_area_m2 for s in shares)
+                sheet = QTreeWidgetItem([
+                    tr("Foglio {0}").format(foglio or "-"),
+                    "{0:,.0f} m2".format(sheet_cad),
+                    "{0:,.0f} m2".format(sheet_taken),
+                    "{0:.2f} / {1:.2f}".format(
+                        100.0 * sheet_taken / sheet_cad if sheet_cad else 0.0,
+                        sum(s.percent_of_project for s in shares))])
+                sheet.setData(0, Qt.ItemDataRole.UserRole,
+                              [position[id(s)] for s in shares])
+                node.addChild(sheet)
+                for share in shares:
+                    leaf = QTreeWidgetItem([
+                        tr("Particella {0}").format(
+                            share.parcel.particella or "-"),
+                        "{0:,.0f} m2".format(share.parcel_area_m2),
+                        "{0:,.0f} m2".format(share.intersection_area_m2),
+                        "{0:.2f} / {1:.2f}".format(
+                            share.percent_of_parcel,
+                            share.percent_of_project)])
+                    leaf.setData(0, Qt.ItemDataRole.UserRole,
+                                 [position[id(share)]])
+                    sheet.addChild(leaf)
+                    leaves += 1
+        self.cadastre_tree.expandToDepth(0)
+        return leaves
+
+    def on_tree_picked(self, *_args) -> int:
+        """Whatever level was chosen, its parcels on the map."""
+        items = self.cadastre_tree.selectedItems()
+        if not items or self.cadastral_result() is None:
+            return 0
+        rows = items[0].data(0, Qt.ItemDataRole.UserRole) or []
+        if not rows:
+            return 0
+        return self.layer_service().select_rows("parcels", list(rows))
+
+    def export_cadastre(self, path: str = "") -> str:
+        """Write every row the result holds. Returns the path written."""
+        result = self.cadastral_result()
+        if result is None or not result.shares:
+            return ""
+        if not path:
+            from qgis.PyQt.QtWidgets import QFileDialog          # noqa: PLC0415
+
+            path, _filter = QFileDialog.getSaveFileName(
+                self, tr("Esporta i dati catastali"), "catasto.csv", "*.csv")
+        if not path:
+            return ""
+        import csv                                              # noqa: PLC0415
+        import io as _io                                        # noqa: PLC0415
+
+        rows = result.export_rows()
+        with _io.open(path, "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=list(result.EXPORT_COLUMNS))
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        self.cadastre_status.setText(tr(
+            "Scritte {0} particelle in {1}").format(len(rows), path))
+        return path
 
     def cadastral_result(self):
         return getattr(self._last_commit, "result", None)

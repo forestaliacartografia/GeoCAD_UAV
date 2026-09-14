@@ -316,6 +316,59 @@ def _check_photogrammetry(report, mission: Mission, params):
                            100 * float(gsd.min()), 100 * float(gsd.max())))
 
 
+def battery_plan(mission: Mission, params) -> dict:
+    """What the mission asks of the batteries, and what is left over.
+
+    Every figure separately, because "the mission is shorter than the
+    endurance" is not a safety statement: the endurance that matters is the
+    nominal one minus the reserve, and the time on site includes the swaps.
+    """
+    from .mission import endurance_budget_s                      # noqa: PLC0415
+
+    drone = params.drone
+    nominal_s = drone.endurance_min * 60.0
+    usable_s = endurance_budget_s(params)
+    reserve_pct = (drone.rth_reserve_pct
+                   if getattr(params, "reserve_pct", None) is None
+                   else float(params.reserve_pct))
+    flight_s = float(mission.stats.flight_time_s)
+    batteries = int(mission.stats.n_batteries or 1)
+    per_battery_s = flight_s / batteries if batteries else flight_s
+    needed = (int(math.ceil(flight_s / usable_s)) if usable_s > 0 else 0)
+    return {
+        "nominal_s": nominal_s,
+        "reserve_pct": reserve_pct,
+        "reserve_s": nominal_s - usable_s,
+        "usable_s": usable_s,
+        "flight_s": flight_s,
+        "batteries_planned": batteries,
+        "batteries_needed": max(needed, batteries),
+        "per_battery_s": per_battery_s,
+        "margin_s": usable_s - per_battery_s,
+        "fits": per_battery_s <= usable_s + 1e-6,
+        # Time on site: flying, plus a battery change between legs.
+        "operative_s": flight_s + max(0, batteries - 1) * K.BATTERY_SWAP_S,
+    }
+
+
+def describe_battery_plan(plan: dict) -> "list[str]":
+    """The plan as lines, for the panel and for the report."""
+    return [
+        "AUTONOMIA",
+        "  Autonomia nominale:   {0:.1f} min".format(plan["nominal_s"] / 60.0),
+        "  Riserva:              {0:g} % ({1:.1f} min)".format(
+            plan["reserve_pct"], plan["reserve_s"] / 60.0),
+        "  Utile per batteria:   {0:.1f} min".format(plan["usable_s"] / 60.0),
+        "  Volo per batteria:    {0:.1f} min".format(
+            plan["per_battery_s"] / 60.0),
+        "  Margine:              {0:+.1f} min".format(plan["margin_s"] / 60.0),
+        "  Batterie previste:    {0}".format(plan["batteries_planned"]),
+        "  Batterie necessarie:  {0}".format(plan["batteries_needed"]),
+        "  Tempo operativo:      {0:.1f} min (voli e cambi batteria)".format(
+            plan["operative_s"] / 60.0),
+    ]
+
+
 def _check_endurance(report, mission: Mission, params):
     if params is None:
         return
@@ -335,19 +388,26 @@ def _check_endurance(report, mission: Mission, params):
                    SEVERITY_OK,
                    value="{0} su {1}".format(worst, drone.waypoint_limit))
 
-    budget = drone.usable_endurance_s
-    per_battery = (mission.stats.flight_time_s / mission.stats.n_batteries
-                   if mission.stats.n_batteries else mission.stats.flight_time_s)
-    if per_battery > budget + 1e-6:
+    plan = battery_plan(mission, params)
+    if not plan["fits"]:
         report.add("endurance", "Autonomia", SEVERITY_WARNING,
                    "Una sotto-missione dura {0:.1f} min, oltre i {1:.1f} min "
-                   "utili con riserva RTH del {2:g} %.".format(
-                       per_battery / 60.0, budget / 60.0, drone.rth_reserve_pct),
-                   value="{0:.1f} min".format(per_battery / 60.0))
+                   "utili con riserva del {2:g} % sui {3:.1f} min "
+                   "nominali.".format(
+                       plan["per_battery_s"] / 60.0, plan["usable_s"] / 60.0,
+                       plan["reserve_pct"], plan["nominal_s"] / 60.0),
+                   value="{0:.1f} min".format(plan["per_battery_s"] / 60.0))
     else:
         report.add("endurance", "Autonomia", SEVERITY_OK,
+                   "Riserva {0:g} % gia' tolta; margine {1:+.1f} min per "
+                   "batteria.".format(plan["reserve_pct"],
+                                      plan["margin_s"] / 60.0),
                    value="{0:.1f} / {1:.1f} min per batteria".format(
-                       per_battery / 60.0, budget / 60.0))
+                       plan["per_battery_s"] / 60.0, plan["usable_s"] / 60.0))
+    report.add("batteries", "Batterie", SEVERITY_OK,
+               "Tempo operativo stimato {0:.1f} min, cambi batteria "
+               "compresi.".format(plan["operative_s"] / 60.0),
+               value="{0}".format(plan["batteries_needed"]))
 
 
 def _check_terrain(report, mission: Mission, params, terrain):

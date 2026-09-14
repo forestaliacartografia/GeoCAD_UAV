@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
 
 class PhotogrammetryError(ValueError):
     """Raised when the requested survey geometry is physically impossible."""
@@ -374,6 +376,131 @@ def climb_speed_limit(delta_z_m: float, horizontal_m: float,
 # --------------------------------------------------------------------------
 # Exterior orientation
 # --------------------------------------------------------------------------
+
+class CoverageProgress:
+    """Ground already under the shutter, updated exposure by exposure.
+
+    Built from the mission's own draped footprints and the AOI they were
+    planned over. ``add`` unions one more footprint into what is covered;
+    ``set_taken`` rebuilds the whole union, which is what a seek needs. Every
+    area is measured in the mission's CRS, which is the metric one the
+    planner worked in.
+    """
+
+    def __init__(self, aoi_geom, footprints):
+        from qgis.core import QgsGeometry, QgsPointXY            # noqa: PLC0415
+
+        self._aoi = None if aoi_geom is None else QgsGeometry(aoi_geom)
+        self._aoi_m2 = float(self._aoi.area()) if self._aoi is not None else 0.0
+        self._polys = []
+        for ring in (footprints or []):
+            points = [QgsPointXY(float(p[0]), float(p[1]))
+                      for p in np.asarray(ring, dtype=float)]
+            if len(points) < 4:
+                self._polys.append(None)
+                continue
+            geometry = QgsGeometry.fromPolygonXY([points])
+            self._polys.append(None if geometry.isEmpty() else geometry)
+        self._covered = None
+        self._taken = set()
+
+    # -- what it holds -----------------------------------------------------
+
+    @property
+    def aoi_area_m2(self) -> float:
+        return self._aoi_m2
+
+    @property
+    def n_footprints(self) -> int:
+        return len(self._polys)
+
+    @property
+    def taken(self) -> int:
+        return len(self._taken)
+
+    @property
+    def covered_area_m2(self) -> float:
+        """Footprint union clipped to the AOI: ground of the AOI seen."""
+        clipped = self.covered_geometry()
+        return 0.0 if clipped is None else float(clipped.area())
+
+    @property
+    def percent(self) -> float:
+        if self._aoi_m2 <= 0.0:
+            return 0.0
+        return min(100.0, 100.0 * self.covered_area_m2 / self._aoi_m2)
+
+    @property
+    def remaining_area_m2(self) -> float:
+        return max(0.0, self._aoi_m2 - self.covered_area_m2)
+
+    def covered_geometry(self):
+        """The part of the AOI already imaged, or None."""
+        if self._covered is None or self._aoi is None:
+            return self._covered
+        clipped = self._covered.intersection(self._aoi)
+        return None if clipped is None or clipped.isEmpty() else clipped
+
+    def remaining_geometry(self):
+        """The part of the AOI not yet imaged, or None when there is none."""
+        from qgis.core import QgsGeometry                        # noqa: PLC0415
+
+        if self._aoi is None:
+            return None
+        covered = self.covered_geometry()
+        if covered is None:
+            return QgsGeometry(self._aoi)
+        rest = self._aoi.difference(covered)
+        return None if rest is None or rest.isEmpty() else rest
+
+    # -- driving it --------------------------------------------------------
+
+    def reset(self) -> None:
+        self._covered = None
+        self._taken = set()
+
+    def add(self, index: int) -> float:
+        """One more exposure. Returns the covered area after it."""
+        index = int(index)
+        if index in self._taken or not (0 <= index < len(self._polys)):
+            return self.covered_area_m2
+        polygon = self._polys[index]
+        self._taken.add(index)
+        if polygon is None:
+            return self.covered_area_m2
+        from qgis.core import QgsGeometry                        # noqa: PLC0415
+
+        if self._covered is None:
+            self._covered = QgsGeometry(polygon)
+        else:
+            merged = self._covered.combine(polygon)
+            if merged is not None and not merged.isEmpty():
+                self._covered = merged
+        return self.covered_area_m2
+
+    def set_taken(self, indices) -> float:
+        """Rebuild from a set of exposures. What a seek needs."""
+        from qgis.core import QgsGeometry                        # noqa: PLC0415
+
+        wanted = {int(i) for i in indices
+                  if 0 <= int(i) < len(self._polys)}
+        self._taken = wanted
+        polygons = [self._polys[i] for i in sorted(wanted)
+                    if self._polys[i] is not None]
+        if not polygons:
+            self._covered = None
+        elif len(polygons) == 1:
+            self._covered = QgsGeometry(polygons[0])
+        else:
+            self._covered = QgsGeometry.unaryUnion(polygons)
+        return self.covered_area_m2
+
+    def describe(self) -> str:
+        return ("Copertura {0:.1f} % - {1:,.0f} m2 su {2:,.0f} m2, "
+                "{3:,.0f} m2 ancora scoperti ({4}/{5} scatti)".format(
+                    self.percent, self.covered_area_m2, self.aoi_area_m2,
+                    self.remaining_area_m2, self.taken, self.n_footprints))
+
 
 def opk_from_yaw_pitch(azimuth_deg: float, gimbal_pitch_deg: float,
                        roll_deg: float = 0.0):

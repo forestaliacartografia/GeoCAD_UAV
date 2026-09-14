@@ -21,6 +21,8 @@ import math
 import os
 import sys
 import tempfile
+from time import sleep as _sleep
+from time import time as _time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
@@ -468,17 +470,10 @@ task = cs.area_task(INSIDE_A, CRS6706, ANSWERS.append,
                     transport=recorded)
 check_true("il task e' stato creato e accetta l'annullamento",
            task is not None and task.canCancel())
-deadline = 0
-while not ANSWERS and deadline < 200:
+_deadline = _time() + 30.0
+while not ANSWERS and _time() < _deadline:
     QGS.processEvents()
-    deadline += 1
-if not ANSWERS:
-    from time import sleep
-    for _ in range(100):
-        QGS.processEvents()
-        sleep(0.05)
-        if ANSWERS:
-            break
+    _sleep(0.01)
 if ANSWERS:
     answered = ANSWERS[0]
     print("        il task ha risposto: {0}, {1} particelle".format(
@@ -494,10 +489,13 @@ else:
 failing_answers = []
 failing = cs.area_task(INSIDE_A, CRS6706, failing_answers.append,
                        transport=dead_network)
-deadline = 0
-while not failing_answers and deadline < 200:
+# Waited on the clock, not on a spin count: a QgsTask runs on a thread pool
+# and a dead network is retried once per tile before it gives up, so how
+# many processEvents() turns that takes is not something to guess at.
+_deadline = _time() + 30.0
+while not failing_answers and _time() < _deadline:
     QGS.processEvents()
-    deadline += 1
+    _sleep(0.01)
 if failing_answers:
     check_text("un errore di rete diventa uno stato, non un'eccezione",
                failing_answers[0].status, cs.STATUS_ERROR)

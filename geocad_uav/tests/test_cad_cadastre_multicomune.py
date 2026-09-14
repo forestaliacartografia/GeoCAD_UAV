@@ -31,6 +31,7 @@ NEEDS QGIS with widgets. Run with:
 import gc
 import os
 import sys
+import tempfile
 from time import sleep, time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
@@ -57,6 +58,7 @@ SKIPS = []
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "fixtures")
 CRS6706 = QgsCoordinateReferenceSystem("EPSG:6706")
+TMP = tempfile.mkdtemp(prefix="geocad_cadcsv_")
 PERUGIA, ROMA = "G478", "H501"
 
 
@@ -352,6 +354,84 @@ details = panel.show_details()
 check_true("i dettagli elencano entrambi i Comuni",
            details is not None and "PERUGIA" in details.upper()
            and "ROMA" in details.upper())
+
+print("\n-- Comune / Foglio / Particella, navigabile --")
+tree = panel.cadastre_tree
+check("un nodo per Comune", tree.topLevelItemCount(), 2)
+labels = [tree.topLevelItem(i).text(0) for i in range(2)]
+print("        radici: {0}".format(labels))
+check_true("...con nome e codice Belfiore",
+           all("[" in text and "]" in text for text in labels))
+first = tree.topLevelItem(0)
+check("il primo Comune ha i suoi fogli", first.childCount(), 1)
+sheet = first.child(0)
+print("        {0} -> {1} -> {2}".format(
+    first.text(0), sheet.text(0), sheet.child(0).text(0)))
+check_true("il foglio si chiama foglio", sheet.text(0).startswith("Foglio"))
+check("...e porta le sue particelle", sheet.childCount(), 1)
+leaf = sheet.child(0)
+check_true("la foglia e' una particella",
+           leaf.text(0).startswith("Particella"))
+check_true("ogni livello porta le due superfici",
+           all("m2" in node.text(1) and "m2" in node.text(2)
+               for node in (first, sheet, leaf)))
+check_true("...e le due percentuali, separate da uno slash",
+           all("/" in node.text(3) for node in (first, sheet, leaf)))
+result_tree = panel.cadastral_result()
+share = result_tree.shares[
+    leaf.data(0, Qt.ItemDataRole.UserRole)[0]]
+check("la percentuale sulla particella e' quella del modello",
+      float(leaf.text(3).split("/")[0]), share.percent_of_parcel, 0.01)
+check("...e quella sul progetto pure",
+      float(leaf.text(3).split("/")[1]), share.percent_of_project, 0.01)
+
+tree.setCurrentItem(first)
+picked_comune = panel.on_tree_picked()
+print("        scelto il Comune: {0} particelle".format(picked_comune))
+check("scegliere un Comune evidenzia le sue particelle", picked_comune,
+      len(result_tree.shares_of(share.parcel.comune_code)))
+tree.setCurrentItem(leaf)
+picked_leaf = panel.on_tree_picked()
+check("scegliere una particella ne evidenzia una", picked_leaf, 1)
+check_true("...ed e' quella",
+           {f["particella"] for f in parcels.selectedFeatures()}
+           == {share.parcel.particella})
+
+print("\n-- l'export, che non perde niente --")
+export_path = os.path.join(TMP, "catasto_cad.csv")
+written_csv = panel.export_cadastre(export_path)
+check_true("il file e' stato scritto",
+           bool(written_csv) and os.path.exists(written_csv))
+import csv as _csv                                              # noqa: E402
+
+with open(written_csv, encoding="utf-8-sig", newline="") as handle:
+    exported = list(_csv.DictReader(handle))
+print("        {0} righe, {1} colonne".format(
+    len(exported), len(exported[0]) if exported else 0))
+check("una riga per particella", len(exported), result_tree.n_parcels)
+check("...e tutte le colonne del modello", len(exported[0]),
+      len(result_tree.EXPORT_COLUMNS))
+check_true("le due percentuali sono nell'export, distinte",
+           all(row["percentuale_particella"] != row["percentuale_progetto"]
+               for row in exported))
+check_true("...e le due superfici sono due colonne, entrambe misurate",
+           all(float(row["superficie_catastale_m2"]) > 0.0
+               and float(row["superficie_interessata_m2"]) > 0.0
+               and float(row["superficie_interessata_m2"])
+               <= float(row["superficie_catastale_m2"]) + 0.01
+               for row in exported))
+check_true("la figura contiene entrambe le particelle, e l'export lo dice",
+           all(abs(float(row["percentuale_particella"]) - 100.0) < 0.01
+               for row in exported))
+check_true("...mentre nessuna e' tutto il progetto",
+           all(float(row["percentuale_progetto"]) < 100.0
+               for row in exported))
+check_true("i Comuni esportati sono quelli trovati",
+           {row["belfiore"] for row in exported} == {PERUGIA, ROMA})
+check_true("ogni riga porta la geometria della particella",
+           all(row["geometria_wkt"] for row in exported))
+check_true("...e quella dell'intersezione",
+           all(row["intersezione_wkt"] for row in exported))
 
 print("\n-- e un errore resta un errore --")
 

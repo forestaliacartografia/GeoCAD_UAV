@@ -112,6 +112,11 @@ TURN_PENALTY_S = 4.0
 #: Take-off + landing overhead per sub-mission.
 TAKEOFF_LANDING_S = 60.0
 
+#: Ground time to change a battery between two legs: landing to take-off
+#: with the aircraft in hand. Counted in the time on site, never in the
+#: flight time, which is what the endurance is spent on.
+BATTERY_SWAP_S = 180.0
+
 
 # --------------------------------------------------------------------------
 # Performance

@@ -193,6 +193,10 @@ class ElevationProfile(QWidget):
         self.ground = np.empty(0)
         self.flight = np.empty(0)
         self.h_agl_m = 0.0
+        #: Waypoints the planner flagged as having no DEM under them, and
+        #: profile samples dropped for the same reason. Never interpolated.
+        self._dem_gaps = 0
+        self._dropped = 0
         self.cursor_s = None
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
@@ -208,9 +212,20 @@ class ElevationProfile(QWidget):
         if mission is None:
             self.s = self.ground = self.flight = np.empty(0)
             self.h_agl_m = 0.0
+            self._dem_gaps = self._dropped = 0
         else:
+            rows = getattr(mission, "profile", None) or []
             self.s, self.ground, self.flight = profile_series(mission)
             self.h_agl_m = float(getattr(mission, "h_agl_m", 0.0) or 0.0)
+            self._dem_gaps = sum(1 for wp in getattr(mission, "waypoints", [])
+                                 if getattr(wp, "dem_gap", False))
+            # Counted on the rows themselves, not by subtracting sizes:
+            # profile_series both drops holes and down-samples, and a
+            # down-sampled profile has not lost any terrain.
+            self._dropped = sum(
+                1 for r in rows
+                if not (np.isfinite(r.get("z_ground", np.nan))
+                        and np.isfinite(r.get("z_flight", np.nan))))
         self.cursor_s = None
         self.setToolTip(self.describe())
         self.update()
@@ -235,15 +250,54 @@ class ElevationProfile(QWidget):
             return np.empty(0)
         return self.flight - self.ground
 
+    def statistics(self) -> dict:
+        """The numbers the profile is read for, AGL and AMSL kept apart.
+
+        ``dem_gaps`` counts the waypoints the planner flagged as having no
+        DEM under them, and ``dropped`` the profile samples with no terrain
+        height: neither is interpolated into a height, here or anywhere.
+        """
+        if not self.s.size:
+            return {"samples": 0, "length_m": 0.0,
+                    "ground_min_m": float("nan"), "ground_max_m": float("nan"),
+                    "flight_min_m": float("nan"), "flight_max_m": float("nan"),
+                    "agl_min_m": float("nan"), "agl_max_m": float("nan"),
+                    "relief_m": 0.0, "agl_spread_m": 0.0,
+                    "dem_gaps": 0, "dropped": 0}
+        agl = self.agl()
+        return {
+            "samples": int(self.s.size),
+            "length_m": self.length_m,
+            "ground_min_m": float(self.ground.min()),
+            "ground_max_m": float(self.ground.max()),
+            "flight_min_m": float(self.flight.min()),
+            "flight_max_m": float(self.flight.max()),
+            "agl_min_m": float(agl.min()),
+            "agl_max_m": float(agl.max()),
+            "relief_m": float(self.ground.max() - self.ground.min()),
+            "agl_spread_m": float(agl.max() - agl.min()),
+            "dem_gaps": int(self._dem_gaps),
+            "dropped": int(self._dropped),
+        }
+
     def describe(self) -> str:
         if not self.s.size:
             return "Nessun profilo: genera prima la rotta."
-        agl = self.agl()
-        return ("Percorso {0:,.0f} m | terreno da {1:,.0f} a {2:,.0f} m "
-                "s.l.m. | AGL da {3:.1f} a {4:.1f} m".format(
-                    self.length_m, float(self.ground.min()),
-                    float(self.ground.max()), float(agl.min()),
-                    float(agl.max())))
+        stats = self.statistics()
+        text = ("Percorso {0:,.0f} m | terreno (AMSL) da {1:,.0f} a "
+                "{2:,.0f} m, dislivello {3:,.1f} m | volo (AMSL) da "
+                "{4:,.0f} a {5:,.0f} m | AGL da {6:.1f} a {7:.1f} m "
+                "(escursione {8:.1f} m)".format(
+                    stats["length_m"], stats["ground_min_m"],
+                    stats["ground_max_m"], stats["relief_m"],
+                    stats["flight_min_m"], stats["flight_max_m"],
+                    stats["agl_min_m"], stats["agl_max_m"],
+                    stats["agl_spread_m"]))
+        if stats["dem_gaps"] or stats["dropped"]:
+            text += (" | DEM assente: {0} waypoint, {1} campioni scartati "
+                     "(non interpolati)".format(stats["dem_gaps"],
+                                                stats["dropped"]))
+        return text
 
     # -- painting ----------------------------------------------------------
 

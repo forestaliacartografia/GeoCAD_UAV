@@ -95,6 +95,25 @@ FULL_COVERAGE = 0.999
 
 DEFAULT_TIMEOUT_S = 20.0
 
+#: Largest side, in degrees, of a bounding box sent to the service in one
+#: request. Overridden by the ``cadastre/tile_span_deg`` setting. About 2 km
+#: at Italian latitudes: not a guess about parcel density, just a first cut
+#: small enough that most projects need one request and big ones start
+#: divided instead of starting truncated.
+DEFAULT_TILE_SPAN_DEG = 0.02
+
+#: How many times a truncated tile may be quartered before the answer is
+#: reported partial. Four levels turn one tile into at most 256.
+MAX_TILE_DEPTH = 4
+
+#: How many tiles one query may send in total. A box drawn round a region
+#: is a refusal, not a download.
+MAX_TILES = 400
+
+#: Attempts per tile. A government WFS drops a connection now and then, and
+#: one retry costs a second and saves a whole query.
+TILE_ATTEMPTS = 2
+
 
 class CadastreError(GeoCadError):
     """The cadastral service could not answer."""
@@ -268,6 +287,176 @@ def service_bbox(geometry, source_crs, margin_deg: float = 0.0):
     margin = abs(float(margin_deg))
     return (box.yMinimum() - margin, box.xMinimum() - margin,
             box.yMaximum() + margin, box.xMaximum() + margin)
+
+
+def tile_span_deg() -> float:
+    """The configured first-cut tile side, or the default."""
+    try:
+        from ..settings import settings as _settings            # noqa: PLC0415
+
+        value = float(_settings.get("cadastre/tile_span_deg") or 0.0)
+    except Exception:                                           # noqa: BLE001
+        value = 0.0
+    return value if value > 0.0 else DEFAULT_TILE_SPAN_DEG
+
+
+def split_bbox(box, max_span_deg: float) -> list:
+    """``(south, west, north, east)`` cut into tiles no wider than the span.
+
+    Returns the box itself when it already fits. The grid is regular and
+    covers the box exactly: tiles share edges, and a parcel on an edge comes
+    back from both -- which is what the deduplication is for.
+    """
+    south, west, north, east = (float(v) for v in box)
+    span = float(max_span_deg)
+    if span <= 0.0:
+        return [(south, west, north, east)]
+    # The epsilon matters: 0.10 / 0.05 is 2.0000000000000004 in binary
+    # floating point, and ceil() of that is three rows where two do. Half a
+    # million extra requests a year start here.
+    rows = max(1, int(math.ceil((north - south) / span - 1e-9)))
+    cols = max(1, int(math.ceil((east - west) / span - 1e-9)))
+    if rows * cols <= 1:
+        return [(south, west, north, east)]
+    dy = (north - south) / rows
+    dx = (east - west) / cols
+    return [(south + r * dy, west + c * dx,
+             south + (r + 1) * dy, west + (c + 1) * dx)
+            for r in range(rows) for c in range(cols)]
+
+
+def quarter_bbox(box) -> list:
+    """One box into four. What a truncated answer is answered with."""
+    south, west, north, east = (float(v) for v in box)
+    mid_y = 0.5 * (south + north)
+    mid_x = 0.5 * (west + east)
+    return [(south, west, mid_y, mid_x), (south, mid_x, mid_y, east),
+            (mid_y, west, north, mid_x), (mid_y, mid_x, north, east)]
+
+
+def parcel_key(parcel, geometry=None):
+    """What makes two parcels the same parcel.
+
+    The national reference when the service published one -- it is unique
+    and it is what the register is keyed on. Failing that, the triple an
+    operator reads. Failing even that, the geometry itself, so a feature
+    with no identity at all is still not counted twice.
+    """
+    reference = (parcel.national_reference or "").strip()
+    if reference:
+        return ("ref", reference)
+    triple = (parcel.comune_code or "", parcel.foglio or "",
+              parcel.particella or "")
+    if any(triple):
+        return ("cfp",) + triple
+    if geometry is not None and not geometry.isEmpty():
+        return ("wkb", geometry.asWkb().toHex().data().decode("ascii"))
+    return ("none", id(parcel))
+
+
+def dedup_pairs(pairs) -> list:
+    """Parcel/geometry pairs with each parcel once, in the order seen.
+
+    A tile query returns whole geometries, not clipped ones, so a parcel on
+    a tile boundary arrives twice identically. Where two entries do differ,
+    the one with the larger geometry is kept: a truncated ring is a worse
+    answer than a whole one.
+    """
+    out = {}
+    order = []
+    for parcel, geometry in pairs:
+        key = parcel_key(parcel, geometry)
+        if key not in out:
+            out[key] = (parcel, geometry)
+            order.append(key)
+            continue
+        _kept, kept_geom = out[key]
+        if geometry is not None and (kept_geom is None
+                                     or geometry.area() > kept_geom.area()):
+            out[key] = (parcel, geometry)
+    return [out[key] for key in order]
+
+
+def fetch_parcels(box, fetch, timeout: float = DEFAULT_TIMEOUT_S,
+                  type_name: str = TYPE_PARCEL, parser=None,
+                  span_deg: Optional[float] = None, progress=None):
+    """Every feature in a bounding box, tiling around the service's ceiling.
+
+    ``fetch`` is the transport; ``parser`` turns one response into a list
+    (``parse_parcel_geometries`` by default). Returns ``(items, warnings)``:
+    a tile the service would not answer for is a warning and the rest of the
+    query goes on, because a cadastral answer missing one tile is worth more
+    than no answer at all -- as long as it says so.
+    """
+    parse = parser or parse_parcel_geometries
+    span = tile_span_deg() if span_deg is None else float(span_deg)
+    pending = [(tile, 0) for tile in split_bbox(box, span)]
+    if len(pending) > MAX_TILES:
+        raise CadastreError(
+            "cadastral query over {0} tiles".format(len(pending)),
+            user_message="Area troppo estesa per l'interrogazione catastale.",
+            hint="Riduci l'area di progetto o interrogala a blocchi.")
+
+    items = []
+    warnings = []
+    sent = 0
+    answered = 0
+    first_error = None
+    total = len(pending)
+    while pending:
+        tile, depth = pending.pop(0)
+        if sent >= MAX_TILES:
+            warnings.append(
+                "Interrogazione interrotta a {0} riquadri: il risultato "
+                "potrebbe essere incompleto.".format(MAX_TILES))
+            break
+        body = None
+        last = None
+        for _attempt in range(TILE_ATTEMPTS):
+            try:
+                body = fetch(build_area_query(tile[0], tile[1], tile[2],
+                                              tile[3], type_name), timeout)
+                break
+            except CadastreError as exc:
+                last = exc
+            except Exception as exc:                            # noqa: BLE001
+                last = CadastreError(str(exc),
+                                     user_message="Interrogazione catastale "
+                                                  "non riuscita.")
+        sent += 1
+        if progress is not None:
+            try:
+                progress(min(1.0, sent / float(max(total, 1))))
+            except Exception:                                   # noqa: BLE001
+                pass
+        if body is None:
+            if first_error is None:
+                first_error = last
+            warnings.append(
+                "Riquadro {0:.4f},{1:.4f} non interrogato: {2}".format(
+                    tile[0], tile[1],
+                    last.user_message if last is not None else "errore"))
+            continue
+        answered += 1
+        found = parse(body)
+        # The provider stopped at its own ceiling: that is a truncation, not
+        # a count. Quarter the tile and ask again.
+        if len(found) >= MAX_AREA_FEATURES and depth < MAX_TILE_DEPTH:
+            pending.extend((piece, depth + 1) for piece in quarter_bbox(tile))
+            total += 4
+            continue
+        if len(found) >= MAX_AREA_FEATURES:
+            warnings.append(
+                "Un riquadro resta al limite di {0} particelle dopo {1} "
+                "suddivisioni: il risultato potrebbe essere incompleto."
+                .format(MAX_AREA_FEATURES, MAX_TILE_DEPTH))
+        items.extend(found)
+    # Not one tile answered: that is the service being unreachable, and it
+    # must stay distinguishable from the service answering "no parcels
+    # here". A partial answer is a warning; no answer is an error.
+    if answered == 0 and first_error is not None:
+        raise first_error
+    return items, warnings
 
 
 def _service_exception(text: str) -> Optional[str]:
@@ -593,6 +782,22 @@ class ParcelShare:
     #: answer an operator cannot see on the map is a table, not a result.
     geometry: object = None                     # QgsGeometry
     intersection: object = None                 # QgsGeometry
+    #: The whole project's area, in the same metric CRS. Carried here so a
+    #: share can answer both questions on its own: what it takes of the
+    #: parcel, and what it is of the project.
+    project_area_m2: float = 0.0
+
+    @property
+    def percent_of_project(self) -> float:
+        """How much of the project lies on this parcel, as a percentage.
+
+        The companion of :attr:`percent_of_parcel` and not a rewording of
+        it: the denominators are different, and a parcel can be 3 per cent
+        of the project while the project is 100 per cent of the parcel.
+        """
+        if self.project_area_m2 <= 0.0:
+            return 0.0
+        return 100.0 * self.intersection_area_m2 / self.project_area_m2
 
     @property
     def percent_of_parcel(self) -> float:
@@ -619,7 +824,10 @@ class ParcelShare:
             "riferimento": self.parcel.national_reference,
             "superficie_catastale_m2": round(self.parcel_area_m2, 2),
             "superficie_interessata_m2": round(self.intersection_area_m2, 2),
+            # Two percentages, two denominators, both kept.
             "percentuale": round(self.percent_of_parcel, 3),
+            "percentuale_particella": round(self.percent_of_parcel, 3),
+            "percentuale_progetto": round(self.percent_of_project, 3),
         }
 
 
@@ -777,6 +985,37 @@ class CadastralResult:
     def rows(self) -> list:
         return [share.as_row() for share in self.shares]
 
+    #: Column order of :meth:`export_rows`, and of the file it writes.
+    EXPORT_COLUMNS = ("comune", "belfiore", "foglio", "particella",
+                      "riferimento", "superficie_catastale_m2",
+                      "superficie_interessata_m2", "percentuale_particella",
+                      "percentuale_progetto", "geometria_wkt",
+                      "intersezione_wkt")
+
+    def export_rows(self, with_geometry: bool = True) -> list:
+        """One row per parcel, with everything the model holds.
+
+        The compact cell in the CAD table and the "(+N)" that ends a long
+        one are ways of showing a result, never of storing it: this is what
+        the result actually contains, and it is what an export writes.
+        """
+        rows = []
+        for share in self.shares:
+            row = dict(share.as_row())
+            row["percentuale_particella"] = row["percentuale"]
+            if with_geometry:
+                row["geometria_wkt"] = (
+                    share.geometry.asWkt() if share.geometry is not None
+                    else "")
+                row["intersezione_wkt"] = (
+                    share.intersection.asWkt()
+                    if share.intersection is not None else "")
+            else:
+                row["geometria_wkt"] = row["intersezione_wkt"] = ""
+            rows.append({key: row.get(key, "")
+                         for key in self.EXPORT_COLUMNS})
+        return rows
+
     def describe(self) -> "list[str]":
         lines = ["DATI CATASTALI",
                  "  Stato:      {0}".format(
@@ -906,7 +1145,8 @@ def interpolate_cadastral_data(project_geometry, project_crs, parcels,
                                   parcel_area_m2=float(shape.area()),
                                   intersection_area_m2=area,
                                   geometry=shown,
-                                  intersection=shown_overlap))
+                                  intersection=shown_overlap,
+                                  project_area_m2=project_area))
 
     shares.sort(key=lambda share: -share.intersection_area_m2)
     covered = 0.0
@@ -960,23 +1200,36 @@ def query_area(project_geometry, project_crs, transport=None,
                 pass
 
     step(5.0)
-    south, west, north, east = service_bbox(project_geometry, project_crs)
+    box = service_bbox(project_geometry, project_crs)
     step(15.0)
-    body = fetch(build_area_query(south, west, north, east), timeout)
-    step(55.0)
-    parcels = parse_parcel_geometries(body)
+    # Tiled, merged and deduplicated before anything is intersected: the
+    # service stops at its own feature ceiling without saying so, and a
+    # truncated answer looks exactly like a complete one.
+    found, tile_warnings = fetch_parcels(
+        box, fetch, timeout,
+        progress=lambda fraction: step(15.0 + 40.0 * fraction))
+    parcels = dedup_pairs(found)
+    duplicates = len(found) - len(parcels)
     step(70.0)
     result = interpolate_cadastral_data(project_geometry, project_crs,
                                         parcels, work_crs)
+    result.warnings.extend(tile_warnings)
+    if duplicates:
+        result.warnings.append(
+            "Particelle ricevute piu' volte dai riquadri contigui: {0} "
+            "duplicati scartati.".format(duplicates))
     step(90.0)
 
     # The sheet numbers the zoning layer publishes beat the ones derived from
     # the parcel reference; one extra request covers every parcel at once.
     if result.shares:
         try:
-            labels = parse_zoning_labels(
-                fetch(build_area_query(south, west, north, east, TYPE_ZONING),
-                      timeout))
+            sheets, _zone_warnings = fetch_parcels(
+                box, fetch, timeout, type_name=TYPE_ZONING,
+                parser=lambda body: [parse_zoning_labels(body)])
+            labels = {}
+            for chunk in sheets:
+                labels.update(chunk)
         except CadastreError:
             labels = {}
         for share in result.shares:

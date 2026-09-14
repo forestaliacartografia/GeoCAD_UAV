@@ -67,13 +67,22 @@ about=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
   missione di volo che lo documenta.
 
   Creato dal Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO).
-version=2.1.0
+version=2.2.0
 author=Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO)
 email=niccolomarco.mancini@gmail.com
 
-tracker=https://example.invalid/geocad-uav/issues
-repository=https://example.invalid/geocad-uav
-homepage=https://example.invalid/geocad-uav
+# No public repository exists for this plugin yet. The keys stay, empty:
+# QGIS reads them, and an empty field says "there is none" while a
+# placeholder URL says "there is one" and sends whoever clicks it nowhere.
+tracker=
+repository=
+homepage=
+
+# QGIS reads this key when it builds the Plugin Manager entry; missing, it
+# records the miss in error_details. The release history is in CHANGELOG.md
+# at the repository root, which is not shipped: a plugin's public page says
+# what it does, not what it did.
+changelog=
 
 tags=cad,uav,drone,photogrammetry,dem,terrain following,forestry,reforestation,cadastre,flight planning,gsd,wpml,survey
 

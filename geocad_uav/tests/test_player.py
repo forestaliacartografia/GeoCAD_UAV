@@ -280,13 +280,14 @@ check("2x fires the same number of flashes", player_2x.flash_count,
 check("the rate is stored", player_2x.rate, 2)
 
 player_5x = MissionPlayer(iface)
-player_5x.set_rate(5)
+player_5x.set_rate(4)
 player_5x.play(MISSION)
 ticks_5x = run_to_end(player_5x)
-check("5x needs a fifth of the ticks", ticks_5x, (ticks_1x + 4) // 5, 1.0)
-check("5x still fires every flash", player_5x.flash_count,
+check("4x needs a quarter of the ticks", ticks_5x,
+      (ticks_1x + 3) // 4, 1.0)
+check("4x still fires every flash", player_5x.flash_count,
       len(MISSION.photos))
-check("an unknown rate falls back to 1x", player_5x.set_rate(10), 1)
+check("an unknown rate falls back to 1x", player_5x.set_rate(10), 1.0)
 
 after_wkt = [(w.x, w.y, w.z_amsl, w.z_agl, w.speed_ms, w.kind)
              for w in MISSION.waypoints]
@@ -403,9 +404,15 @@ check_true("no import of uav.survey",
 check_true("no import of uav.mission",
            not any(name.endswith("mission") or name.endswith(".mission")
                    for name in PLAYER_IMPORTS))
-check_true("the only uav import is terrain_follow",
-           {name for name in PLAYER_IMPORTS if "uav" in name}
-           <= {"uav", "uav.terrain_follow"})
+# v2.2.0: photogrammetry joins terrain_follow. The coverage tracked during
+# a simulation is the union of the draped footprints clipped to the AOI --
+# a photogrammetric quantity, computed where the optics that produced those
+# footprints live. Neither module has a planner entry point, which is what
+# this rule is really about.
+check_true("the only uav imports are terrain_follow and photogrammetry",
+           {".".join(name.split(".")[:2])
+            for name in PLAYER_IMPORTS if "uav" in name}
+           <= {"uav", "uav.terrain_follow", "uav.photogrammetry"})
 check_true("no plan_route or build_mission call",
            "plan_route" not in PLAYER_CODE
            and "build_mission(" not in PLAYER_CODE)
@@ -418,8 +425,10 @@ check_true("no canvas.refresh in the player",
            "refresh()" not in PLAYER_CODE)
 check_true("no sleep anywhere", "sleep" not in PLAYER_CODE)
 check_true("the tick is driven by a QTimer", "QTimer" in PLAYER_CODE)
-check("rates offered", len(mp.RATES), 3)
-check_true("the rates are 1, 2 and 5", tuple(mp.RATES) == (1, 2, 5))
+check("rates offered", len(mp.RATES), 5)
+check_true("the rates run from a quarter of real time to four times it",
+           tuple(mp.RATES) == (0.25, 0.5, 1.0, 2.0, 4.0))
+check_true("...and 1x is one of them", 1.0 in mp.RATES)
 
 player.teardown()
 player_1x.teardown()

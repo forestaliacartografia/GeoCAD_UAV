@@ -495,6 +495,38 @@ check_true("no marketing comparison in the metadata",
                    for word in ("litchi mission hub e' meglio", "thopos",
                                 "piu' potente", "powered by")))
 
+# v2.2.0: no placeholder URLs. An empty field says "there is no public
+# repository"; https://example.invalid says there is one and sends whoever
+# clicks it nowhere.
+check_true("no placeholder host anywhere in the metadata",
+           not any(host in metadata.lower()
+                   for host in ("example.invalid", "example.com",
+                                "example.org", "changeme", "your-domain")))
+for _key in ("homepage", "tracker", "repository"):
+    _value = _cp.get("general", _key, fallback="").strip()
+    check_true("{0}= is empty or a real URL".format(_key),
+               not _value or _value.startswith(("http://", "https://")))
+
+# v2.2.0: every key pyplugin_installer.installer_data.getInstalledPlugin
+# looks up, so it records no missing-option in error_details. The locale
+# variants (name[it_IT] and friends) are the exception and cannot be
+# supplied for every locale: QGIS tries the user's own, and whichever one
+# that is, a plugin shipping Italian metadata does not have it. They set
+# error_details while error stays empty, and installer.py renders
+# error_details only inside the branch where error is non-empty.
+INSTALLER_KEYS = ("version", "qgisMinimumVersion", "qgisMaximumVersion",
+                  "icon", "changelog", "name", "description", "about",
+                  "category", "tags", "author", "email", "homepage",
+                  "tracker", "repository", "experimental", "deprecated")
+_missing = [k for k in INSTALLER_KEYS if not _cp.has_option("general", k)]
+print("        metadata keys the installer asks for and misses: {0}".format(
+    _missing or "none"))
+check("the metadata answers every key the installer reads", len(_missing), 0)
+check_true("...changelog among them, and empty",
+           _cp.get("general", "changelog").strip() == "")
+check_true("...so error_details can never read 'changelog'",
+           _cp.has_option("general", "changelog"))
+
 sys.path.insert(0, ROOT)
 import zip_plugin                                               # noqa: E402
 

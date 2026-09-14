@@ -5,6 +5,64 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.0 -- Genera rotta dalla GUI, simulatore di missione, catasto a riquadri
+
+**Genera rotta, da ogni step del volo.** Il comando c'era e funzionava, ma
+stava sulla pagina dello step 8: chi aveva appena finito di impostare le
+sovrapposizioni allo step 6 non aveva dove premerlo. Ora e' una barra sotto
+le pagine del volo, visibile in tutti e dodici gli step e in nessuno dei
+sedici del rimboschimento, con Genera rotta, Anteprima e Crea layer
+missione, e una riga che dice perche' il primo e' spento quando lo e'. I
+pulsanti sono quelli del pianificatore, riparentati: un secondo "Genera
+rotta" sarebbe un secondo comando che puo' dissentire dal primo.
+
+**Il player diventa un simulatore.** Velocita' da 0.25x a 4x (l'orologio e'
+moltiplicato, la missione no); Inizio, waypoint indietro, Play, Pausa,
+waypoint avanti, Fine; la traccia gia' volata dietro al drone; copertura che
+cresce scatto per scatto, come unione delle impronte gia' acquisite
+ritagliata sull'area di missione; strisciata corrente e percentuale di
+missione nella telemetria, che erano nei waypoint e non venivano lette.
+Misurato: 14,2 -> 30,8 -> 63,9 -> 96,9 -> 100,0 % lungo il volo, e coperto
+piu' scoperto fa esattamente l'area di missione.
+
+**Profilo altimetrico** con AGL e AMSL tenuti distinti, dislivello,
+escursione di AGL e conteggio dei punti senza DEM -- contati sulle righe del
+profilo, mai interpolati.
+
+**Riserva di batteria configurabile**, e onorata dove conta: non solo
+nell'avviso finale ma nel budget che divide la missione in tratte.
+`validator.battery_plan` mette in un posto solo autonomia nominale, riserva,
+utile per batteria, volo per batteria, margine, batterie necessarie e tempo
+operativo coi cambi.
+
+**Catasto a riquadri.** Un WFS che raggiunge il suo `count` si ferma li' e
+la risposta sembra completa. `fetch_parcels` taglia il riquadro, tratta una
+risposta esattamente al tetto del provider come il troncamento che e' e la
+divide in quattro, ritenta una volta i riquadri che falliscono, unisce e
+deduplica sull'identificativo catastale. Se non risponde nessun riquadro
+resta un errore, non un risultato vuoto. Il primo taglio e' configurabile
+(`cadastre/tile_span_deg`); la soglia di suddivisione viene dal tetto del
+provider, non da un numero inventato.
+
+**Quattro grandezze, quattro significati**: superficie catastale, superficie
+interessata, percentuale sulla particella e percentuale sul progetto, tenute
+separate nel modello, nella GUI e nell'export.
+
+**Comune -> Foglio -> Particella** navigabile nel pannello CAD, con le
+superfici e le percentuali a ogni livello e la selezione riflessa sulla
+mappa; ed "Esporta", che scrive un CSV con ogni riga che il modello tiene,
+geometrie comprese. La cella compatta con "(+N)" resta un modo di mostrare
+il risultato e non e' mai il risultato.
+
+**Metadati**: via i tre URL `example.invalid`, campi lasciati vuoti; il
+pacchettizzatore rifiuta una build che rimetta un placeholder o una
+cronologia nella descrizione. La chiave `changelog=` torna, vuota: QGIS la
+legge e senza di lei registrava la mancanza in `error_details`.
+
+Corretti mentre lo verificavo: `split_bbox` tagliava una riga di troppo
+(`ceil(0.10/0.05)` in virgola mobile e' 3), cioe' il 50 percento di
+richieste in piu'; `tick` faceva avanzare l'orologio anche a timer fermo.
+
 ## 2.1.0 -- Catasto CAD multicomune, rotta UAV e descrizione stabile
 
 - Il CAD interroga il catasto sulla **geometria**, non sul centroide. Era

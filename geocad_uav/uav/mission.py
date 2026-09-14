@@ -79,6 +79,10 @@ class MissionParams:
     use_interval_trigger: bool = True
 
     gimbal_pitch_deg: float = -90.0
+    #: Battery reserve to keep, as a percentage of nominal endurance.
+    #: None means the drone profile's own ``rth_reserve_pct``. Honoured by
+    #: the sub-mission split, so raising it really does make more legs.
+    reserve_pct: Optional[float] = None
     min_photos_per_point: int = K.MIN_PHOTOS_PER_POINT
     max_legal_agl_m: float = K.MAX_LEGAL_AGL_M
 
@@ -283,7 +287,8 @@ def build_mission(aoi_geom, terrain: TerrainModel, params: MissionParams,
         + K.TURN_PENALTY_S * max(len(lines) - 1, 0)
 
     n_sub = _assign_sub_missions(all_waypoints, all_photos, leg_spans,
-                                 leg_times, params.drone, warnings)
+                                 leg_times, params.drone, warnings,
+                                 endurance_budget_s(params))
     flight_time += K.TAKEOFF_LANDING_S * n_sub
 
     # -- 6. footprints -----------------------------------------------------
@@ -487,8 +492,24 @@ def _transit_cost(lines, speed_ms, drone: DroneProfile):
     return total / speed, total
 
 
+def endurance_budget_s(params) -> float:
+    """Flight time per battery, with the reserve actually in force.
+
+    The drone profile carries a default reserve; ``params.reserve_pct``
+    overrides it. One function, so the split, the check and the panel cannot
+    disagree about how long a battery lasts.
+    """
+    drone = params.drone
+    reserve = getattr(params, "reserve_pct", None)
+    if reserve is None:
+        return drone.usable_endurance_s
+    reserve = min(max(float(reserve), 0.0), 95.0)
+    return drone.endurance_min * 60.0 * (1.0 - reserve / 100.0)
+
+
 def _assign_sub_missions(waypoints, photos, leg_spans, leg_times,
-                         drone: DroneProfile, warnings) -> int:
+                         drone: DroneProfile, warnings,
+                         budget_s: float = 0.0) -> int:
     """Split on endurance and on the controller waypoint limit.
 
     Cuts fall on strip boundaries, never mid-strip. ``leg_spans`` is recorded
@@ -497,7 +518,7 @@ def _assign_sub_missions(waypoints, photos, leg_spans, leg_times,
     index, and grouping by that index would merge them and misalign the leg
     timings.
     """
-    budget_s = drone.usable_endurance_s
+    budget_s = float(budget_s) or drone.usable_endurance_s
     limit = drone.waypoint_limit
 
     sub = 0

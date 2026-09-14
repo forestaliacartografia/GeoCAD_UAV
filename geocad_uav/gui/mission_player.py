@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from qgis.core import QgsPointXY, QgsWkbTypes
+from qgis.core import QgsGeometry, QgsPointXY, QgsWkbTypes
 from qgis.gui import QgsRubberBand
 from qgis.PyQt.QtCore import QCoreApplication, QObject, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor
@@ -48,8 +48,10 @@ def tr(text):
 #: enough that the canvas never queues up behind it.
 TICK_MS = 50
 
-#: Playback speeds offered. The clock is multiplied, the mission is not.
-RATES = (1, 2, 5)
+#: Playback speeds offered. The clock is multiplied, the mission is not:
+#: at 0.25x the same flight takes four times as long to watch and the
+#: telemetry reads the same numbers at the same chainages.
+RATES = (0.25, 0.5, 1.0, 2.0, 4.0)
 
 #: How many ticks a shutter flash stays on screen.
 FLASH_TICKS = 3
@@ -82,6 +84,14 @@ class MissionPlayer(QObject):
         self._flash_left = 0
         self._marker = None
         self._flash = None
+        #: The route already flown, as a line band behind the aircraft.
+        self._track = None
+        #: Ground already imaged, exposure by exposure. Built by ``load``
+        #: when the mission has footprints and an AOI to clip them to, and
+        #: by ``refresh_coverage`` when they are draped later.
+        self.coverage = None
+        self._aoi = None
+        self._strip = None
         self._timer = QTimer(self)
         self._timer.setInterval(TICK_MS)
         self._timer.timeout.connect(self.tick)
@@ -110,8 +120,12 @@ class MissionPlayer(QObject):
 
     # -- loading -----------------------------------------------------------
 
-    def load(self, mission) -> bool:
-        """Read a mission into a timeline. Returns False and says why if not."""
+    def load(self, mission, aoi_geom=None) -> bool:
+        """Read a mission into a timeline. Returns False and says why if not.
+
+        ``aoi_geom`` is the area the mission was planned over; given it, the
+        simulator also tracks how much of that area is already imaged.
+        """
         self.stop()
         self.mission = None
         self._xy = None
@@ -150,19 +164,58 @@ class MissionPlayer(QObject):
         self._sub = np.array([wp.sub_mission for wp in waypoints], dtype=int)
         self._chainage = cumulative_distance(xy)
         self._photo_at = [wp.kind == "photo" for wp in waypoints]
+        self._strip = np.array([wp.strip_index for wp in waypoints],
+                               dtype=int)
+        # Which exposure each photo waypoint is, so the coverage can union
+        # the right footprint when the shutter fires.
+        self._photo_index = {}
+        seen = 0
+        for i, is_photo in enumerate(self._photo_at):
+            if is_photo:
+                self._photo_index[i] = seen
+                seen += 1
+        self._aoi = aoi_geom
+        self.coverage = self._build_coverage(mission, aoi_geom)
         self.mission = mission
         self.message = ""
         return True
 
+    def refresh_coverage(self, aoi_geom=None) -> bool:
+        """Pick up footprints draped after the mission was loaded.
+
+        The planner casts them only when asked, so a route can be loaded
+        into the simulator before it has any. When they arrive, this rebuilds
+        the tracking and puts it back where the clock is.
+        """
+        if self.mission is None:
+            return False
+        area = aoi_geom if aoi_geom is not None else self._aoi
+        self._aoi = area
+        self.coverage = self._build_coverage(self.mission, area)
+        if self.coverage is None:
+            return False
+        self.coverage.set_taken(self._photo_index[i] for i in self.flashed)
+        return True
+
+    @staticmethod
+    def _build_coverage(mission, aoi_geom):
+        """Coverage tracking, when there is something to track it on."""
+        footprints = list(getattr(mission, "footprints", None) or [])
+        if not footprints or aoi_geom is None:
+            return None
+        from ..uav.photogrammetry import CoverageProgress        # noqa: PLC0415
+
+        return CoverageProgress(aoi_geom, footprints)
+
     # -- transport controls ------------------------------------------------
 
-    def play(self, mission=None) -> bool:
+    def play(self, mission=None, aoi_geom=None) -> bool:
         """Start, or resume if the same mission is already loaded."""
         if mission is not None and mission is not self.mission:
-            if not self.load(mission):
+            if not self.load(mission, aoi_geom):
                 return False
         if self.mission is None:
-            if not self.load(mission):
+            if not self.load(mission, aoi_geom):
                 return False
         if self.t_sim >= self.duration_s and self.duration_s > 0:
             self.rewind()
@@ -191,6 +244,10 @@ class MissionPlayer(QObject):
         self.flash_count = 0
         self.flashed = []
         self._flash_left = 0
+        if self.coverage is not None:
+            self.coverage.reset()
+        if self._track is not None:
+            self._track.reset(QgsWkbTypes.LineGeometry)
 
     def to_start(self) -> float:
         """Back to take-off, without stopping the clock if it is running."""
@@ -242,6 +299,13 @@ class MissionPlayer(QObject):
         self.flashed = [i for i in range(self.index + 1) if self._photo_at[i]]
         self.flash_count = len(self.flashed)
         self._flash_left = 0
+        # Dragging backwards has to un-take the ground as well as the
+        # exposures: a coverage that only ever grew would be a lie after
+        # one drag.
+        if self.coverage is not None:
+            self.coverage.set_taken(self._photo_index[i]
+                                    for i in self.flashed)
+        self._draw_track()
         if self._flash is not None:
             self._flash.reset(QgsWkbTypes.PointGeometry)
         self._move_marker()
@@ -273,7 +337,9 @@ class MissionPlayer(QObject):
                  "sub_mission": 0, "sub_total": 0, "battery_left": 1.0,
                  "x": float("nan"), "y": float("nan"), "speed_ms": 0.0,
                  "heading_deg": float("nan"), "remaining_m": 0.0,
-                 "remaining_s": 0.0, "waypoint": 0, "waypoint_total": 0}
+                 "remaining_s": 0.0, "waypoint": 0, "waypoint_total": 0,
+                 "strip": -1, "progress_pct": 0.0, "coverage_pct": 0.0,
+                 "covered_m2": 0.0, "uncovered_m2": 0.0}
         if self.mission is None or self._times is None \
                 or not self._times.size:
             return empty
@@ -326,6 +392,14 @@ class MissionPlayer(QObject):
             "heading_deg": heading,
             "waypoint": int(i) + 1,
             "waypoint_total": int(len(self._times)),
+            "strip": int(self._strip[i]) if self._strip is not None else -1,
+            "progress_pct": 100.0 * self.progress(),
+            "coverage_pct": (self.coverage.percent
+                             if self.coverage is not None else 0.0),
+            "covered_m2": (self.coverage.covered_area_m2
+                           if self.coverage is not None else 0.0),
+            "uncovered_m2": (self.coverage.remaining_area_m2
+                             if self.coverage is not None else 0.0),
             "z_amsl": blend(self._z),
             "z_agl": blend(self._agl),
             "photos": int(self.flash_count),
@@ -346,9 +420,13 @@ class MissionPlayer(QObject):
         total = state["length_m"]
         return 0.0 if total <= 0 else min(1.0, state["distance_m"] / total)
 
-    def set_rate(self, rate: int) -> int:
+    def set_rate(self, rate) -> float:
         """Change the clock multiplier. Never touches the mission."""
-        self.rate = int(rate) if int(rate) in RATES else 1
+        try:
+            wanted = float(rate)
+        except (TypeError, ValueError):
+            wanted = 1.0
+        self.rate = wanted if wanted in RATES else 1.0
         return self.rate
 
     # -- the clock ---------------------------------------------------------
@@ -376,6 +454,7 @@ class MissionPlayer(QObject):
             if self._photo_at[self.index]:
                 self._fire_flash(self.index)
         self._move_marker()
+        self._draw_track()
         if self._flash_left > 0:
             self._flash_left -= 1
             if self._flash_left == 0 and self._flash is not None:
@@ -389,6 +468,8 @@ class MissionPlayer(QObject):
     def _fire_flash(self, index):
         self.flash_count += 1
         self.flashed.append(int(index))
+        if self.coverage is not None and index in self._photo_index:
+            self.coverage.add(self._photo_index[index])
         self._flash_left = FLASH_TICKS
         band = self._ensure_flash()
         if band is not None:
@@ -448,6 +529,51 @@ class MissionPlayer(QObject):
 
     def _draw_route(self):
         self._move_marker()
+        self._draw_track()
+
+    def _ensure_track(self):
+        canvas = self._canvas()
+        if canvas is None:
+            return None
+        if self._track is None:
+            self._track = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+            self._track.setColor(QColor(20, 90, 200, 170))
+            self._track.setWidth(3)
+        return self._track
+
+    def track_points(self):
+        """The route already flown, as points, up to where the aircraft is.
+
+        Computed whether or not there is a canvas to draw it on: how far the
+        aircraft has come is a fact about the flight, and a headless test
+        has to be able to ask.
+        """
+        if self._xy is None:
+            return []
+        points = [(float(self._xy[i, 0]), float(self._xy[i, 1]))
+                  for i in range(self.index + 1)]
+        here = self.position()
+        if here is not None and (not points or here != points[-1]):
+            points.append((float(here[0]), float(here[1])))
+        return points
+
+    def _draw_track(self):
+        """Put the flown track on the canvas. Returns its point count."""
+        points = self.track_points()
+        band = self._ensure_track()
+        if band is None or len(points) < 2:
+            return len(points)
+        band.reset(QgsWkbTypes.LineGeometry)
+        band.addGeometry(QgsGeometry.fromPolylineXY(
+            [QgsPointXY(x, y) for x, y in points]), None)
+        band.show()
+        return len(points)
+
+    def track_vertices(self) -> int:
+        """Vertices of the flown track. Counted with or without a canvas."""
+        if self._track is not None and self._track.numberOfVertices():
+            return int(self._track.numberOfVertices())
+        return len(self.track_points())
 
     def _move_marker(self):
         band = self._ensure_marker()
@@ -464,6 +590,9 @@ class MissionPlayer(QObject):
             if band is not None:
                 band.reset(QgsWkbTypes.PointGeometry)
                 band.hide()
+        if self._track is not None:
+            self._track.reset(QgsWkbTypes.LineGeometry)
+            self._track.hide()
 
     def band_vertices(self) -> int:
         """Marker plus flash vertices currently drawn. For the tests."""
@@ -486,21 +615,30 @@ class MissionPlayer(QObject):
             tr("batteria al {0:.0f} %").format(100.0 * state["battery_left"])
         heading = ("--" if state["heading_deg"] != state["heading_deg"]
                    else "{0:.0f} deg".format(state["heading_deg"]))
+        coverage = ("" if self.coverage is None else
+                    tr("\ncopertura {0:.1f} % - {1:,.0f} m2 ripresi, "
+                       "{2:,.0f} m2 ancora scoperti").format(
+                           state["coverage_pct"], state["covered_m2"],
+                           state["uncovered_m2"]))
         return tr(
-            "t {0} / {1} (restano {2}) - {3} di missione con decolli, "
-            "atterraggi e virate\n"
-            "percorso {4:,.0f} m, restano {5:,.0f} m - "
-            "velocita' {6:.1f} m/s ({7:.0f} km/h) - prua {8}\n"
-            "quota {9:,.0f} m s.l.m. ({10:.0f} m AGL) - {11}\n"
-            "waypoint {12}/{13} - fotogramma {14}/{15} - {16}x").format(
+            "missione al {0:.1f} % - t {1} / {2} (restano {3}) - {4} di "
+            "missione con decolli, atterraggi e virate\n"
+            "percorso {5:,.0f} m, restano {6:,.0f} m - "
+            "velocita' {7:.1f} m/s ({8:.0f} km/h) - prua {9}\n"
+            "quota {10:,.0f} m s.l.m. ({11:.0f} m AGL) - {12}\n"
+            "strisciata {13} - waypoint {14}/{15} - fotogramma {16}/{17} - "
+            "{18}x").format(
+                state["progress_pct"],
                 format_duration(self.t_sim), format_duration(self.duration_s),
                 format_duration(state["remaining_s"]),
                 format_duration(self.mission.stats.flight_time_s),
                 state["distance_m"], state["remaining_m"],
                 state["speed_ms"], state["speed_ms"] * 3.6, heading,
                 state["z_amsl"], state["z_agl"], battery,
+                state["strip"] if state["strip"] >= 0 else "-",
                 state["waypoint"], state["waypoint_total"],
-                self.flash_count, self.photo_count, self.rate)
+                self.flash_count, self.photo_count,
+                "{0:g}".format(self.rate)) + coverage
 
     def teardown(self):
         self._timer.stop()
@@ -509,4 +647,5 @@ class MissionPlayer(QObject):
         except (TypeError, RuntimeError):
             pass
         self._clear_bands()
+        self.coverage = None
         self.mission = None

@@ -77,6 +77,12 @@ KEYS = {s.key: s for s in (
     # more recent or a locally corrected register points this at their file.
     _s("cadastre/belfiore_path", STR, "",
        "Tabella codici Belfiore alternativa (vuoto: quella del plugin)"),
+    # First cut of a bounding box before it is sent to the WFS. A tile that
+    # comes back at the provider's own feature ceiling is quartered anyway;
+    # this only decides how fine the first pass is. 0 falls back to
+    # io.cadastre.DEFAULT_TILE_SPAN_DEG.
+    _s("cadastre/tile_span_deg", FLOAT, 0.0,
+       "Lato massimo di un riquadro WFS in gradi (0: predefinito)"),
     _s("snap/tolerance_px", INT, K.SNAP_TOLERANCE_PX,
        "Tolleranza di aggancio in pixel (core.constants.SNAP_TOLERANCE_PX)"),
     _s("snap/types", STR, "vertex,segment",
@@ -92,6 +98,11 @@ KEYS = {s.key: s for s in (
     _s("uav/target_mode", STR, "h_agl", "'h_agl' oppure 'gsd'"),
     _s("uav/h_agl_m", FLOAT, 80.0, "Quota di volo predefinita"),
     _s("uav/gsd_cm", FLOAT, 2.0, "GSD target predefinito in cm/px"),
+    # Battery reserve as a percentage of nominal endurance. -1 means the
+    # drone profile's own rth_reserve_pct: a reserve is a decision about the
+    # day, not only about the airframe, and this is where it is taken.
+    _s("uav/reserve_pct", FLOAT, -1.0,
+       "Riserva batteria in % (-1: quella del profilo drone)"),
     _s("uav/max_legal_agl_m", FLOAT, K.MAX_LEGAL_AGL_M,
        "Quota massima legale (core.constants.MAX_LEGAL_AGL_M)"),
 
