@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 
 from qgis.core import Qgis, QgsApplication, QgsProject
+
+from .core.errors import swallow
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon, QKeySequence
 from qgis.PyQt.QtWidgets import QAction, QActionGroup
@@ -347,8 +349,8 @@ class GeoCadUavPlugin:
         if self.provider is not None:
             try:
                 QgsApplication.processingRegistry().removeProvider(self.provider)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "unload: processing provider")
             self.provider = None
 
         for signal, slot in self._connections:
@@ -361,8 +363,8 @@ class GeoCadUavPlugin:
         if self.workspace is not None:
             try:
                 self.workspace.unmount()
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "unload: workspace")
             self.workspace = None
         self.shape_actions = {}
         self.shape_group = None
@@ -380,8 +382,8 @@ class GeoCadUavPlugin:
                 tool.deactivate()
                 if canvas is not None:
                     canvas.unsetMapTool(tool)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "unload: map tool")
         self.map_tools = {}
 
         cad_toolbar = getattr(self.dock, "cad_toolbar", None) if self.dock else None
@@ -399,8 +401,8 @@ class GeoCadUavPlugin:
         if self.dock is not None:
             try:
                 self.dock.teardown()
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "unload: dock teardown")
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
             self.dock = None

@@ -38,7 +38,7 @@ from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
 
 from ..core import crs as crs_svc
 from ..core import grid as grid_mod
-from ..core.errors import GeoCadError
+from ..core.errors import GeoCadError, swallow
 from ..core.models import AltitudeMode
 from ..core.units import format_duration
 from ..core.z import TerrainError, TerrainModel
@@ -1218,8 +1218,8 @@ class UavPanel(QWidget):
 
             QgsApplication.messageLog().logMessage(text, "GeoCad UAV",
                                                    Qgis.MessageLevel.Warning)
-        except Exception:                                        # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "uav panel: message log")
 
     def _notify_user(self, text, level=None):
         if self.iface is None:
@@ -1228,8 +1228,8 @@ class UavPanel(QWidget):
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), text,
                 level=level if level is not None else Qgis.MessageLevel.Info)
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "uav panel: message bar")
 
     # -- settings ----------------------------------------------------------
 

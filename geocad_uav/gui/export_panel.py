@@ -32,7 +32,7 @@ from qgis.PyQt.QtWidgets import (QComboBox, QFileDialog, QFormLayout,
                                  QListWidgetItem, QPushButton, QTextBrowser,
                                  QVBoxLayout, QWidget)
 
-from ..core.errors import GeoCadError
+from ..core.errors import GeoCadError, swallow
 from ..settings import settings as app_settings
 from ..uav import export as ex
 from ..uav import validator as val
@@ -436,8 +436,8 @@ class ExportPanel(QWidget):
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), text,
                 level=level if level is not None else Qgis.MessageLevel.Info)
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "export panel: message bar")
 
     def teardown(self):
         for signal, slot in self._connections:

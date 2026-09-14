@@ -5,6 +5,48 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.5 -- quello che gli scanner del repository hanno trovato
+
+Dopo la pubblicazione della 2.2.4 il repository ha eseguito bandit, flake8 e
+detect-secrets sul pacchetto: 34 segnalazioni. Sono state corrette alla
+causa, non zittite. Bandit, flake8 e detect-secrets girano in locale, quindi
+il prima (32/1/1) e il dopo (0/0/0) sono misurati con gli stessi strumenti.
+
+- **26 erano lo stesso schema**: un'eccezione catturata e buttata via con
+  `pass`. E' il modo in cui un plugin sopravvive a una barra dei messaggi che
+  non esiste piu' mentre QGIS si chiude -- ed e' anche il motivo per cui una
+  segnalazione dal campo diventa impossibile da spiegare. Ora ogni punto
+  chiama `swallow(exc, dove)`: l'eccezione non risale, ma resta registrata in
+  una storia limitata e la prima del suo tipo finisce nel log di QGIS. La
+  funzione non solleva nulla nemmeno se l'eccezione ha uno `__str__` che
+  esplode: viene chiamata anche durante il teardown, dove una seconda
+  eccezione sarebbe peggio della prima.
+- **Due `urlopen` su indirizzi configurabili.** `urlopen` non e' un client
+  HTTP: onora `file:`, `ftp:` e qualunque handler registrato. Un template DEM
+  corretto in `file://` avrebbe letto il disco dell'operatore restituendo i
+  byte come se venissero dalla rete. Ora entrambi i trasporti passano da
+  `require_web_url`, che ammette solo http e https e rifiuta il resto con un
+  errore tipizzato e un messaggio in italiano.
+- `from xml.sax.saxutils import escape` tirava dentro il macchinario del
+  parser XML in un modulo che non analizza XML: sostituito dalle tre
+  sostituzioni che quella funzione fa, nello stesso ordine, e il test le
+  confronta con la stdlib su un corpus che contiene davvero i caratteri
+  critici.
+- Due SHA-1 usati come impronta e come chiave di cache, non come difesa:
+  dichiarati `usedforsecurity=False`. Il digest e' identico -- verificato su
+  entrambe le QGIS -- quindi nessuna cache e nessuna impronta memorizzata si
+  invalida.
+- `SECRET = "secret"` era il *tipo* di un'impostazione, non una password, ma a
+  un rilevatore di credenziali sembrava tale. Rinominato `MASKED = "masked"`,
+  che dice cosa succede al valore invece di cosa contiene; il tipo non e' mai
+  stato scritto su disco, quindi non c'e' nulla da migrare.
+- Un import locale in `dock.py` ridichiarava due nomi gia' importati (F811).
+- Nuova suite `test_hardening.py` e un secondo rifiuto in `zip_plugin.py`: un
+  handler che cattura tutto e non lascia traccia non entra nell'archivio. La
+  regola e' quella di bandit, non una piu' severa -- un `except
+  AttributeError: pass` stretto e intenzionale resta legittimo, e il test lo
+  verifica in entrambe le direzioni.
+
 ## 2.2.4 -- enum con lo scope, come PyQt6 li vuole
 
 Il controllo Qt6 del repository ufficiale ha respinto la 2.2.3 con 131

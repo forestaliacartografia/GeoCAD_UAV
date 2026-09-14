@@ -43,6 +43,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..core.errors import RasterError
 from ..settings import settings as app_settings
+from .net import require_web_url
 
 # --------------------------------------------------------------------------
 # Status vocabulary
@@ -276,7 +277,8 @@ def cache_key(adapter_id: str, bbox, zoom: int = 0) -> str:
     west, south, east, north = (round(float(v), BBOX_ROUNDING) for v in bbox)
     raw = "{0}|{1}|{2}|{3}|{4}|{5}".format(adapter_id, west, south, east,
                                            north, int(zoom))
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(raw.encode("utf-8"),
+                    usedforsecurity=False).hexdigest()[:16]
 
 
 def cache_path(adapter_id: str, bbox, zoom: int = 0,
@@ -310,7 +312,9 @@ def urllib_transport(url: str, timeout: float = 120.0) -> Iterable[bytes]:
     """
     from urllib.request import urlopen                          # noqa: PLC0415
 
-    with urlopen(url, timeout=timeout) as response:             # noqa: S310
+    require_web_url(url)
+    # The scheme was checked above, which is what B310 asks for.
+    with urlopen(url, timeout=timeout) as response:  # noqa: S310  # nosec B310
         while True:
             chunk = response.read(CHUNK_BYTES)
             if not chunk:

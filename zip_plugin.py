@@ -14,6 +14,7 @@ who wants to run the suite from an installed copy.
 from __future__ import annotations
 
 import argparse
+import ast
 import configparser
 import io
 import os
@@ -257,6 +258,7 @@ def check_metadata() -> "list[str]":
                 "licence text.".format(len(licence)))
 
     problems.extend(_unscoped_enums())
+    problems.extend(_silent_handlers())
     return problems
 
 
@@ -276,6 +278,27 @@ def _scoped_enums() -> "tuple[list, str]":
             ENUM_TABLE.replace(os.sep, "/"), exc)
 
 
+def _package_sources():
+    """Every .py the archive will contain, as (relative path, text).
+
+    The checks below mirror what the official repository runs over the
+    uploaded package, so they read the same files it will: the test suite is
+    excluded, exactly as it is from the archive.
+    """
+    out = []
+    for base, dirs, names in os.walk(SOURCE):
+        dirs[:] = [d for d in dirs
+                   if d not in EXCLUDE_DIRS and d not in OPTIONAL_DIRS]
+        for name in sorted(names):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(base, name)
+            relative = os.path.relpath(path, SOURCE).replace(os.sep, "/")
+            with open(path, "r", encoding="utf-8") as handle:
+                out.append((relative, handle.read()))
+    return out
+
+
 def _unscoped_enums() -> "list[str]":
     """Modules that write an enum member on its class instead of its enum.
 
@@ -293,21 +316,54 @@ def _unscoped_enums() -> "list[str]":
              for cls, enum_name, member, _value in rows]
 
     problems = []
-    for base, dirs, names in os.walk(SOURCE):
-        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
-        for name in sorted(names):
-            if not name.endswith(".py"):
+    for relative, text in _package_sources():
+        for number, line in enumerate(text.splitlines(), 1):
+            for pattern, wrong, right in rules:
+                if pattern.search(line):
+                    problems.append(
+                        "{0}:{1} writes {2}; PyQt6 needs {3}".format(
+                            relative, number, wrong, right))
+    return problems
+
+
+def _catches_everything(handler) -> bool:
+    """True for a bare ``except:`` or one that catches (Base)Exception."""
+    if handler.type is None:
+        return True
+    parts = (handler.type.elts if isinstance(handler.type, ast.Tuple)
+             else [handler.type])
+    return any(isinstance(part, ast.Name)
+               and part.id in ("Exception", "BaseException")
+               for part in parts)
+
+
+def _silent_handlers() -> "list[str]":
+    """Modules that catch everything and record nothing.
+
+    The repository runs bandit over the uploaded package, and this is the
+    pattern it reports (B110): a handler whose whole body is ``pass``. The
+    same shape is also why a bug report from the field can be unanswerable --
+    the exception happened, and nothing anywhere kept it. A narrow
+    ``except AttributeError: pass`` is left alone, by bandit and here alike.
+    """
+    problems = []
+    for relative, source in _package_sources():
+        try:
+            tree = ast.parse(source, relative)
+        except SyntaxError as exc:
+            problems.append("{0} does not parse: {1}".format(relative, exc))
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try):
                 continue
-            path = os.path.join(base, name)
-            relative = os.path.relpath(path, SOURCE).replace(os.sep, "/")
-            with open(path, "r", encoding="utf-8") as handle:
-                lines = handle.read().splitlines()
-            for number, line in enumerate(lines, 1):
-                for pattern, wrong, right in rules:
-                    if pattern.search(line):
-                        problems.append(
-                            "{0}:{1} writes {2}; PyQt6 needs {3}".format(
-                                relative, number, wrong, right))
+            for handler in node.handlers:
+                if (_catches_everything(handler)
+                        and all(isinstance(statement, ast.Pass)
+                                for statement in handler.body)):
+                    problems.append(
+                        "{0}:{1} catches everything and records nothing; "
+                        "call swallow(exc, ...) instead".format(
+                            relative, handler.lineno))
     return problems
 
 

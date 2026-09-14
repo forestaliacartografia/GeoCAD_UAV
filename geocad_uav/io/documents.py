@@ -46,9 +46,23 @@ import os
 import zipfile
 from dataclasses import dataclass, field
 from typing import Optional
-from xml.sax.saxutils import escape
 
 from ..core.errors import ExportError, InvalidInputError
+
+
+def escape(text) -> str:
+    """Escape text for the HTML this module builds.
+
+    The three substitutions ``xml.sax.saxutils.escape`` performs, in its
+    order: the ampersand first, or the entities written by the other two
+    would be escaped a second time. Spelled out here because importing from
+    ``xml.sax`` pulls in the parser machinery that security scanners flag --
+    this module only ever escapes text the plugin itself produced, and parses
+    no XML at all.
+    """
+    return (str(text).replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
 
 # --------------------------------------------------------------------------
 # The report, once

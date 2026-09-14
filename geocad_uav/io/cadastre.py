@@ -44,7 +44,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlencode
 
-from ..core.errors import GeoCadError
+from ..core.errors import GeoCadError, swallow
+from .net import require_web_url
 
 #: The service, its version and the one CRS it speaks.
 SERVICE_URL = ("https://wfs.cartografia.agenziaentrate.gov.it"
@@ -427,8 +428,8 @@ def fetch_parcels(box, fetch, timeout: float = DEFAULT_TIMEOUT_S,
         if progress is not None:
             try:
                 progress(min(1.0, sent / float(max(total, 1))))
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cadastre: progress callback")
         if body is None:
             if first_error is None:
                 first_error = last
@@ -654,10 +655,13 @@ def urllib_transport(url: str, timeout: float = DEFAULT_TIMEOUT_S) -> str:
     import urllib.error                                        # noqa: PLC0415
     import urllib.request                                      # noqa: PLC0415
 
+    require_web_url(url)
     request = urllib.request.Request(
         url, headers={"User-Agent": "GeoCadUavToolkit/1.0 (QGIS plugin)"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # The scheme was checked above, which is what B310 asks for.
+        with urllib.request.urlopen(                             # nosec B310
+                request, timeout=timeout) as response:
             return response.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         raise CadastreError(
@@ -736,8 +740,8 @@ def lookup_task(x: float, y: float, source_crs, on_result,
         def finished(self, ok):
             try:
                 on_result(self.parcel if ok else None, self.error)
-            except Exception:                                   # noqa: BLE001
-                pass            # a callback that throws must not kill QGIS
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cadastre: result callback")
 
     task = _CadastreTask()
     QgsApplication.taskManager().addTask(task)
@@ -1196,8 +1200,8 @@ def query_area(project_geometry, project_crs, transport=None,
         if progress is not None:
             try:
                 progress(value)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cadastre: progress callback")
 
     step(5.0)
     box = service_bbox(project_geometry, project_crs)
@@ -1412,8 +1416,8 @@ def task_class():
                         data.get("messaggio")
                         or STATUS_LABELS.get(data.get("stato"), ""))
                     self.cadastralDataReady.emit(data)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cadastre: result signal")
 
     _TASK_CLASS = CadastralTask
     return _TASK_CLASS
@@ -1439,8 +1443,8 @@ def area_task(project_geometry, project_crs, on_result=None, transport=None,
         def _forward(_data, _task=task, _callback=on_result):
             try:
                 _callback(_task.result)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cadastre: result callback")
 
         task.cadastralDataReady.connect(_forward)
     QgsApplication.taskManager().addTask(task)

@@ -451,8 +451,7 @@ class GeoCadDock(QDockWidget):
         for this plugin and for native digitising alike.
         """
         try:
-            from qgis.core import (Qgis, QgsProject, QgsSnappingConfig,
-                                   QgsTolerance)
+            from qgis.core import QgsSnappingConfig, QgsTolerance
         except ImportError:                                     # pragma: no cover
             return
         project = QgsProject.instance()

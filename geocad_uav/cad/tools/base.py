@@ -37,7 +37,8 @@ import numpy as np
 
 from ...core import crs as crs_svc
 from ...core.constants import GEOM_EPS_M
-from ...core.errors import GeoCadError, InvalidInputError, LayerError
+from ...core.errors import (GeoCadError, InvalidInputError,
+                            LayerError, swallow)
 from ...io import layer_factory as lf
 from .. import dynamic_input as di
 from .. import parametric as pa
@@ -482,8 +483,8 @@ def _text(value) -> str:
 
         if value == NULL:
             return ""
-    except Exception:                                           # noqa: BLE001
-        pass
+    except Exception as exc:                                    # noqa: BLE001
+        swallow(exc, "cad: reading an attribute value")
     return str(value)
 
 
@@ -702,8 +703,8 @@ class BaseCadTool:
         if self.commit_observer is not None:
             try:
                 self.commit_observer(report)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cad: commit observer")
         return report
 
     # -- cadastral parcel --------------------------------------------------
@@ -1000,8 +1001,8 @@ class CadMapTool(QgsMapTool, BaseCadTool):
                 from qgis.core import Qgis                      # noqa: PLC0415
                 self.iface.messageBar().pushMessage(
                     "GeoCad UAV", text, level=Qgis.MessageLevel.Warning, duration=6)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "cad: message bar")
 
     def _map_to_work(self, map_point):
         return self.to_work(map_point.x(), map_point.y(), self._canvas_crs,
@@ -1153,5 +1154,5 @@ class CadMapTool(QgsMapTool, BaseCadTool):
         try:
             self.iface.mainWindow().statusBar().showMessage(
                 "  |  ".join(lines))
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "cad: status bar hud")

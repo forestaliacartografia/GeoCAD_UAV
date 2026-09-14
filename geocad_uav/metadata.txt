@@ -131,7 +131,7 @@ about[it]=GeoCad UAV Toolkit e' un plugin QGIS per la progettazione e la
   missione di volo che lo documenta.
 
   Creato dal Cap. Niccolò Marco Mancini — RGPBIO.
-version=2.2.4
+version=2.2.5
 author=Cap. Niccolò Marco Mancini — RGPBIO
 email=niccolomarco.mancini@gmail.com
 

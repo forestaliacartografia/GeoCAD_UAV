@@ -53,7 +53,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
                                  QWidget)
 
 from ..core import grid as grid_mod
-from ..core.errors import GeoCadError
+from ..core.errors import GeoCadError, swallow
 from ..forest.reforestation import area as area_mod
 from ..forest.reforestation import composition as composition_mod
 from ..forest.reforestation import constraints as constraints_mod
@@ -1126,8 +1126,8 @@ class WorkflowDock(QDockWidget):
                     "GeoCad UAV", message,
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: message bar")
         QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
                                                Qgis.MessageLevel.Warning)
 
@@ -1284,8 +1284,8 @@ class Panel(QWidget):
         try:
             iface.messageBar().pushMessage("GeoCad UAV", message,
                                            level=Qgis.MessageLevel.Info, duration=5)
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "workflow: message bar")
 
     def warn(self, error) -> None:
         message = (error.formatted() if isinstance(error, GeoCadError)
@@ -1297,8 +1297,8 @@ class Panel(QWidget):
                     "GeoCad UAV", message,
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: message bar")
         QgsProject.instance()        # keep the import meaningful offscreen
 
 
@@ -4344,8 +4344,8 @@ class ContextDock(QDockWidget):
                     "GeoCad UAV", message,
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: message bar")
         QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
                                                Qgis.MessageLevel.Warning)
 
@@ -4361,8 +4361,8 @@ class ContextDock(QDockWidget):
         for panel in (self.player, self.uav_panel, self.export_panel):
             try:
                 panel.teardown()
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: panel teardown")
 
     def show_step(self, key) -> None:
         """Called by the workflow list, with the key of the chosen step."""
@@ -4414,8 +4414,8 @@ class StatusBarInfo(QObject):
         if iface is not None:
             try:
                 iface.mainWindow().statusBar().addPermanentWidget(self.label)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: status bar widget")
         state.changed.connect(self.refresh)
 
     def text(self) -> str:
@@ -4441,8 +4441,8 @@ class StatusBarInfo(QObject):
             return
         try:
             self.iface.mainWindow().statusBar().removeWidget(self.label)
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "workflow: status bar cleanup")
 
 
 # --------------------------------------------------------------------------
@@ -4492,8 +4492,8 @@ class Workspace(QObject):
         for dock in (self.workflow, self.context):
             try:
                 self.iface.removeDockWidget(dock)
-            except Exception:                                   # noqa: BLE001
-                pass
+            except Exception as exc:                            # noqa: BLE001
+                swallow(exc, "workflow: dock removal")
             dock.deleteLater()
 
     def set_visible(self, visible: bool) -> None:

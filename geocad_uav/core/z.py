@@ -26,6 +26,8 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+from .errors import swallow
+
 import numpy as np
 
 #: Hard cap on the resampled grid, so a country-wide DEM cannot exhaust RAM.
@@ -541,8 +543,8 @@ def _log_dem(info: dict) -> None:
             describe_dem_diagnostics(info), "GeoCad UAV",
             Qgis.MessageLevel.Warning if info.get("overlaps") is False
             else Qgis.MessageLevel.Info)
-    except Exception:                                           # noqa: BLE001
-        pass
+    except Exception as exc:                                    # noqa: BLE001
+        swallow(exc, "dem: diagnostics log")
 
 
 def _source_resolution_in_crs(src_ds, src_gt, src_crs, work_crs):

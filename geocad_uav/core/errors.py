@@ -159,3 +159,83 @@ class LayerError(GeoCadError):
 class NotEditableError(LayerError):
     default_message = "Il layer non e' in modalita' di modifica."
     default_hint = "Attiva la modifica sul layer di destinazione."
+
+
+class UnsafeUrlError(GeoCadError):
+    default_message = "Indirizzo di rete non ammesso."
+    default_hint = "Sono ammessi solo indirizzi http:// e https://."
+
+
+# --------------------------------------------------------------------------
+# Failures that must not propagate
+# --------------------------------------------------------------------------
+
+#: Every exception deliberately not propagated, newest last. Bounded, because
+#: a side effect that fails once usually fails on every repaint.
+_SWALLOWED = []
+SWALLOW_LIMIT = 200
+
+#: (context, exception type) already sent to the QGIS log, so a failure that
+#: repeats sixty times a second is reported once and counted thereafter.
+_REPORTED = set()
+
+
+def swallow(exc: BaseException, context: str) -> None:
+    """Record an exception that must not propagate, then carry on.
+
+    A number of call sites guard an *optional side effect*: a message bar
+    that no longer exists, a status bar being dismantled while QGIS shuts
+    down, a caller-supplied callback that raises. Letting those through would
+    take the host application down over a cosmetic failure, so they are
+    caught -- but a caught exception that leaves no trace anywhere turns a
+    field report into guesswork.
+
+    This never raises. It is called from ``except`` blocks, including during
+    teardown, where a second exception would be worse than the first.
+    """
+    entry = _describe(exc, context)
+    _SWALLOWED.append(entry)
+    del _SWALLOWED[:-SWALLOW_LIMIT]
+    _report_once(entry, context, exc)
+
+
+def swallowed() -> list:
+    """What was caught and not propagated, oldest first.
+
+    Worth quoting in a bug report, and what the tests assert against.
+    """
+    return list(_SWALLOWED)
+
+
+def clear_swallowed() -> None:
+    """Forget the history. For tests that want to observe one call."""
+    _SWALLOWED.clear()
+    _REPORTED.clear()
+
+
+def _describe(exc: BaseException, context: str) -> str:
+    """One line for the log, even when the exception resists being printed."""
+    try:
+        return "{0}: {1}: {2}".format(context, type(exc).__name__, exc)
+    except Exception:                                           # noqa: BLE001
+        # An exception whose __str__ raises is rare and not a reason to lose
+        # the record: the type and the place still identify it.
+        return "{0}: {1}".format(context, type(exc).__name__)
+
+
+def _report_once(entry: str, context: str, exc: BaseException) -> None:
+    """Send the first of its kind to the QGIS log, if there is one."""
+    key = (context, type(exc).__name__)
+    if key in _REPORTED:
+        return
+    try:
+        from qgis.core import Qgis, QgsApplication              # noqa: PLC0415
+
+        QgsApplication.messageLog().logMessage(
+            entry, "GeoCad UAV", Qgis.MessageLevel.Info)
+    except Exception:                                           # noqa: BLE001
+        # Headless, or QGIS is already gone. Deliberately not marked as
+        # reported, so a later call can still put it in the log; the history
+        # above has it either way.
+        return
+    _REPORTED.add(key)

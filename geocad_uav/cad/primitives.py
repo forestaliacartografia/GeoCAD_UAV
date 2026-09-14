@@ -96,7 +96,8 @@ def geometry_signature(geom) -> str:
         return ""
     coords = [(round(v.x(), 3), round(v.y(), 3)) for v in geom.vertices()]
     payload = ";".join("{0},{1}".format(x, y) for x, y in coords)
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(payload.encode("utf-8"),
+                    usedforsecurity=False).hexdigest()[:16]
 
 
 # --------------------------------------------------------------------------

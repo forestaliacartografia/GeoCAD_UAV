@@ -26,6 +26,7 @@ from qgis.PyQt.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
                                  QProgressBar, QPushButton, QTextBrowser,
                                  QVBoxLayout)
 
+from ..core.errors import swallow
 from ..io import dem_source as ds
 from ..settings import mask as mask_secret
 from ..settings import settings as app_settings
@@ -303,5 +304,5 @@ class DemDownloadDialog(QDialog):
         try:
             self.iface.messageBar().pushMessage(tr("GeoCad UAV"),
                                                 ds.mask_text(text), level=level)
-        except Exception:                                       # noqa: BLE001
-            pass
+        except Exception as exc:                                # noqa: BLE001
+            swallow(exc, "dem dialog: message bar")

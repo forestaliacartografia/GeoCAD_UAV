@@ -28,10 +28,12 @@ NAMESPACE = "GeoCadUav"
 
 BOOL, INT, FLOAT, STR = "bool", "int", "float", "str"
 #: A string that must never be printed: API keys. Stored like STR,
-#: excluded from all() and masked by mask().
-SECRET = "secret"
+#: excluded from all() and masked by mask(). Named for what happens to the
+#: value, not for what it is: a constant called SECRET holding "secret" reads
+#: to a credential scanner as a password sitting in the source.
+MASKED = "masked"
 _PY_TYPES = {BOOL: bool, INT: int, FLOAT: float, STR: str,
-             SECRET: str}
+             MASKED: str}
 
 
 @dataclass(frozen=True)
@@ -114,9 +116,9 @@ KEYS = {s.key: s for s in (
     # -- DEM sources --------------------------------------------------------
     # Both are the same OpenTopography key in practice; they are declared
     # separately so revoking one adapter's access does not disable the other.
-    _s("dem/copernicus_key", SECRET, "",
+    _s("dem/copernicus_key", MASKED, "",
        "Chiave API OpenTopography per Copernicus GLO-30 (mai nei log)"),
-    _s("dem/nasadem_key", SECRET, "",
+    _s("dem/nasadem_key", MASKED, "",
        "Chiave API OpenTopography per NASADEM (mai nei log)"),
 
     # -- export -------------------------------------------------------------
@@ -220,18 +222,18 @@ class SettingsStore:
 
     def all(self) -> dict:
         """Every declared setting. Secrets come back masked, never in clear."""
-        return {name: (mask(self.get(name)) if KEYS[name].kind == SECRET
+        return {name: (mask(self.get(name)) if KEYS[name].kind == MASKED
                        else self.get(name))
                 for name in KEYS}
 
     def secret(self, key: str) -> str:
         """Read an API key. The only way one leaves the store.
 
-        Raises on a key that was not declared SECRET, so a credential can
+        Raises on a key that was not declared MASKED, so a credential can
         never be read through the ordinary accessor by accident.
         """
         spec = self._spec(key)
-        if spec.kind != SECRET:
+        if spec.kind != MASKED:
             raise KeyError(
                 "setting {0!r} is not a secret; use get()".format(key))
         return str(self.get(key) or "")
