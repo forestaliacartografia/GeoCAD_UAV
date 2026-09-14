@@ -206,15 +206,27 @@ print("        comune: {0}, particelle: {1}".format(
 check("una sola particella interseca l'area", state.cadastre.n_parcels, 1)
 check("la tabella ha una riga per particella",
       area_panel.parcel_table.rowCount(), state.cadastre.n_parcels)
-check_true("...e la riga porta comune, foglio, particella e percentuale",
+# v2.0.1: sei colonne -- comune, foglio, particella, le due superfici e la
+# percentuale. Le superfici erano il dato che mancava a chi legge un
+# allegato catastale, e la percentuale da sola non le sostituisce.
+check_true("...e la riga porta comune, foglio, particella, superfici e %",
            all(area_panel.parcel_table.item(0, column) is not None
-               for column in range(4)))
+               for column in range(6)))
 check_true("il comune in tabella e' quello risolto dal Belfiore",
            "Perugia" in area_panel.parcel_table.item(0, 0).text())
 check_text("il foglio", area_panel.parcel_table.item(0, 1).text(), "252")
 check_text("la particella", area_panel.parcel_table.item(0, 2).text(), "1016")
+check_true("la superficie catastale e' in tabella, in metri quadri",
+           area_panel.parcel_table.item(0, 3).text().endswith("m2"))
+check_true("...e quella interessata pure",
+           area_panel.parcel_table.item(0, 4).text().endswith("m2"))
 check_true("...e una percentuale che si legge",
-           0.0 < float(area_panel.parcel_table.item(0, 3).text()) <= 100.0)
+           0.0 < float(area_panel.parcel_table.item(0, 5).text()) <= 100.0)
+check("il riepilogo per Comune ha una riga",
+      area_panel.comune_table.rowCount(), len(state.cadastre.comuni()))
+check_true("...col nome del Comune e il suo codice Belfiore",
+           "Perugia" in area_panel.comune_table.item(0, 0).text()
+           and "G478" in area_panel.comune_table.item(0, 0).text())
 
 parcels = layers.layers.get("parcels")
 check_true("le particelle sono un layer sulla mappa", parcels is not None)

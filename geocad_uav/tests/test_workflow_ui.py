@@ -114,28 +114,44 @@ check_true("il dock del flusso e' un QDockWidget",
            workspace.workflow.inherits("QDockWidget"))
 check_true("...e contiene un QListWidget",
            isinstance(workspace.workflow.list, QListWidget))
-# v1.32.0: fourteen planting steps, then six flight ones in the same list.
-check("gli step del rimboschimento sono quattordici", len(wf.STEPS), 14)
-check("...e quelli del volo sei", len(wf.UAV_STEPS), 6)
-# v1.36.0: due moduli, due percorsi. La lista ne mostra uno alla volta.
+# v2.0.1: sedici step di rimboschimento e dodici di volo, su due percorsi
+# separati. La lista ne mostra uno alla volta e i nomi vengono dal modulo,
+# non da questa pagina.
+check("gli step del rimboschimento sono sedici", len(wf.STEPS), 16)
+check("...e quelli del volo dodici", len(wf.UAV_STEPS), 12)
 check("la lista porta gli step del modulo in corso",
       workspace.workflow.list.count(), len(wf.STEPS))
 check_true("...che all'avvio e' il rimboschimento",
            workspace.workflow.module == wf.MODULE_FOREST)
+
+
+def listed():
+    return [workspace.workflow.list.item(i).text()
+            for i in range(workspace.workflow.list.count())]
+
+
+forest_labels = listed()
+print("        rimboschimento: {0}".format(forest_labels))
+check_true("la lista del rimboschimento e' esattamente quella del modulo",
+           forest_labels == [label for _key, label in wf.STEPS])
 check_true("si passa al volo", workspace.workflow.set_module(wf.MODULE_UAV))
-check("...e la lista mostra i suoi sei step",
+uav_labels = listed()
+print("        volo: {0}".format(uav_labels))
+check("...e la lista mostra i suoi dodici step",
       workspace.workflow.list.count(), len(wf.UAV_STEPS))
+check_true("...esattamente quelli del modulo",
+           uav_labels == [label for _key, label in wf.UAV_STEPS])
+check_true("nessuna etichetta compare in entrambi i moduli",
+           not set(forest_labels) & set(uav_labels))
 check_true("...e nessuno step di rimboschimento resta in vista",
-           not any(workspace.workflow.list.item(i).text().startswith("1")
-                   for i in range(workspace.workflow.list.count())))
+           not any(key in [workspace.workflow.list.item(i).data(
+               Qt.ItemDataRole.UserRole)
+               for i in range(workspace.workflow.list.count())]
+               for key, _label in wf.STEPS))
 workspace.workflow.set_module(wf.MODULE_FOREST)
-labels = [workspace.workflow.list.item(i).text()
-          for i in range(workspace.workflow.list.count())]
-print("        {0}".format(labels))
-for expected in ("1. Area", "2. Terreno", "3. Vincoli", "4. Zone",
-                 "5. Specie", "6. Sesti", "7. Orientamento", "8. Genera",
-                 "9. Naturaliforme", "10. Ottimizza", "11. Verifica",
-                 "12. Editing", "13. Cartografia", "14. Elaborati"):
+labels = listed()
+for expected in ("1. Area", "2. Catasto", "7. Densita'", "8. Sesto",
+                 "16. Elaborati"):
     check_true("lo step '{0}' c'e'".format(expected), expected in labels)
 
 check_true("il dock del contesto e' un QDockWidget",
@@ -143,7 +159,8 @@ check_true("il dock del contesto e' un QDockWidget",
 check_true("...e contiene un QStackedWidget",
            isinstance(context.stack, QStackedWidget))
 check_true("ogni step porta a una pagina",
-           all(key in context.pages for key, _label in wf.STEPS))
+           all(key in context.pages or key in context.part_pages
+               for key, _label in wf.STEPS))
 
 seen = {}
 for row, (key, _label) in enumerate(wf.STEPS):
@@ -156,14 +173,15 @@ check_true("Specie e Sesti condividono un pannello a schede",
            seen["species"] == seen["scheme"])
 check_true("...che e' un QTabWidget",
            isinstance(context.scheme_panel.tabs, QTabWidget))
-workspace.workflow.list.setCurrentRow(4)
+_keys = [key for key, _label in wf.STEPS]
+workspace.workflow.list.setCurrentRow(_keys.index("species"))
 check("lo step Specie apre la scheda Specie",
       context.scheme_panel.tabs.currentIndex(), wf.SchemePanel.TAB_SPECIES)
-workspace.workflow.list.setCurrentRow(5)
-check("lo step Sesti apre la scheda Sesto",
+workspace.workflow.list.setCurrentRow(_keys.index("scheme"))
+check("lo step Sesto apre la scheda Sesto",
       context.scheme_panel.tabs.currentIndex(), wf.SchemePanel.TAB_SCHEME)
-check("le altre dodici pagine sono distinte",
-      len({v for k, v in seen.items() if k not in ("species", "scheme")}), 12)
+check("le altre quattordici pagine sono distinte",
+      len({v for k, v in seen.items() if k not in ("species", "scheme")}), 14)
 
 # --------------------------------------------------------------------------
 # U2 - the status bar, and the states of the steps

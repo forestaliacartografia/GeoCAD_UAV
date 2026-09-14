@@ -185,9 +185,10 @@ workspace = plugin.workspace
 check_true("la dashboard esiste", workspace is not None)
 # v1.36.0: two modules, one navigation path each. The list shows the
 # module in hand -- fourteen planting steps, or six flight ones.
-check("...con i quattordici step del rimboschimento",
+check("...con i sedici step del rimboschimento",
       workspace.workflow.list.count(), len(wf.STEPS))
-check("...e sei di volo, sul proprio percorso", len(wf.UAV_STEPS), 6)
+check("...che sono sedici", len(wf.STEPS), 16)
+check("...e dodici di volo, sul proprio percorso", len(wf.UAV_STEPS), 12)
 check_true("il selettore di modulo c'e'",
            set(workspace.workflow.module_buttons) ==
            {wf.MODULE_FOREST, wf.MODULE_UAV})

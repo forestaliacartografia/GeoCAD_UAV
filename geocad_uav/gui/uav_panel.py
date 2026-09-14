@@ -80,12 +80,18 @@ AZIMUTHS = (
     ("optimised", "Misurato (scansione degli orientamenti)"),
 )
 
-#: The six steps of the flight workflow, in the order they are worked.
+#: The twelve steps of the flight workflow, in the order they are worked.
 STEP_AREA = "uav_area"
-STEP_HARDWARE = "uav_hardware"
-STEP_FLIGHT = "uav_flight"
+STEP_DRONE = "uav_drone"
+STEP_SENSOR = "uav_sensor"
+STEP_GSD = "uav_gsd"
+STEP_TERRAIN = "uav_terrain"
+STEP_CAPTURE = "uav_capture"
+STEP_LINES = "uav_lines"
+STEP_WAYPOINTS = "uav_waypoints"
 STEP_SAFETY = "uav_safety"
 STEP_SIMULATION = "uav_simulation"
+STEP_VALIDATION = "uav_validation"
 STEP_EXPORT = "uav_export"
 
 CM_PER_M = 100.0
@@ -155,22 +161,31 @@ class UavPanel(QWidget):
         self.terrain_box = terrain_box
 
         # ------------------------------------------------------ HARDWARE
-        gear_box = QGroupBox(tr("Camera e drone"))
-        gear_form = QFormLayout(gear_box)
+        drone_box = QGroupBox(tr("Drone"))
+        drone_form = QFormLayout(drone_box)
+        self.drone_combo = QComboBox()
+        for key in sorted(self._drones):
+            self.drone_combo.addItem(self._drones[key].name, key)
+        drone_form.addRow(tr("Profilo"), self.drone_combo)
+        self.drone_note = QLabel()
+        self.drone_note.setWordWrap(True)
+        drone_form.addRow(self.drone_note)
+        self.drone_box = drone_box
+
+        sensor_box = QGroupBox(tr("Sensore"))
+        sensor_form = QFormLayout(sensor_box)
         self.camera_combo = QComboBox()
         for key in sorted(self._cameras):
             camera = self._cameras[key]
             self.camera_combo.addItem(
                 "{0} [{1}]".format(camera.name, camera.kind_label), key)
-        gear_form.addRow(tr("Camera"), self.camera_combo)
-        self.drone_combo = QComboBox()
-        for key in sorted(self._drones):
-            self.drone_combo.addItem(self._drones[key].name, key)
-        gear_form.addRow(tr("Drone"), self.drone_combo)
-        self.gear_note = QLabel()
-        self.gear_note.setWordWrap(True)
-        gear_form.addRow(self.gear_note)
-        self.gear_box = gear_box
+        sensor_form.addRow(tr("Payload"), self.camera_combo)
+        self.camera_note = QLabel()
+        self.camera_note.setWordWrap(True)
+        sensor_form.addRow(self.camera_note)
+        self.sensor_box = sensor_box
+        #: Kept as the pair of boxes the older code called "the gear box".
+        self.gear_box = drone_box
 
         optics_box = QGroupBox(tr("Quota e GSD"))
         optics_form = QFormLayout(optics_box)
@@ -191,8 +206,8 @@ class UavPanel(QWidget):
         self.optics_box = optics_box
 
         # -------------------------------------------------------- FLIGHT
-        flight_box = QGroupBox(tr("Volo"))
-        flight_form = QFormLayout(flight_box)
+        capture_box = QGroupBox(tr("Parametri di acquisizione"))
+        flight_form = QFormLayout(capture_box)
         self.speed_kmh = self._spin(36.0, 1.0, 108.0, " km/h")
         flight_form.addRow(tr("Velocita'"), self.speed_kmh)
         self.frontlap = self._spin(80.0, 1.0, 95.0, " %")
@@ -206,7 +221,10 @@ class UavPanel(QWidget):
             "Derivato: base di presa D_front divisa per la velocita'. "
             "Non e' modificabile perche' non e' un parametro libero."))
         flight_form.addRow(tr("Intervallo di scatto"), self.interval)
+        self.capture_box = capture_box
 
+        lines_box = QGroupBox(tr("Strisciate"))
+        flight_form = QFormLayout(lines_box)
         self.pattern_combo = QComboBox()
         for key, label in PATTERNS:
             self.pattern_combo.addItem(tr(label), key)
@@ -240,7 +258,9 @@ class UavPanel(QWidget):
         self.azimuth_note.setWordWrap(True)
         self.azimuth_note.setVisible(False)
         flight_form.addRow(self.azimuth_note)
-        self.flight_box = flight_box
+        self.lines_box = lines_box
+        #: The older name for the acquisition box, kept for callers.
+        self.flight_box = capture_box
 
         # -------------------------------------------------------- SAFETY
         safety_box = QGroupBox(tr("Sicurezza e ostacoli"))
@@ -295,9 +315,9 @@ class UavPanel(QWidget):
         buttons.addWidget(self.confirm_button)
         self.button_row = buttons
 
-        for widget in (self.extent, terrain_box, gear_box, optics_box,
-                       flight_box, safety_box, self.quality_box,
-                       self.summary):
+        for widget in (self.extent, terrain_box, drone_box, sensor_box,
+                       optics_box, capture_box, lines_box, safety_box,
+                       self.quality_box, self.summary):
             layout.addWidget(widget)
         layout.addLayout(buttons)
 
@@ -346,11 +366,17 @@ class UavPanel(QWidget):
         planner shown six ways rather than six planners.
         """
         return {
-            STEP_AREA: [self.extent, self.terrain_box],
-            STEP_HARDWARE: [self.gear_box, self.optics_box],
-            STEP_FLIGHT: [self.flight_box],
-            STEP_SAFETY: [self.safety_box, self.quality_box],
-            STEP_SIMULATION: [self.summary, self.button_row],
+            STEP_AREA: [self.extent],
+            STEP_DRONE: [self.drone_box],
+            STEP_SENSOR: [self.sensor_box],
+            STEP_GSD: [self.optics_box],
+            STEP_TERRAIN: [self.terrain_box],
+            STEP_CAPTURE: [self.capture_box],
+            STEP_LINES: [self.lines_box],
+            STEP_WAYPOINTS: [self.button_row, self.summary],
+            STEP_SAFETY: [self.safety_box],
+            STEP_SIMULATION: [],
+            STEP_VALIDATION: [self.quality_box],
             STEP_EXPORT: [],
         }
 
@@ -712,9 +738,8 @@ class UavPanel(QWidget):
                 tr("Parametri non validi: {0}").format(exc))
             return
         self.interval.setText("{0:.2f} s".format(interval))
-        self.gear_note.setText(
-            cam_lib.describe(self.current_camera())
-            + "\n" + drone_lib.describe(self.current_drone()))
+        self.camera_note.setText(cam_lib.describe(self.current_camera()))
+        self.drone_note.setText(drone_lib.describe(self.current_drone()))
         corridor = self.is_corridor()
         self.corridor_label.setVisible(corridor)
         self.corridor_width.setVisible(corridor)

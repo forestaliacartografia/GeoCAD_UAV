@@ -236,8 +236,8 @@ class GeoCadDock(QDockWidget):
         self.settings_reset = QPushButton(tr("Ripristina i valori predefiniti"))
 
         self.credit = QLabel(tr(
-            "Ideato e realizzato dal Cap. Niccolò Marco Mancini — "
-            "Gruppo di Cartografia Numerica, RGPBIO."))
+            "Creato dal Cap. Niccolò Marco Mancini — Raggruppamento "
+            "Carabinieri Biodiversità (RGPBIO)."))
         self.credit.setWordWrap(True)
         self.credit.setStyleSheet("color:#555;")
         return [units_box, snap_box, default_box, self.settings_reset,

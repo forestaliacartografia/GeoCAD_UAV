@@ -467,15 +467,27 @@ check_true("description is present and not empty",
 check_true("description fits the plugin manager (< 250 chars)",
            description is not None and len(description.group(1)) < 250)
 
-about = re.search(r"^about=(?:.*\n)(?:[ \t]+.*\n)*", metadata, re.M)
-about_text = about.group(0) if about else ""
+# v2.0.1: read the value the way QGIS reads it. A regex that stops at
+# the first blank line saw only the first paragraph of a
+# multi-paragraph about -- and would have passed a metadata file QGIS
+# cannot parse at all, which is exactly what shipped for twelve
+# versions.
+import configparser as _configparser                             # noqa: E402
+
+_cp = _configparser.ConfigParser()
+_cp.read_string(metadata)
+about_text = _cp.get("general", "about")
 check_true("about names the author",
            "Cap. Niccol\u00f2 Marco Mancini" in about_text)
 check_true("about names the unit", "RGPBIO" in about_text)
-check_true("about names the Cartografia Numerica group",
-           "Cartografia Numerica" in about_text)
-check_true("author= carries the rank",
-           "author=Cap. Niccol\u00f2 Marco Mancini" in metadata)
+# v2.0.1: the attribution is one formulation, used everywhere -- the rank,
+# the name and the Raggruppamento, and no further qualification.
+check_true("about names the Raggruppamento",
+           "Raggruppamento Carabinieri Biodiversit\u00e0" in about_text)
+check_true("author= carries the rank and the unit",
+           "author=Cap. Niccol\u00f2 Marco Mancini" in metadata
+           and "Raggruppamento Carabinieri Biodiversit\u00e0 (RGPBIO)"
+           in metadata)
 check_true("email is present and untouched",
            re.search(r"^email=\S+@\S+$", metadata, re.M) is not None)
 check_true("no marketing comparison in the metadata",
@@ -511,7 +523,7 @@ print("        credit: {0}".format(credit))
 check_true("the dock shows the credit line",
            "RGPBIO" in credit
            and "Cap. Niccol\u00f2 Marco Mancini" in credit
-           and "Cartografia Numerica" in credit)
+           and "Raggruppamento Carabinieri" in credit)
 fresh.unload()
 
 print("\n" + "=" * 78)

@@ -166,20 +166,22 @@ listed = keys_in_list()
 for key, label in wf.UAV_STEPS:
     check_true("lo step '{0}' e' nella lista del volo".format(label),
                key in listed)
-check("gli step del volo sono sei", len(wf.UAV_STEPS), 6)
+check("gli step del volo sono dodici", len(wf.UAV_STEPS), 12)
 check("...e sono i soli nella lista", len(listed), len(wf.UAV_STEPS))
 check_true("...e nessuno step di rimboschimento ci compare",
            not any(key in listed for key, _l in wf.STEPS))
 
 for key, widget, what in (
         (up.STEP_AREA, panel.extent, "il selettore dell'area"),
-        (up.STEP_AREA, panel.terrain_box, "il DEM"),
-        (up.STEP_HARDWARE, panel.gear_box, "camera e drone"),
-        (up.STEP_HARDWARE, panel.optics_box, "quota e GSD"),
-        (up.STEP_FLIGHT, panel.flight_box, "i parametri di volo"),
+        (up.STEP_DRONE, panel.drone_box, "il drone"),
+        (up.STEP_SENSOR, panel.sensor_box, "il sensore"),
+        (up.STEP_GSD, panel.optics_box, "quota e GSD"),
+        (up.STEP_TERRAIN, panel.terrain_box, "il DEM"),
+        (up.STEP_CAPTURE, panel.capture_box, "i parametri di acquisizione"),
+        (up.STEP_LINES, panel.lines_box, "le strisciate"),
+        (up.STEP_WAYPOINTS, panel.summary, "il riepilogo dei waypoint"),
         (up.STEP_SAFETY, panel.safety_box, "gli ostacoli"),
-        (up.STEP_SAFETY, panel.quality_box, "il controllo pre-volo"),
-        (up.STEP_SIMULATION, panel.summary, "il riepilogo"),
+        (up.STEP_VALIDATION, panel.quality_box, "il controllo pre-volo"),
         (up.STEP_EXPORT, context.export_panel, "l'export")):
     check_true("{0} e' sullo step giusto".format(what),
                owns(page_of(key), widget))
@@ -190,7 +192,7 @@ for key, _label in wf.UAV_STEPS:
     check_true("si puo' andare allo step {0}".format(key),
                dock.select_step(key))
     seen[key] = context.stack.currentIndex()
-check("le sei pagine sono distinte", len(set(seen.values())), 6)
+check("le dodici pagine sono distinte", len(set(seen.values())), 12)
 check_true("e sono altre rispetto a quelle del rimboschimento",
            not set(seen.values()) & {context.stack.indexOf(
                p.parentWidget().parentWidget())
@@ -670,7 +672,7 @@ else:
 # --------------------------------------------------------------------------
 print("\n== W9: lo step Hardware descrive camera e drone ==")
 panel.recompute()
-note = panel.gear_note.text()
+note = panel.camera_note.text() + "\n" + panel.drone_note.text()
 print("        {0}".format(note.replace("\n", "\n        ")))
 camera = panel.current_camera()
 drone = panel.current_drone()

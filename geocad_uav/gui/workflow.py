@@ -99,32 +99,40 @@ UNDO_DEPTH = 25
 #: The workflow, in order. ``key`` is what the state reports status against.
 STEPS = (
     ("area", "1. Area"),
-    ("terrain", "2. Terreno"),
-    ("constraints", "3. Vincoli"),
-    ("zones", "4. Zone"),
-    ("species", "5. Specie"),
-    ("scheme", "6. Sesti"),
-    ("orientation", "7. Orientamento"),
-    ("generate", "8. Genera"),
-    ("natural", "9. Naturaliforme"),
-    ("optimise", "10. Ottimizza"),
-    ("verify", "11. Verifica"),
-    ("edit", "12. Editing"),
-    ("cartography", "13. Cartografia"),
-    ("outputs", "14. Elaborati"),
+    ("cadastre", "2. Catasto"),
+    ("terrain", "3. Terreno"),
+    ("constraints", "4. Vincoli"),
+    ("zones", "5. Zone"),
+    ("species", "6. Specie"),
+    ("density", "7. Densita'"),
+    ("scheme", "8. Sesto"),
+    ("orientation", "9. Orientamento"),
+    ("generate", "10. Generazione"),
+    ("natural", "11. Naturaliforme"),
+    ("optimise", "12. Ottimizzazione"),
+    ("verify", "13. Verifica"),
+    ("edit", "14. Editing"),
+    ("cartography", "15. Cartografia"),
+    ("outputs", "16. Elaborati"),
 )
 
 #: The flight workflow, worked after the planting one or on its own. The
 #: widgets of every one of these steps belong to a single UavPanel: they are
-#: laid out as six pages here instead of one long form, and there is no
+#: laid out as twelve pages here instead of one long form, and there is no
 #: second planner behind them.
 UAV_STEPS = (
-    (uav_mod.STEP_AREA, "V1. Area del volo"),
-    (uav_mod.STEP_HARDWARE, "V2. Hardware e GSD"),
-    (uav_mod.STEP_FLIGHT, "V3. Parametri di volo"),
-    (uav_mod.STEP_SAFETY, "V4. Sicurezza e ostacoli"),
-    (uav_mod.STEP_SIMULATION, "V5. Simulazione"),
-    (uav_mod.STEP_EXPORT, "V6. Export"),
+    (uav_mod.STEP_AREA, "1. Area missione"),
+    (uav_mod.STEP_DRONE, "2. Drone"),
+    (uav_mod.STEP_SENSOR, "3. Sensore"),
+    (uav_mod.STEP_GSD, "4. GSD"),
+    (uav_mod.STEP_TERRAIN, "5. DEM / Terrain Following"),
+    (uav_mod.STEP_CAPTURE, "6. Acquisizione"),
+    (uav_mod.STEP_LINES, "7. Flight Lines"),
+    (uav_mod.STEP_WAYPOINTS, "8. Waypoint"),
+    (uav_mod.STEP_SAFETY, "9. Sicurezza"),
+    (uav_mod.STEP_SIMULATION, "10. Simulazione"),
+    (uav_mod.STEP_VALIDATION, "11. Validazione"),
+    (uav_mod.STEP_EXPORT, "12. Export"),
 )
 
 #: Every step there is, in order. Used for the status map and for the
@@ -139,8 +147,8 @@ MODULE_FOREST = "forest"
 MODULE_UAV = "uav"
 
 MODULES = (
-    (MODULE_FOREST, "Rimboschimento", STEPS),
-    (MODULE_UAV, "Volo UAV", UAV_STEPS),
+    (MODULE_FOREST, "RIMBOSCHIMENTO", STEPS),
+    (MODULE_UAV, "VOLO UAV / DRONE", UAV_STEPS),
 )
 
 
@@ -313,6 +321,8 @@ class ProjectState(QObject):
         #: Set when the operator actually chose a scheme. The spec always
         #: holds a default, and a default nobody looked at is not a decision.
         self.scheme_chosen = False
+        #: Set when the Density step derived the spacings from a target.
+        self.density_applied = False
         #: Set when the operator asked for glades and they were placed.
         self.glades_placed = False
         #: The step being looked at. ACTIVE is *where the operator is*, and
@@ -521,6 +531,8 @@ class ProjectState(QObject):
     def refresh_status(self) -> None:
         """Derive every step's state from what the model actually holds."""
         self.set_status("area", DONE if self.area is not None else NOT_STARTED)
+        self.set_status("cadastre",
+                        DONE if self.cadastre is not None else NOT_STARTED)
         self.set_status("terrain",
                         DONE if self.terrain is not None else NOT_STARTED)
         has_features = any(rule.n_features
@@ -529,6 +541,8 @@ class ProjectState(QObject):
         self.set_status("zones", DONE if len(self.zones) else NOT_STARTED)
         self.set_status("species", DONE if self.shares else NOT_STARTED)
         self.set_status("scheme", DONE if self.scheme_chosen else NOT_STARTED)
+        self.set_status("density",
+                        DONE if self.density_applied else NOT_STARTED)
         self.set_status("orientation",
                         DONE if self.orientation_applied else NOT_STARTED)
         self.set_status("generate",
@@ -563,20 +577,34 @@ class ProjectState(QObject):
         report = panel.last_report
 
         self.set_status(uav_mod.STEP_AREA,
-                        DONE if (has_area and has_dem) else NOT_STARTED)
-        self.set_status(uav_mod.STEP_HARDWARE,
+                        DONE if has_area else NOT_STARTED)
+        # Drone and sensor are always chosen -- the combos open on a profile
+        # -- so what marks them is whether the pair they form is flyable.
+        self.set_status(uav_mod.STEP_DRONE,
+                        DONE if has_area else NOT_STARTED)
+        self.set_status(uav_mod.STEP_SENSOR,
+                        DONE if has_area else NOT_STARTED)
+        self.set_status(uav_mod.STEP_GSD,
                         DONE if ready else
                         (WARNING if has_area and has_dem else NOT_STARTED))
-        self.set_status(uav_mod.STEP_FLIGHT,
+        self.set_status(uav_mod.STEP_TERRAIN,
+                        DONE if has_dem else NOT_STARTED)
+        self.set_status(uav_mod.STEP_CAPTURE,
+                        DONE if mission is not None else NOT_STARTED)
+        self.set_status(uav_mod.STEP_LINES,
+                        DONE if mission is not None else NOT_STARTED)
+        self.set_status(uav_mod.STEP_WAYPOINTS,
+                        DONE if mission is not None else NOT_STARTED)
+        self.set_status(uav_mod.STEP_SAFETY,
                         DONE if mission is not None else NOT_STARTED)
         if report is None:
-            self.set_status(uav_mod.STEP_SAFETY, NOT_STARTED)
+            self.set_status(uav_mod.STEP_VALIDATION, NOT_STARTED)
         elif report.errors:
-            self.set_status(uav_mod.STEP_SAFETY, ERROR)
+            self.set_status(uav_mod.STEP_VALIDATION, ERROR)
         elif report.warnings:
-            self.set_status(uav_mod.STEP_SAFETY, WARNING)
+            self.set_status(uav_mod.STEP_VALIDATION, WARNING)
         else:
-            self.set_status(uav_mod.STEP_SAFETY, DONE)
+            self.set_status(uav_mod.STEP_VALIDATION, DONE)
         self.set_status(uav_mod.STEP_SIMULATION,
                         DONE if mission is not None else NOT_STARTED)
         written = getattr(self.uav_export, "last_written", None)
@@ -1295,17 +1323,22 @@ class AreaPanel(Panel):
         form.addRow(tr("Utile"), self.usable_label)
         self.layout.addWidget(surfaces)
 
-        cadastre = QGroupBox(tr("Dati catastali"))
+        # Built here, shown as its own step: the context dock takes this
+        # box and gives it a page of its own.
+        cadastre = QGroupBox(tr("Intersezione catastale"))
+        self.cadastre_box = cadastre
         cad_form = QFormLayout(cadastre)
         self.query_button = QPushButton(tr("Interroga Catasto (WFS)"))
         cad_form.addRow(self.query_button)
         self.comune_label = QLabel(DASH)
+        self.comune_label.setWordWrap(True)
         self.belfiore_label = QLabel(DASH)
+        self.belfiore_label.setWordWrap(True)
         self.parcels_label = QLabel(DASH)
         self.cadastral_area_label = QLabel(DASH)
         self.project_area_label = QLabel(DASH)
         self.cadastre_status_label = QLabel(tr("in attesa"))
-        cad_form.addRow(tr("Comune"), self.comune_label)
+        cad_form.addRow(tr("Comuni"), self.comune_label)
         cad_form.addRow(tr("Belfiore"), self.belfiore_label)
         cad_form.addRow(tr("Particelle"), self.parcels_label)
         cad_form.addRow(tr("Superficie cat."), self.cadastral_area_label)
@@ -1320,14 +1353,35 @@ class AreaPanel(Panel):
         buttons_row.addWidget(self.show_button)
         cad_form.addRow(buttons_row)
 
-        self.parcel_table = QTableWidget(0, 4)
+        # RIEPILOGO COMUNE: one row per comune, so a project across two of
+        # them reads as a project across two of them.
+        cad_form.addRow(QLabel(tr("Riepilogo per Comune")))
+        self.comune_table = QTableWidget(0, 5)
+        self.comune_table.setHorizontalHeaderLabels(
+            [tr("Comune"), tr("Particelle"), tr("Sup. catastale"),
+             tr("Sup. interessata"), tr("%")])
+        self.comune_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.comune_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.comune_table.setMaximumHeight(120)
+        self.comune_table.setToolTip(tr(
+            "Scegli un Comune per evidenziarne tutte le particelle "
+            "sulla mappa."))
+        cad_form.addRow(self.comune_table)
+
+        # DETTAGLIO PARTICELLA: Comune, foglio, particella, and the three
+        # numbers a cadastral annex is judged on.
+        cad_form.addRow(QLabel(tr("Dettaglio particelle")))
+        self.parcel_table = QTableWidget(0, 6)
         self.parcel_table.setHorizontalHeaderLabels(
-            [tr("Comune"), tr("Foglio"), tr("Particella"), tr("%")])
+            [tr("Comune"), tr("Foglio"), tr("Particella"),
+             tr("Sup. catastale"), tr("Sup. interessata"), tr("%")])
         self.parcel_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch)
         self.parcel_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows)
-        self.parcel_table.setMaximumHeight(160)
+        self.parcel_table.setMaximumHeight(180)
         cad_form.addRow(self.parcel_table)
         self.layout.addWidget(cadastre)
         self.layout.addStretch(1)
@@ -1338,6 +1392,7 @@ class AreaPanel(Panel):
         self.details_button.clicked.connect(self.show_details)
         self.show_button.clicked.connect(self.show_parcels)
         self.parcel_table.itemSelectionChanged.connect(self.on_parcel_picked)
+        self.comune_table.itemSelectionChanged.connect(self.on_comune_picked)
         state.changed.connect(self.refresh)
         state.cadastralDataReady.connect(self.on_cadastral_data)
 
@@ -1404,8 +1459,12 @@ class AreaPanel(Panel):
     def on_cadastral_data(self, data: dict) -> None:
         """The slot the background task reaches when it has an answer."""
         self.query_button.setEnabled(True)
-        self.comune_label.setText(str(data.get("comune") or DASH))
-        self.belfiore_label.setText(str(data.get("belfiore") or DASH))
+        # Every comune, not the largest one: a label naming one of three is
+        # how the other two get lost.
+        self.comune_label.setText(str(data.get("comuni_elenco")
+                                      or data.get("comune") or DASH))
+        self.belfiore_label.setText(str(data.get("belfiore_elenco")
+                                        or data.get("belfiore") or DASH))
         self.parcels_label.setText(str(data.get("particelle", 0)))
         self.cadastral_area_label.setText("{0:,.2f} ha".format(
             float(data.get("superficie_catastale_ha") or 0.0)))
@@ -1422,21 +1481,71 @@ class AreaPanel(Panel):
             "\n".join([message] + list(data.get("avvisi") or [])))
         self.details_button.setEnabled(bool(data.get("righe")))
         self.show_button.setEnabled(bool(data.get("righe")))
+        self.fill_comune_table(data.get("comuni_righe") or [])
         self.fill_parcel_table(data.get("righe") or [])
         if data.get("righe"):
             self.show_parcels()
 
     def fill_parcel_table(self, rows) -> int:
-        """One row per parcel, in the order the result puts them."""
+        """One row per parcel, in the order the result puts them.
+
+        Comune first on every row, because two comuni can both hold a
+        "foglio 12 particella 45" and the sheet number alone does not say
+        which ground.
+        """
         self.parcel_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
-            values = (row.get("comune", ""), row.get("foglio", ""),
-                      row.get("particella", ""),
-                      "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
+            values = (
+                row.get("comune", ""), row.get("foglio", ""),
+                row.get("particella", ""),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_catastale_m2") or 0.0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_interessata_m2") or 0.0)),
+                "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
             for column, value in enumerate(values):
                 self.parcel_table.setItem(index, column,
                                           QTableWidgetItem(str(value)))
         return len(rows)
+
+    def fill_comune_table(self, rows) -> int:
+        """One row per comune: sheets, parcels and the surfaces taken."""
+        self.comune_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (
+                "{0} [{1}]".format(row.get("comune", ""),
+                                   row.get("belfiore", "")),
+                "{0} su {1} fogli".format(row.get("particelle", 0),
+                                          row.get("fogli", 0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_catastale_m2") or 0.0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_interessata_m2") or 0.0)),
+                "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole,
+                                 row.get("belfiore", ""))
+                self.comune_table.setItem(index, column, item)
+        return len(rows)
+
+    def on_comune_picked(self) -> int:
+        """A comune chosen in the summary highlights all of its parcels."""
+        row = self.comune_table.currentRow()
+        result = self.state.cadastre
+        if row < 0 or result is None:
+            return 0
+        item = self.comune_table.item(row, 0)
+        code = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if not code:
+            return 0
+        wanted = {(share.parcel.foglio, share.parcel.particella)
+                  for share in result.shares_of(code)}
+        rows = [index for index, share in enumerate(result.shares)
+                if share.parcel.comune_code == code
+                and (share.parcel.foglio, share.parcel.particella) in wanted]
+        return self.state.layers.select_rows("parcels", rows)
 
     def show_parcels(self) -> int:
         """Draw the parcels on the canvas and frame them."""
@@ -2224,6 +2333,131 @@ class SchemePanel(Panel):
         self.mix_chart.set_rows(self.state.mix_rows())
         total = sum(percent for _key, percent in self.state.shares)
         self.total_label.setText(tr("Totale: {0:g} %").format(total))
+
+
+class DensityPanel(Panel):
+    """Step 7: how many plants per hectare, and the spacing that gives them.
+
+    The engine answers both ways round -- ``density_from_spacing`` and
+    ``spacing_from_density`` -- and until now only one of them was
+    reachable. Applying a target writes the two spacings into the Sesto
+    step, which is where they belong: this panel owns no spacing of its own.
+    """
+
+    def __init__(self, state, parent=None):
+        super().__init__(tr("Densita' di impianto"), state, parent)
+        #: Filled by the context dock, which builds both panels.
+        self.scheme_panel = None
+
+        form = QFormLayout()
+        self.target = QDoubleSpinBox()
+        self.target.setRange(1.0, 100_000.0)
+        self.target.setDecimals(0)
+        self.target.setValue(1111.0)
+        self.target.setSuffix(tr(" piante/ha"))
+        self.target.setToolTip(tr(
+            "Densita' richiesta, riferita all'ettaro di proiezione "
+            "orizzontale: e' cosi' che la contano capitolati e computi."))
+        form.addRow(tr("Densita' obiettivo"), self.target)
+
+        self.derived_label = QLabel(DASH)
+        self.current_label = QLabel(DASH)
+        self.expected_label = QLabel(DASH)
+        self.slope_label = QLabel(DASH)
+        form.addRow(tr("Sesto corrispondente"), self.derived_label)
+        form.addRow(tr("Densita' del sesto attuale"), self.current_label)
+        form.addRow(tr("Piante sulla superficie utile"), self.expected_label)
+        form.addRow(tr("Sulla superficie reale"), self.slope_label)
+        self.layout.addLayout(form)
+
+        self.apply_button = QPushButton(tr("Applica il sesto corrispondente"))
+        self.apply_button.setToolTip(tr(
+            "Scrive interasse e interfila nello step Sesto. Da li' in poi "
+            "il sesto e' quello, e questa pagina ne legge la densita'."))
+        self.layout.addWidget(self.apply_button)
+
+        self.note = QLabel()
+        self.note.setWordWrap(True)
+        theme_mod.mark(self.note, muted=True)
+        self.layout.addWidget(self.note)
+        self.layout.addStretch(1)
+
+        self.target.valueChanged.connect(self.refresh)
+        self.apply_button.clicked.connect(self.apply_target)
+        state.changed.connect(self.refresh)
+
+    def pattern(self) -> str:
+        spec = self.state.spec
+        return getattr(spec, "base_pattern", grid_mod.PATTERN_SQUARE)
+
+    def spacing_for_target(self):
+        """``(along the row, between rows)`` for the density asked for."""
+        try:
+            return density_mod.spacing_from_density(
+                float(self.target.value()), self.pattern())
+        except GeoCadError:
+            return None
+
+    def apply_target(self) -> bool:
+        """Write the derived spacing into the scheme. Returns False if it could not."""
+        spacing = self.spacing_for_target()
+        if spacing is None:
+            self.say(tr("Densita' non applicabile a questo sesto."))
+            return False
+        distance, row = spacing
+        self.state.spec.plant_distance_m = float(distance)
+        self.state.spec.row_distance_m = float(row)
+        self.state.density_applied = True
+        panel = self.scheme_panel
+        if panel is not None:
+            panel.plant_distance.blockSignals(True)
+            panel.row_distance.blockSignals(True)
+            panel.plant_distance.setValue(float(distance))
+            panel.row_distance.setValue(float(row))
+            panel.plant_distance.blockSignals(False)
+            panel.row_distance.blockSignals(False)
+        self.state.touch()
+        self.state.refresh_status()
+        self.say(tr("Sesto {0:.2f} x {1:.2f} m applicato: {2:,.0f} "
+                    "piante/ha.").format(distance, row,
+                                         self.state.density_per_ha()))
+        self.refresh()
+        return True
+
+    def refresh(self) -> None:
+        spacing = self.spacing_for_target()
+        self.derived_label.setText(
+            "{0:.2f} x {1:.2f} m".format(*spacing) if spacing else DASH)
+        current = self.state.density_per_ha()
+        self.current_label.setText("{0:,.0f} piante/ha".format(current)
+                                   if current > 0 else DASH)
+        expected = self.state.expected_plants()
+        self.expected_label.setText("{0:,.0f}".format(expected)
+                                    if self.state.area is not None else DASH)
+
+        # The mean slope of the DEM window, from the analysis' own
+        # statistics: this panel computes no terrain of its own.
+        slope = 0.0
+        if self.state.terrain is not None:
+            try:
+                value = self.state.terrain.statistics().get("slope_mean_deg")
+                slope = float(value) if value == value else 0.0   # not NaN
+            except (AttributeError, KeyError, TypeError, ValueError):
+                slope = 0.0
+        if current > 0 and slope > 0:
+            self.slope_label.setText(
+                "{0:,.0f} piante/ha su {1:.1f} deg di pendenza media".format(
+                    density_mod.surface_density_from_real(current, slope),
+                    slope))
+        elif current > 0:
+            self.slope_label.setText(tr("terreno piano, o DEM non caricato"))
+        else:
+            self.slope_label.setText(DASH)
+
+        if current > 0:
+            self.note.setText("\n".join(density_mod.describe(
+                self.pattern(), self.state.spec.plant_distance_m,
+                self.state.spec.row_distance_m)))
 
 
 class OrientationPanel(Panel):
@@ -3431,6 +3665,21 @@ class OutputsPanel(Panel):
         if state.cadastre is not None:
             report.lines(state.cadastre.describe())
             if state.cadastre.shares:
+                # The summary before the detail: a project across two comuni
+                # is two administrations, and each of them reads its own row
+                # first. Both tables come from the same shares.
+                report.table(
+                    tr("Riepilogo per Comune"),
+                    (tr("Comune"), tr("Belfiore"), tr("Fogli"),
+                     tr("Particelle"), tr("Sup. catastale (ha)"),
+                     tr("Sup. interessata (ha)"), tr("% particelle"),
+                     tr("% progetto")),
+                    [(row["comune"], row["belfiore"], row["fogli"],
+                      row["particelle"],
+                      round(row["superficie_catastale_m2"] / M2_PER_HA, 4),
+                      round(row["superficie_interessata_m2"] / M2_PER_HA, 4),
+                      row["percentuale"], row["quota_progetto"])
+                     for row in state.cadastre.comune_rows()])
                 report.table(
                     tr("Particelle catastali"),
                     (tr("Comune"), tr("Belfiore"), tr("Foglio"),
@@ -3602,6 +3851,7 @@ class ContextDock(QDockWidget):
         self.stack = QStackedWidget()
 
         self.area_panel = AreaPanel(state)
+        self.density_panel = DensityPanel(state)
         self.terrain_panel = TerrainPanel(state)
         self.constraints_panel = ConstraintsPanel(state)
         self.zones_panel = ZonesPanel(state)
@@ -3614,11 +3864,14 @@ class ContextDock(QDockWidget):
         self.edit_panel = EditPanel(state)
         self.cartography_panel = CartographyPanel(state)
         self.outputs_panel = OutputsPanel(state)
+        # Density writes the spacing into the scheme, so it needs to know it.
+        self.density_panel.scheme_panel = self.scheme_panel
 
-        #: step key -> (page, tab index or None). Specie and Sesti share the
+        #: step key -> (page, tab index or None). Specie and Sesto share the
         #: scheme panel: two steps, one panel, no duplicated preview.
         self.pages = {
             "area": (self.area_panel, None),
+            "density": (self.density_panel, None),
             "terrain": (self.terrain_panel, None),
             "constraints": (self.constraints_panel, None),
             "zones": (self.zones_panel, None),
@@ -3633,7 +3886,8 @@ class ContextDock(QDockWidget):
             "cartography": (self.cartography_panel, None),
             "outputs": (self.outputs_panel, None),
         }
-        for panel in (self.area_panel, self.terrain_panel,
+        for panel in (self.area_panel, self.density_panel,
+                      self.terrain_panel,
                       self.constraints_panel, self.zones_panel,
                       self.scheme_panel, self.orientation_panel,
                       self.generate_panel, self.natural_panel,
@@ -3644,6 +3898,18 @@ class ContextDock(QDockWidget):
             holder.setWidgetResizable(True)
             holder.setWidget(panel)
             self.stack.addWidget(holder)
+
+        # ------------------------------------------------------- CATASTO
+        # Its own step, and the same group box the Area panel built: one
+        # panel owns the slots, two pages show its parts. "Where the
+        # project is" and "what the cadastre says about it" are two
+        # questions, the second asked of a government service over the
+        # network -- they do not belong on one page.
+        #: Pages that show part of a panel rather than a panel. Kept apart
+        #: from ``pages`` because the things in there are Panels sharing the
+        #: project state, and a group box is not one.
+        self.cadastre_page = self._page([self.area_panel.cadastre_box])
+        self.part_pages = {"cadastre": (self.cadastre_page, None)}
 
         # ---------------------------------------------------------- VOLO
         # One planner, laid out as six pages. UavPanel owns the widgets and
@@ -3660,13 +3926,14 @@ class ContextDock(QDockWidget):
         # One DEM download in the whole plugin, and it belongs to the
         # Terreno step. The flight step sends the operator there rather
         # than growing a second dialog of its own.
-        self.dem_step_button = QPushButton(tr("Serve un DEM: vai a Terreno"))
+        self.dem_step_button = QPushButton(
+            tr("Scarica un DEM dallo step Terreno del rimboschimento"))
         self.dem_step_button.clicked.connect(
             lambda: state.stepRequested.emit("terrain"))
-        flight[uav_mod.STEP_AREA] = (list(flight[uav_mod.STEP_AREA])
-                                     + [self.dem_step_button])
         flight[uav_mod.STEP_SIMULATION] = (
             list(flight[uav_mod.STEP_SIMULATION]) + [self._build_player_box()])
+        flight[uav_mod.STEP_TERRAIN] = (list(flight[uav_mod.STEP_TERRAIN])
+                                        + [self.dem_step_button])
         self.report_format = QComboBox()
         for key, label in REPORT_FORMATS:
             self.report_format.addItem(tr(label), key)
@@ -3686,21 +3953,7 @@ class ContextDock(QDockWidget):
         #: sharing the planting project's state.
         self.flight_pages = {}
         for key, _label in UAV_STEPS:
-            page = QWidget()
-            layout = QVBoxLayout(page)
-            layout.setContentsMargins(6, 6, 6, 6)
-            layout.setSpacing(8)
-            for widget in flight.get(key, []):
-                if isinstance(widget, QWidget):
-                    layout.addWidget(widget)
-                else:
-                    layout.addLayout(widget)
-            layout.addStretch(1)
-            holder = QScrollArea()
-            holder.setWidgetResizable(True)
-            holder.setWidget(page)
-            self.stack.addWidget(holder)
-            self.flight_pages[key] = (page, None)
+            self.flight_pages[key] = (self._page(flight.get(key, [])), None)
 
         state.uav = self.uav_panel
         state.uav_export = self.export_panel
@@ -3709,6 +3962,24 @@ class ContextDock(QDockWidget):
 
         self.setWidget(self.stack)
         self.setMinimumWidth(240)
+
+    def _page(self, widgets):
+        """A scrollable page holding the given widgets, added to the stack."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
+        for widget in widgets:
+            if isinstance(widget, QWidget):
+                layout.addWidget(widget)
+            else:
+                layout.addLayout(widget)
+        layout.addStretch(1)
+        holder = QScrollArea()
+        holder.setWidgetResizable(True)
+        holder.setWidget(page)
+        self.stack.addWidget(holder)
+        return page
 
     # -- the flight simulator ----------------------------------------------
 
@@ -3974,8 +4245,9 @@ class ContextDock(QDockWidget):
             if row < 0 or row >= len(ALL_STEPS):
                 return
             key = ALL_STEPS[row][0]
-        panel, tab = self.pages.get(key, self.flight_pages.get(key,
-                                                               (None, None)))
+        panel, tab = self.pages.get(
+            key, self.part_pages.get(
+                key, self.flight_pages.get(key, (None, None))))
         if panel is None:
             return
         index = self.stack.indexOf(panel.parentWidget().parentWidget())

@@ -1,38 +1,106 @@
 [general]
 name=GeoCad UAV Toolkit
 qgisMinimumVersion=3.34
-qgisMaximumVersion=3.99
-description=CAD parametrico, griglie e impianti forestali, pianificazione fotogrammetrica UAV con terrain following su DEM/DTM, validazione ed export missione (Litchi, QGC, GPKG) dentro QGIS.
-about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
-    topografico, forestale e fotogrammetrico. Consente di: disegnare
-    geometrie CAD dimensionalmente precise (quota, lunghezza, angolo,
-    raggio) con snapping nativo QGIS; ruotare feature già create
-    (maniglia tipo Word); generare griglie e sesti d'impianto su un
-    poligono esistente o disegnato in mappa; pianificare missioni UAV
-    ad AGL costante sul DEM/DTM (terrain following), con camera,
-    overlap, velocità in km/h, intervallo di scatto, preview, simulazione
-    e export verso formati verificati. I calcoli metrici non avvengono
-    in EPSG:4326. I formati drone non verificati (es. DJI WPML nativo)
-    sono rifiutati, non simulati.
-    Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
-    Cartografia Numerica del RGPBIO.
-version=2.0.0
-author=Cap. Niccolò Marco Mancini
+qgisMaximumVersion=4.99
+description=Suite tecnica per progettazione forestale e fotogrammetria UAV: CAD parametrico con interrogazione catastale automatica, progettazione di impianti di rimboschimento su DEM e pianificazione di missioni di volo con terrain following reale.
+about=GeoCad UAV Toolkit e' un plugin QGIS destinato al lavoro tecnico
+  in ambito topografico, forestale e fotogrammetrico. Riunisce tre
+  moduli che condividono un solo motore geometrico e un solo modello
+  di terreno.
+
+  MODULO CAD. Disegno parametrico di quadrati, rettangoli e poligoni
+  con input dimensionale (lato, angolo, raggio) e snapping nativo di
+  QGIS; strumenti di spostamento, rotazione e ridimensionamento che
+  conservano i parametri di costruzione. Ogni geometria posata avvia
+  da sola l'interrogazione del servizio WFS catastale dell'Agenzia
+  delle Entrate: la tabella attributi porta cinque colonne (Area,
+  Perimetro, Comune, Foglio, Particella) e si compila in background,
+  senza bloccare l'interfaccia.
+
+  MODULO RIMBOSCHIMENTO. Flusso di lavoro in sedici passi, dalla
+  delimitazione dell'area alla relazione finale: catasto, modello di
+  elevazione, vincoli e distanze di rispetto, zone omogenee, catalogo
+  specie e composizione, densita' e sesto d'impianto con correzione
+  trigonometrica della pendenza, orientamento dei filari, generazione
+  dell'impianto, passaggio naturaliforme (radure, irregolarita',
+  distanze minime per specie), ottimizzazione comparativa, verifica
+  delle anomalie, editing delle piante sul layer, composizione
+  cartografica ed elaborati.
+
+  MODULO UAV. Pianificazione di missioni fotogrammetriche in dodici
+  passi: area della missione da poligono o da asse lineare
+  (corridoi), libreria di droni e sensori, calcolatore GSD
+  bidirezionale (quota e risoluzione a terra sono due capi della
+  stessa relazione ottica), terrain following reale sul DEM con
+  profilo altimetrico, parametri di acquisizione e sovrapposizioni,
+  generazione delle strisciate con azimut misurato, waypoint,
+  controllo di sicurezza su ostacoli e autonomia, simulazione del
+  volo, validazione pre-volo ed esportazione.
+
+  CATASTO. L'interrogazione spaziale conserva l'intera intersezione:
+  una geometria a cavallo di piu' Comuni restituisce tutti i Comuni,
+  tutti i fogli e tutte le particelle interessate, con superficie
+  catastale, superficie intersecata e percentuale di interessamento.
+  I codici Belfiore sono risolti in nomi di Comune.
+
+  DEM E TERRENO. Un solo modello di terreno per tutto il plugin:
+  pendenza e esposizione per il sesto d'impianto, quota di volo per
+  la missione UAV. Le quote dei waypoint seguono davvero il terreno.
+
+  CARTOGRAFIA ED ESPORTAZIONE. Tavole su QgsPrintLayout nei formati
+  da A4 ad A0, verticale e orizzontale, con legenda, scala grafica,
+  freccia del nord e reticolo. Relazioni in PDF, HTML, Word ed Excel.
+  Missioni in GeoPackage, GeoJSON, KML, KMZ, GPX, CSV, Litchi,
+  MAVLink e DJI WPML nativo, quest'ultimo scritto sullo schema
+  pubblicato da DJI e riservato ai velivoli che DJI dichiara
+  compatibili.
+
+  COMPATIBILITA'. Verificato su QGIS 3.40.15 LTR (PyQt5) e QGIS
+  4.0.0 (PyQt6) con la stessa base di codice.
+
+  Creato dal Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO).
+version=2.0.1
+author=Cap. Niccolò Marco Mancini — Raggruppamento Carabinieri Biodiversità (RGPBIO)
 email=niccolomarco.mancini@gmail.com
 
 tracker=https://example.invalid/geocad-uav/issues
 repository=https://example.invalid/geocad-uav
 homepage=https://example.invalid/geocad-uav
 
-tags=cad,uav,drone,photogrammetry,dem,terrain following,grid,forestry,survey,flight planning,gsd
+tags=cad,uav,drone,photogrammetry,dem,terrain following,forestry,reforestation,cadastre,flight planning,gsd,wpml,survey
 
 category=Plugins
 icon=icon.png
 experimental=False
 deprecated=False
+supportsQt6=True
 hasProcessingProvider=yes
 
-changelog=2.0.0 -- Gold Release
+changelog=
+  2.0.1 -- Release correttiva
+    - metadata.txt riscritto: il file precedente non era leggibile da
+      configparser (dodici chiavi changelog duplicate) e QGIS rifiutava lo
+      ZIP con "Errore durante la lettura dei metadati: general". Una sola
+      chiave changelog, nessun segno di percentuale isolato, nessun BOM.
+      qgisMaximumVersion portato a 4.99: con 3.99 QGIS 4.0.0 escludeva il
+      plugin anche a metadati corretti. Il pacchettizzatore ora rilegge i
+      metadati dall'interno dello ZIP con lo stesso parser di QGIS e
+      rifiuta di pubblicare un pacchetto che QGIS non saprebbe leggere.
+    - Descrizione tecnica e istituzionale, autore e icona ufficiale
+      visibili nel Gestore dei plugin.
+    - Separazione completa fra i due moduli: Rimboschimento in sedici
+      step e Volo UAV in dodici, ciascuno col proprio elenco. Il
+      selettore mostra un modulo alla volta, mai due elenchi insieme, e
+      il passaggio da un modulo all'altro e' esplicito.
+    - Catasto multicomune: l'intersezione conserva Comune, foglio,
+      particella e superfici di ogni Comune interessato. Riepilogo per
+      Comune accanto al dettaglio per particella, con superficie
+      catastale, superficie interessata e percentuale; scegliendo un
+      Comune si evidenziano sulla mappa tutte le sue particelle, e
+      "Visualizza particelle" le disegna tutte. Il riepilogo per Comune
+      entra anche nella relazione.
+
+  2.0.0 -- Gold Release
     - Due moduli separati, ciascuno col proprio percorso di step nel dock
       sinistro: Rimboschimento (14 step) e Volo UAV (6). Nessuna
       sovrapposizione, nessuna schermata duplicata altrove.
@@ -45,7 +113,8 @@ changelog=2.0.0 -- Gold Release
       foglio e riquadro mappa si ridimensionano insieme, verificato
       formato per formato.
 
-changelog=1.39.0
+
+  1.39.0
     - Export DJI WPML: un .kmz con wpmz/template.kml e wpmz/waylines.wpml,
       nel namespace ufficiale http://www.dji.com/wpmz/1.0.2. Rifiutato
       dalla prima versione perche' lo schema non era stato letto; ora lo
@@ -62,7 +131,8 @@ changelog=1.39.0
       pannello e non piu' solo un'impostazione salvata: serviva sceglierlo
       perche' WPML ne accetta due su tre.
 
-changelog=1.38.0
+
+  1.38.0
     - La tabella attributi delle geometrie CAD ha cinque colonne, in
       quest'ordine, e nient'altro: Area, Perimetro, Comune, Foglio,
       Particella. Niente cad_id, niente colonne denormalizzate, niente
@@ -79,7 +149,8 @@ changelog=1.38.0
       scrittura. Ed e' la feature del layer, non quella costruita prima
       della scrittura, che commit() restituisce.
 
-changelog=1.37.0
+
+  1.37.0
     - Serie DJI Mini in libreria, disponibile senza doverla scrivere a
       mano: Mini (1), Mini 2, Mini 3, Mini 3 Pro e Mini 3 Pro con
       batteria Plus, con le rispettive camere. Peso, autonomia e
@@ -91,7 +162,8 @@ changelog=1.37.0
       sotto i 250 g calcolata da li'. Un peso non dichiarato non vale
       "leggero".
 
-changelog=1.36.0
+
+  1.36.0
     - Due moduli, due percorsi. Il dock sinistro porta un selettore
       Rimboschimento / Volo UAV e mostra gli step di uno solo alla volta:
       quattordici o sei, non venti in un'unica lista. Il passaggio da un
@@ -108,7 +180,8 @@ changelog=1.36.0
       gli algoritmi restano dove un utente QGIS li cerca, nella cassetta
       degli strumenti di Processing.
 
-changelog=1.35.0
+
+  1.35.0
     - Relazione di missione in PDF, Word ed Excel, oltre all'HTML. E' la
       stessa relazione: la missione viene descritta una volta sola
       nell'oggetto report di io.documents e i tre scrittori la mettono su
@@ -120,7 +193,8 @@ changelog=1.35.0
       usarla; Word ed Excel dicono dov'e' la figura invece di fingere di
       portarla, perche' quella parte non e' verificata.
 
-changelog=1.34.0
+
+  1.34.0
     - Missioni a corridoio: strade, corsi d'acqua, elettrodotti. Scegli
       una linea invece di un poligono e la missione diventa un corridoio,
       con la sola larghezza da indicare. Le strisciate sono curve
@@ -138,7 +212,8 @@ changelog=1.34.0
       scatto, autonomia e limite di waypoint del drone. Il riquadro
       c'era e restava vuoto.
 
-changelog=1.33.0
+
+  1.33.0
     - Profilo altimetrico nello step Simulazione: terreno e quota di volo
       sullo stesso grafico, disegnato con QPainter. E' l'immagine che
       mostra che il terrain following e' successo davvero, perche' le
@@ -156,7 +231,8 @@ changelog=1.33.0
       ma usciva solo da un algoritmo di Processing, dove nessuno la
       cercava. Ora e' un tasto dello step Export.
 
-changelog=1.32.0
+
+  1.32.0
     - Il pianificatore di volo e' entrato nella dashboard, come sei step
       con il loro stato: Area del volo, Hardware e GSD, Parametri di
       volo, Sicurezza e ostacoli, Simulazione, Export. La scheda UAV e
@@ -181,13 +257,14 @@ changelog=1.32.0
       al volo l'area utile, le esclusioni, il DEM del progetto e
       l'orientamento dei filari, col preset forestale gia' impostato.
 
-changelog=1.31.0
+
+  1.31.0
     - L'azimut delle strisciate si puo' misurare invece che indovinarlo.
       Il tasto "Ottimizza" della scheda UAV prova ogni orientamento a
       passi di 5 gradi su mezzo giro, dispone le strisciate sull'area
       vera e sceglie quello che costa meno volo. Su un rettangolo da' la
       stessa risposta del lato piu' lungo; su un blocco concavo no: sul
-      caso di prova risparmia il 36 % del tempo e quasi meta' delle
+      caso di prova risparmia il 36 per cento del tempo e quasi meta' delle
       virate.
     - Un progetto di rimboschimento sa gia' tutto quello che serve a
       volarci sopra. uav.forest_link legge la superficie utile, le
@@ -196,7 +273,8 @@ changelog=1.31.0
       "complex_terrain", terrain following sempre acceso, nessuna
       maggiorazione per la vegetazione aggiunta di nascosto.
 
-changelog=1.30.0
+
+  1.30.0
     - La particella si legge dove si disegna. La scheda CAD porta un
       riquadro "Dati catastali" che si compila da solo: superficie e
       perimetro nell'istante in cui la figura viene posata, Comune,
@@ -209,7 +287,8 @@ changelog=1.30.0
       pannello: prima esisteva solo come impostazione, senza un comando
       che potesse spegnerla.
 
-changelog=1.29.0
+
+  1.29.0
     - Disegnando un Quadrato, un Rettangolo o un Poligono col CAD, la
       tabella degli attributi si compila da sola: Area e Perimetro
       subito, alla posa della figura, e Comune, Foglio e Particella poco
@@ -280,7 +359,7 @@ changelog=1.29.0
     1.26.0
     - Il limite di pendenza smette di essere una percentuale e diventa
       superficie tolta. Fino a ieri l'operatore impostava "pendenza
-      massima 35 deg", leggeva "82% idonea" e l'impianto veniva comunque
+      massima 35 deg", leggeva "82 per cento idonea" e l'impianto veniva comunque
       generato su tutta la superficie: il numero non entrava nel piano.
       [Escludi le aree non idonee] trasforma le celle rifiutate in una
       geometria, che viene sottratta come qualunque altro vincolo --
@@ -408,7 +487,7 @@ changelog=1.29.0
       progetto" si ottiene l'inquadratura dell'area con un margine, e la
       scala risultante viene scritta sulla tavola.
     - Esportazione in PDF e in immagine alla risoluzione scelta,
-      verificate: il PDF comincia per %PDF- e l'immagine misura i pixel
+      verificate: il PDF comincia per PDF- e l'immagine misura i pixel
       che formato e dpi impongono.
     - La tavola finisce nel Gestore di layout di QGIS, dove l'operatore
       puo' aprirla e modificarla come qualunque altra; ricomporla
@@ -614,7 +693,7 @@ changelog=1.29.0
       senza perdere una cifra.
     - Su un pendio il programma dice su quale ettaro sta contando:
       quello di carta o quello di terreno. Su 30 gradi la correzione
-      isotropa pianta il 15.47 % in piu' di quanto la superficie
+      isotropa pianta il 15.47 per cento in piu' di quanto la superficie
       richiederebbe, e adesso quel numero si legge invece di
       scoprirlo alla consegna del vivaio.
     - Catalogo delle specie in GeoPackage: si apre in QGIS come una
@@ -1001,7 +1080,7 @@ changelog=1.29.0
     - Grid Designer con ancoraggio stabile e rinumerazione dopo il ritaglio.
     - Forest Planting Designer con filtri di pendenza, quota ed esposizione.
     - UAV: terrain following continuo, quota AMSL per strip, quota AMSL unica
-      (ammessa solo sotto il 10 % di dislivello), doppia griglia, corridoi,
+      (ammessa solo sotto il 10 per cento di dislivello), doppia griglia, corridoi,
       interlacciamento per ala fissa.
     - Impronte a terra proiettate sul DEM per ray casting: copertura e GSD
       effettivo verificati sul terreno, non sul piano.

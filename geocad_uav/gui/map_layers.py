@@ -330,6 +330,34 @@ class ProjectLayers:
                 pass
         return True
 
+    def select_rows(self, key: str, rows) -> int:
+        """Select several features at once, by position, and frame them.
+
+        The companion of :meth:`select` for a whole comune: one parcel is a
+        click on a row, a comune is every parcel it holds, and zooming to
+        them together is what shows an operator where that comune's share of
+        the project actually lies.
+        """
+        layer = self.layers.get(key)
+        if layer is None:
+            return 0
+        ids = [feature.id() for feature in layer.getFeatures()]
+        wanted = [ids[row] for row in rows if 0 <= row < len(ids)]
+        if not wanted:
+            return 0
+        try:
+            layer.selectByIds(wanted)
+        except (AttributeError, RuntimeError):
+            return 0
+        if self.iface is not None:
+            try:
+                canvas = self.iface.mapCanvas()
+                canvas.flashFeatureIds(layer, wanted)
+                canvas.zoomToFeatureIds(layer, wanted)
+            except (AttributeError, TypeError):
+                pass
+        return len(wanted)
+
     def zoom_to(self, key: str) -> bool:
         layer = self.layers.get(key)
         if layer is None or self.iface is None:

@@ -14,6 +14,8 @@ who wants to run the suite from an installed copy.
 from __future__ import annotations
 
 import argparse
+import configparser
+import io
 import os
 import re
 import sys
@@ -48,16 +50,81 @@ def read_version() -> str:
     return match.group(1).strip()
 
 
+#: Keys QGIS reads off an installed plugin. Every one is fetched through
+#: configparser below, so a value that cannot be fetched is caught here and
+#: not by an operator staring at "plugin corrotto".
+METADATA_KEYS = ("name", "qgisMinimumVersion", "qgisMaximumVersion",
+                 "description", "about", "version", "author", "email",
+                 "icon", "category", "tags", "experimental", "deprecated",
+                 "supportsQt6",
+                 "changelog")
+
+
+def parse_metadata(text: str):
+    """Read metadata.txt the way QGIS reads it. Returns (values, problems).
+
+    Deliberately identical to pyplugin_installer/installer_data.py:
+    ``ConfigParser()`` -- strict, with BasicInterpolation -- then
+    ``read_file`` and ``get("general", key)``. A regex cannot see a repeated
+    option or a bare ``%``; configparser refuses both, and so does QGIS.
+    """
+    problems = []
+    values = {}
+    parser = configparser.ConfigParser()
+    try:
+        parser.read_file(io.StringIO(text))
+    except configparser.Error as exc:
+        return values, ["metadata.txt is not a valid QGIS metadata file: "
+                        "{0}: {1}".format(type(exc).__name__, exc)]
+    if not parser.has_section("general"):
+        return values, ["metadata.txt has no [general] section"]
+    for key in METADATA_KEYS:
+        try:
+            values[key] = parser.get("general", key)
+        except configparser.NoOptionError:
+            if key in ("name", "qgisMinimumVersion", "description", "version",
+                       "author", "email", "icon"):
+                problems.append("metadata.txt is missing '{0}='".format(key))
+        except configparser.Error as exc:
+            problems.append(
+                "metadata.txt: '{0}' cannot be read ({1}: {2}). A bare '%' in "
+                "a value is an interpolation escape; write '%%' or avoid "
+                "it.".format(key, type(exc).__name__, exc))
+    for key in ("name", "qgisMinimumVersion", "description", "version",
+                "author", "email", "icon"):
+        if key in values and not values[key].strip():
+            problems.append("metadata.txt has an empty '{0}='".format(key))
+    return values, problems
+
+
 def check_metadata() -> "list[str]":
     """Fail early on the metadata mistakes that break plugin installation."""
-    problems = []
     path = os.path.join(SOURCE, "metadata.txt")
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, "r", encoding="utf-8-sig") as handle:
         text = handle.read()
-    for key in ("name", "qgisMinimumVersion", "description", "version",
-                "author", "email"):
-        if not re.search(r"^{0}=\s*\S".format(key), text, re.M):
-            problems.append("metadata.txt is missing a non-empty '{0}='".format(key))
+    raw = open(path, "rb").read()
+    values, problems = parse_metadata(text)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        problems.append("metadata.txt starts with a UTF-8 BOM; QGIS opens it "
+                        "as plain utf8 and the first key becomes unreadable")
+
+    # The version has to be one version. A package whose metadata and whose
+    # __init__ disagree installs as one and reports as the other.
+    init_path = os.path.join(SOURCE, "__init__.py")
+    with open(init_path, "r", encoding="utf-8") as handle:
+        found = re.search(r'__version__\s*=\s*["\']([^"\']+)', handle.read())
+    if found is None:
+        problems.append("__init__.py declares no __version__")
+    elif values.get("version", "").strip() != found.group(1):
+        problems.append(
+            "version mismatch: metadata.txt says {0!r}, __init__.py says "
+            "{1!r}".format(values.get("version", ""), found.group(1)))
+
+    icon = values.get("icon", "").strip()
+    if icon and not os.path.isfile(os.path.join(SOURCE, icon)):
+        problems.append("icon= names {0}, which is not in the package".format(
+            icon))
+
     for relative in REQUIRED:
         if not os.path.isfile(os.path.join(SOURCE, relative)):
             problems.append("missing required file: {0}".format(relative))
@@ -125,8 +192,24 @@ def verify(archive_path: str) -> None:
         entry = "{0}/{1}".format(PACKAGE, relative.replace(os.sep, "/"))
         if entry not in names:
             raise SystemExit("archive is missing {0}".format(entry))
+
+        # The metadata that matters is the one inside the archive: read it
+        # from there, with QGIS's own parser.
+    with zipfile.ZipFile(archive_path) as archive:
+        packed = archive.read("{0}/metadata.txt".format(PACKAGE))
+        icon_bytes = archive.read("{0}/icon.png".format(PACKAGE))
+    values, problems = parse_metadata(packed.decode("utf-8"))
+    if problems:
+        raise SystemExit("the metadata inside the archive is not readable:\n"
+                         + "\n".join("  - " + p for p in problems))
+    if not icon_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise SystemExit("icon.png in the archive is not a PNG")
     print("  verified: archive root is {0}/ and all required files present"
           .format(PACKAGE))
+    print("  verified: metadata.txt inside the archive parses as QGIS parses "
+          "it ({0} {1}, icon {2}, {3} bytes)".format(
+              values.get("name", "?"), values.get("version", "?"),
+              values.get("icon", "?"), len(icon_bytes)))
 
 
 def main() -> int:

@@ -687,16 +687,83 @@ class CadastralResult:
             out.setdefault(share.parcel.comune_code, []).append(share)
         return out
 
+    def by_foglio(self) -> dict:
+        """``{belfiore: {foglio: [ParcelShare, ...]}}`` -- nothing collapsed.
+
+        The shape a cadastral reading actually has. Two comuni may both have
+        a "foglio 12" holding a "particella 45" and they are different
+        ground: the belfiore code is the outer key precisely so that those
+        never meet.
+        """
+        out = {}
+        for share in self.shares:
+            code = share.parcel.comune_code
+            foglio = share.parcel.foglio or ""
+            out.setdefault(code, {}).setdefault(foglio, []).append(share)
+        return out
+
+    def fogli(self, code: str) -> list:
+        """The sheets of one comune, ordered by the surface taken."""
+        groups = self.by_foglio().get(code, {})
+        ordered = sorted(
+            groups.items(),
+            key=lambda item: -sum(s.intersection_area_m2 for s in item[1]))
+        return [(foglio, group) for foglio, group in ordered]
+
+    def comune_rows(self) -> list:
+        """One row per comune: what the project takes there, in total.
+
+        The companion of :meth:`rows`, which is one row per parcel. Together
+        they are the two readings a cadastral annex carries -- the detail and
+        the summary -- and they come from the same shares, so they cannot
+        disagree.
+        """
+        out = []
+        for code, comune, group in self.comuni():
+            cadastral = sum(share.parcel_area_m2 for share in group)
+            taken = sum(share.intersection_area_m2 for share in group)
+            out.append({
+                "comune": (comune.label() if comune is not None else code),
+                "belfiore": code,
+                "fogli": len({share.parcel.foglio or "" for share in group}),
+                "particelle": len(group),
+                "superficie_catastale_m2": round(cadastral, 2),
+                "superficie_interessata_m2": round(taken, 2),
+                "percentuale": round(100.0 * taken / cadastral, 3)
+                if cadastral > 0 else 0.0,
+                "quota_progetto": round(
+                    100.0 * taken / self.covered_area_m2, 3)
+                if self.covered_area_m2 > 0 else 0.0,
+            })
+        return out
+
+    def comune_labels(self) -> list:
+        """Every comune the project touches, named, in order of surface."""
+        return [(comune.label() if comune is not None else code)
+                for code, comune, _group in self.comuni()]
+
+    def shares_of(self, code: str) -> list:
+        """The parcels of one comune, in the order :meth:`rows` lists them."""
+        return [share for share in self.shares
+                if share.parcel.comune_code == code]
+
     # -- what the project stores -------------------------------------------
 
     def as_attributes(self) -> dict:
         """One row summarising the project, for the panel and the report."""
         comuni = self.comuni()
         first = comuni[0] if comuni else None
+        labels = self.comune_labels()
         return {
+            # The comune with the most ground in the project, and -- since
+            # a project can sit across several -- the whole list beside it.
+            # A single "comune" field that silently named one of three is
+            # the loss this pair exists to prevent.
             "comune": (first[1].label() if first and first[1] is not None
                        else ""),
+            "comuni_elenco": "; ".join(labels),
             "belfiore": first[0] if first else "",
+            "belfiore_elenco": "; ".join(self.belfiore_codes()),
             "comuni": len(comuni),
             "particelle": self.n_parcels,
             "superficie_catastale_ha": round(
@@ -934,6 +1001,10 @@ def payload(result) -> dict:
     data.update({
         "messaggio": result.message,
         "righe": result.rows(),
+        # One row per comune beside the one row per parcel: the summary and
+        # the detail travel together, so a panel cannot show one and lose
+        # the other.
+        "comuni_righe": result.comune_rows(),
         "avvisi": list(result.warnings),
         "crs_calcolo": result.work_crs_authid,
         "result": result,
