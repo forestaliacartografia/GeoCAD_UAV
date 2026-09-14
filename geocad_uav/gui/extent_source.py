@@ -58,6 +58,10 @@ class ExtentSource(QGroupBox):
         self.iface = iface
         self._geometry = None
         self._crs = None
+        #: Where the extent on hand came from: the layer combo, or anywhere
+        #: else (drawn, handed in, restored). Only the combo's own extents
+        #: are the combo's to replace with nothing.
+        self._source = ""
         self._listeners = []
         self._draw_layer = None
         self._measure_layer = None
@@ -125,8 +129,9 @@ class ExtentSource(QGroupBox):
     def crs(self):
         return self._crs
 
-    def set_extent(self, geometry, crs) -> None:
+    def set_extent(self, geometry, crs, source: str = "explicit") -> None:
         """Adopt an extent. The drawing callbacks and the tests both use this."""
+        self._source = source if geometry is not None else ""
         if geometry is None or geometry.isEmpty():
             self._geometry = None
             self._crs = None
@@ -164,6 +169,14 @@ class ExtentSource(QGroupBox):
     def _from_layer(self, *_args):
         layer = self.layer_combo.currentLayer()
         if layer is None:
+            # Adding any polygon layer to the project repopulates this combo
+            # and fires layerChanged with nothing chosen. An extent that came
+            # from somewhere else -- drawn on the canvas, handed in by the
+            # forest module -- is not this combo's to throw away, and losing
+            # it silently is how "Nessuna area definita" appeared about an
+            # area that was on screen.
+            if self._source != "layer" and self._geometry is not None:
+                return
             self.set_extent(None, None)
             return
         features = (list(layer.selectedFeatures())
@@ -176,7 +189,7 @@ class ExtentSource(QGroupBox):
             return
         merged = (geometries[0] if len(geometries) == 1
                   else QgsGeometry.unaryUnion(geometries))
-        self.set_extent(merged, layer.crs())
+        self.set_extent(merged, layer.crs(), source="layer")
 
     # -- drawing, using the existing CAD tools -----------------------------
 

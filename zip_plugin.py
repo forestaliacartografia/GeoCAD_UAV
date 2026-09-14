@@ -56,8 +56,12 @@ def read_version() -> str:
 METADATA_KEYS = ("name", "qgisMinimumVersion", "qgisMaximumVersion",
                  "description", "about", "version", "author", "email",
                  "icon", "category", "tags", "experimental", "deprecated",
-                 "supportsQt6",
-                 "changelog")
+                 "supportsQt6")
+
+#: Keys the Plugin Manager renders inside the plugin's own entry. A release
+#: history there is history where a description belongs: it goes to
+#: CHANGELOG.md, which is not shipped.
+DESCRIPTION_KEYS = ("description", "about")
 
 
 def parse_metadata(text: str):
@@ -97,6 +101,35 @@ def parse_metadata(text: str):
     return values, problems
 
 
+def _history_in(values):
+    """Complaints about version history found in the plugin's description.
+
+    Two shapes, both of which have been in this file: a ``changelog`` key,
+    and a description that narrates releases ("2.0.1 -- ...", "dalla 1.39").
+    """
+    import re                                                   # noqa: PLC0415
+
+    problems = []
+    if values.get("changelog"):
+        problems.append(
+            "metadata.txt carries a changelog= key: the Plugin Manager shows "
+            "it inside the plugin's entry. Move the history to CHANGELOG.md.")
+    for key in DESCRIPTION_KEYS:
+        text = values.get(key) or ""
+        versions = re.findall(r"\b\d+\.\d+\.\d+\b", text)
+        # The compatibility statement names QGIS versions, which is a fact
+        # about what it runs on, not a history of itself.
+        narrated = [v for v in versions
+                    if "QGIS" not in text[max(0, text.find(v) - 24):
+                                          text.find(v)]]
+        if narrated:
+            problems.append(
+                "{0}= narrates version history ({1}): the description says "
+                "what the plugin does, CHANGELOG.md says what changed."
+                .format(key, ", ".join(sorted(set(narrated))[:4])))
+    return problems
+
+
 def check_metadata() -> "list[str]":
     """Fail early on the metadata mistakes that break plugin installation."""
     path = os.path.join(SOURCE, "metadata.txt")
@@ -119,6 +152,8 @@ def check_metadata() -> "list[str]":
         problems.append(
             "version mismatch: metadata.txt says {0!r}, __init__.py says "
             "{1!r}".format(values.get("version", ""), found.group(1)))
+
+    problems.extend(_history_in(values))
 
     icon = values.get("icon", "").strip()
     if icon and not os.path.isfile(os.path.join(SOURCE, icon)):

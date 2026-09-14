@@ -436,11 +436,32 @@ class CommitReport:
     particella: str = ""
     pending: bool = False
     warning: str = ""
+    #: The committed geometry, read back off the layer. The panel needs it
+    #: to ask the cadastre again on demand, and a report that described a
+    #: shape without carrying it could only be believed.
+    geometry: object = None
+    #: The CRS that geometry is in -- the layer's. Carried as an authid so a
+    #: report can be kept, logged and compared without holding a QGIS object.
+    crs_authid: str = ""
+    #: The whole cadastral answer -- every comune, foglio and particella the
+    #: shape meets, with surfaces and percentages -- or None when the lookup
+    #: has not run, is still out, or failed. The three strings above are its
+    #: summary, not a different reading of it.
+    result: object = None
 
     @property
     def has_parcel(self) -> bool:
         """True only for a real parcel: "N/D" is an answer, not a parcel."""
         return bool(self.particella) and self.particella != lf.NOT_AVAILABLE
+
+    @property
+    def n_parcels(self) -> int:
+        return getattr(self.result, "n_parcels", 0) or 0
+
+    @property
+    def n_comuni(self) -> int:
+        result = self.result
+        return len(result.comuni()) if result is not None else 0
 
     def parcel_label(self) -> str:
         """Foglio and particella on one line, the way a deed writes them."""
@@ -465,21 +486,28 @@ def _text(value) -> str:
 
 
 def commit_report(layer, feature_id, pending: bool = False,
-                  warning: str = "") -> CommitReport:
+                  warning: str = "", result=None) -> CommitReport:
     """Read one CAD feature back and describe it.
 
     ``feature_id`` is the id the layer settled on after the commit, not the
     provisional one ``addFeature`` reported inside the edit buffer.
     """
     report = CommitReport(feature_id=feature_id, pending=bool(pending),
-                          warning=warning or "")
+                          warning=warning or "", result=result)
     if layer is None or feature_id is None:
         return report
     try:
         report.layer_name = layer.name()
+        try:
+            report.crs_authid = layer.crs().authid()
+        except (AttributeError, RuntimeError):
+            report.crs_authid = ""
         feature = layer.getFeature(feature_id)
         if not feature.isValid():
             return report
+        geometry = feature.geometry()
+        report.geometry = None if geometry is None or geometry.isEmpty() \
+            else geometry
         fields = layer.fields()
         if fields.indexOf(lf.AREA_FIELD) >= 0:
             report.area_m2 = float(feature[lf.AREA_FIELD] or 0.0)
@@ -535,6 +563,9 @@ class BaseCadTool:
         #: a background task: by the time it answers the commit is long over.
         self.cadastre_task = None
         self.cadastre_warning = ""
+        #: The last CadastralResult, kept so the panel can show every parcel
+        #: the shape meets and not only the three cells in the table.
+        self.cadastre_result = None
         #: Transport the lookup uses. None means the real service; a test
         #: hands in a recorded one so the whole commit path can be driven
         #: without a network, and without pretending there was one.
@@ -663,7 +694,8 @@ class BaseCadTool:
         break a commit, so it is called inside a guard.
         """
         report = commit_report(layer, feature_id, pending=pending,
-                               warning=self.cadastre_warning)
+                               warning=self.cadastre_warning,
+                               result=self.cadastre_result)
         self.last_commit = report
         if self.commit_observer is not None:
             try:
@@ -675,7 +707,7 @@ class BaseCadTool:
     # -- cadastral parcel --------------------------------------------------
 
     def request_cadastre(self, layer, geometry, feature_id):
-        """Ask the Agenzia delle Entrate which parcel this shape sits on.
+        """Ask the Agenzia delle Entrate which parcels this shape meets.
 
         Started by :meth:`commit` on every geometry, and never on the
         commit's own thread: a government WFS answering in two seconds would
@@ -683,6 +715,15 @@ class BaseCadTool:
         on the layer with its Area and its Perimetro by then; the task fills
         Comune, Foglio and Particella in behind it, on the feature id the
         commit recorded.
+
+        The question asked is the **geometry against every parcel it meets**
+        -- ``cadastre.area_task``, the same query, the same task and the
+        same intersection the reforestation module uses. It used to be a
+        point query on the centroid, which could only ever answer with one
+        parcel: a shape across four reported one, a shape across two comuni
+        reported one comune, and an L-shaped parcel whose centroid falls in
+        the notch reported a neighbour. There is no second cadastral engine
+        here and no simplified reading of the answer.
 
         Whatever comes back, the three columns get written. A timeout, a
         refusal, or ground the service holds no parcel for -- Trento and
@@ -696,6 +737,7 @@ class BaseCadTool:
         """
         self.cadastre_warning = ""
         self.cadastre_task = None
+        self.cadastre_result = None
         try:
             from ...settings import settings as _settings      # noqa: PLC0415
 
@@ -707,28 +749,35 @@ class BaseCadTool:
         if feature_id is None or layer is None or geometry is None:
             return None
         try:
-            centroid = geometry.centroid()
-            point = centroid.constGet()
-            x, y = float(point.x()), float(point.y())
+            if geometry.isEmpty():
+                return None
             crs = layer.crs()
         except (AttributeError, RuntimeError):
             return None
 
+        from qgis.core import QgsGeometry                       # noqa: PLC0415
+
         from ...io import cadastre as cad_svc                   # noqa: PLC0415
 
-        def _apply(parcel, error):
-            self.cadastre_warning = error or ""
+        def _apply(result):
+            self.cadastre_result = result
+            self.cadastre_warning = (
+                "" if result is None or result.is_usable
+                else (result.message or ""))
             if not layer.getFeature(feature_id).isValid():
                 return                  # the operator deleted it meanwhile
-            if parcel is None or parcel.is_empty:
-                lf.write_cadastre_unavailable(layer, feature_id)
+            columns = cad_svc.cad_columns(result)
+            if columns:
+                lf.ensure_cadastre_fields(layer)
+                lf.write_attributes(layer, feature_id, columns)
             else:
-                lf.write_cadastre(layer, feature_id, parcel)
+                lf.write_cadastre_unavailable(layer, feature_id)
             self.announce(layer, feature_id, pending=False)
 
         try:
-            self.cadastre_task = cad_svc.lookup_task(
-                x, y, crs, _apply, transport=self.cadastre_transport)
+            self.cadastre_task = cad_svc.area_task(
+                QgsGeometry(geometry), crs, _apply,
+                transport=self.cadastre_transport)
         except Exception as exc:                                # noqa: BLE001
             self.cadastre_warning = str(exc)
             self.cadastre_task = None

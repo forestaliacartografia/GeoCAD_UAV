@@ -528,6 +528,25 @@ def _assign_sub_missions(waypoints, photos, leg_spans, leg_times,
     return n_sub
 
 
+def drape_footprints(mission, terrain, params, geometry,
+                     feedback=None):
+    """Fill in a planned mission's footprints afterwards.
+
+    :func:`build_mission` casts these only when ``compute_footprints`` is
+    set, because one ray cast per exposure costs real time on a long
+    mission. This is that same computation, run later, for an operator who
+    decides after seeing the route that they want to look at the coverage.
+    Returns the footprints and stores them on the mission.
+    """
+    if mission is None or not getattr(mission, "photos", None):
+        return []
+    if len(mission.photos) > params.max_footprints:
+        return []
+    mission.footprints = _drape_all(terrain, mission.photos, params,
+                                    geometry, feedback)
+    return mission.footprints
+
+
 def _drape_all(terrain, photos, params, geometry, feedback):
     """Ray-cast every exposure footprint onto the DEM."""
     footprints = []

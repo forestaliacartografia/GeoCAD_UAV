@@ -342,9 +342,31 @@ if reachable:
                "Perugia" in str(live["Comune"]))
     check_true("...e non e' un N/D di ripiego",
                live["Comune"] != lf.NOT_AVAILABLE)
-    check_text("...ed e' la particella che sta sotto la figura",
-               live["Particella"], "1016")
+    # v2.1.0: the square is 6 m of ground on the boundary of four parcels,
+    # and the query is now the geometry against all of them. The centroid's
+    # own parcel is still there -- it is one of the four, not the answer.
+    result = live_tool.cadastre_result
+    print("        {0} particelle: {1}".format(
+        result.n_parcels,
+        [s.parcel.particella for s in result.shares]))
+    check_true("l'interrogazione ha tenuto il risultato intero",
+               result is not None and result.n_parcels >= 1)
+    check_true("...e la cella le elenca tutte",
+               all(share.parcel.particella in str(live["Particella"])
+                   for share in result.shares))
+    check_true("...compresa quella sotto il centroide",
+               "1016" in str(live["Particella"]))
     check_text("...sul suo foglio", live["Foglio"], "252")
+    check_true("ogni particella porta le sue due superfici",
+               all(share.parcel_area_m2 > 0.0
+                   and share.intersection_area_m2 > 0.0
+                   for share in result.shares))
+    check_true("...e una percentuale fra zero e cento",
+               all(0.0 < share.percent_of_parcel <= 100.0
+                   for share in result.shares))
+    check_true("la somma delle intersezioni non supera la figura",
+               sum(s.intersection_area_m2 for s in result.shares)
+               <= result.project_area_m2 + 1e-6)
     check("la figura e' una sola", live_layer.featureCount(), 1)
 
 print("\n" + "=" * 78)

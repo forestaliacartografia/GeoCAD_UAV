@@ -104,6 +104,11 @@ class UavPanel(QWidget):
         super().__init__(parent)
         self.iface = iface
         self._band = None
+        #: Point bands for the preview: waypoints and exposure stations.
+        self._point_bands = {}
+        #: The layers "Anteprima missione" put on the map, so a second
+        #: preview replaces them instead of stacking another set.
+        self._preview_layers = {}
         self._connections = []
         self._updating = False
         self.last_mission = None
@@ -803,6 +808,15 @@ class UavPanel(QWidget):
                 (tr("Batterie"), "{0}".format(stats.n_batteries)),
                 (tr("AGL min / max"), "{0:.1f} / {1:.1f} m".format(
                     stats.agl_min, stats.agl_max)),
+                (tr("GSD min / max"), "{0:.2f} / {1:.2f} cm/px".format(
+                    stats.gsd_min_m * 100.0, stats.gsd_max_m * 100.0)),
+                (tr("Sovrapposizione"),
+                 "{0:.0f} % avanti, {1:.0f} % lato".format(
+                     100.0 * mission.frontlap, 100.0 * mission.sidelap)),
+                (tr("Copertura"),
+                 tr("non misurata") if stats.coverage_pct != stats.coverage_pct
+                 else "{0:.1f} % con almeno {1} foto".format(
+                     stats.coverage_pct, stats.min_photos_observed)),
                 (tr("Dislivello area"),
                  "{0:.1f} m".format(stats.terrain_relief_m)),
             ])
@@ -946,24 +960,141 @@ class UavPanel(QWidget):
             self._band.setWidth(2)
         return self._band
 
+    def _ensure_points(self, key, colour, icon, size):
+        """One point band per kind of point. Created on first use."""
+        canvas = self.iface.mapCanvas() if self.iface else None
+        if canvas is None:
+            return None
+        band = self._point_bands.get(key)
+        if band is None:
+            band = QgsRubberBand(canvas, QgsWkbTypes.PointGeometry)
+            band.setColor(colour)
+            band.setIcon(icon)
+            band.setIconSize(size)
+            band.setWidth(2)
+            self._point_bands[key] = band
+        return band
+
     def _draw(self, mission):
-        """The route as a rubber band: pixels, not features."""
+        """The mission as rubber bands: pixels, not features.
+
+        Route, waypoints and exposure stations, which together are what a
+        preview has to answer: where it flies, where it turns, where it
+        photographs. Nothing is added to the project -- "Crea layer
+        missione" is the command that does that.
+        """
         band = self._ensure_band()
         if band is None:
-            return
+            return 0
         band.reset(QgsWkbTypes.LineGeometry)
+        drawn = 0
         for line in mission.lines:
             array = np.asarray(line, dtype=float)
             if array.shape[0] < 2:
                 continue
             points = [QgsPointXY(float(p[0]), float(p[1])) for p in array]
             band.addGeometry(QgsGeometry.fromPolylineXY(points), None)
+            drawn += 1
         band.show()
+
+        waypoints = self._ensure_points(
+            "waypoints", QColor(20, 90, 200, 200),
+            QgsRubberBand.ICON_CIRCLE, 7)
+        if waypoints is not None:
+            waypoints.reset(QgsWkbTypes.PointGeometry)
+            for wp in mission.waypoints:
+                waypoints.addPoint(QgsPointXY(float(wp.x), float(wp.y)),
+                                   False)
+            waypoints.updatePosition()
+            waypoints.show()
+
+        photos = self._ensure_points(
+            "photos", QColor(250, 170, 30, 230), QgsRubberBand.ICON_BOX, 5)
+        if photos is not None:
+            photos.reset(QgsWkbTypes.PointGeometry)
+            for photo in mission.photos:
+                photos.addPoint(QgsPointXY(float(photo.x), float(photo.y)),
+                                False)
+            photos.updatePosition()
+            photos.show()
+        return drawn
+
+    def ensure_footprints(self):
+        """The mission's footprints, draping them now if it has none.
+
+        Same ray casting as the planner's, on the terrain and the parameters
+        this panel kept when it built the route.
+        """
+        mission = self.last_mission
+        if mission is None:
+            return []
+        if mission.footprints:
+            return mission.footprints
+        if self.last_terrain is None:
+            return []
+        try:
+            return mission_mod.drape_footprints(
+                mission, self.last_terrain, self.build_params(),
+                self.survey_geometry())
+        except (GeoCadError, pg.PhotogrammetryError, ValueError):
+            return []
+
+    def preview_vertices(self) -> int:
+        """Vertices currently on the preview. What a test can count."""
+        total = 0
+        if self._band is not None:
+            total += self._band.numberOfVertices()
+        for band in self._point_bands.values():
+            total += band.numberOfVertices()
+        return total
+
+    def show_mission_layers(self, *_args):
+        """Anteprima missione: the route on the canvas as real layers.
+
+        The same ``build_mission_layers`` the commit uses, so what is
+        previewed and what is exported are the same features. Called twice
+        it replaces its own layers rather than stacking a second copy.
+        """
+        mission = self.last_mission
+        if mission is None:
+            self._notify_user(tr("Genera prima la rotta."), Qgis.Warning)
+            return {}
+        crs = self.extent.crs()
+        project = QgsProject.instance()
+        for layer in list(self._preview_layers.values()):
+            try:
+                project.removeMapLayer(layer.id())
+            except (AttributeError, RuntimeError):
+                pass
+        self._preview_layers = lf.build_mission_layers(
+            mission, crs.authid() if crs else "")
+        for layer in self._preview_layers.values():
+            project.addMapLayer(layer)
+        self.clear_preview()
+        canvas = self.iface.mapCanvas() if self.iface else None
+        if canvas is not None and self._preview_layers:
+            try:
+                extent = None
+                for layer in self._preview_layers.values():
+                    box = layer.extent()
+                    if box.isEmpty():
+                        continue
+                    extent = box if extent is None else extent.combineExtentWith(box)
+                if extent is not None and not extent.isEmpty():
+                    canvas.setExtent(extent.buffered(
+                        max(extent.width(), extent.height()) * 0.08))
+                    canvas.refresh()
+            except (AttributeError, RuntimeError):
+                pass
+        return self._preview_layers
 
     def clear_preview(self):
         if self._band is not None:
             self._band.reset(QgsWkbTypes.LineGeometry)
             self._band.hide()
+        for band in self._point_bands.values():
+            band.reset(QgsWkbTypes.PointGeometry)
+            band.hide()
 
     # -- commit ------------------------------------------------------------
 
@@ -1029,3 +1160,13 @@ class UavPanel(QWidget):
         self._connections = []
         self.extent.teardown()
         self.clear_preview()
+        # The preview layers belong to the panel, so they leave with it:
+        # a plugin that unloads has to leave the project as it found it.
+        project = QgsProject.instance()
+        for layer in list(self._preview_layers.values()):
+            try:
+                project.removeMapLayer(layer.id())
+            except (AttributeError, RuntimeError):
+                pass
+        self._preview_layers = {}
+        self._point_bands = {}

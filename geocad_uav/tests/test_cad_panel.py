@@ -256,8 +256,12 @@ check_true("finche' il task e' fuori il riquadro lo dice",
 check_true("il task e' partito dal commit, non da un pulsante",
            tool.cadastre_task is not None)
 
+# Waiting on this tool's own feature, not on the label: an earlier block
+# left a cadastral task in the air over ground the fixture holds nothing
+# for, and its late answer flips the label to N/D before this one arrives.
 check_true("il riquadro si riempie da solo",
-           pump(lambda: "corso" not in label(dock, "particella").lower()))
+           pump(lambda: bool(geo.getFeature(
+               tool.last_feature_id)[lf.CAT_PARTICELLA_FIELD])))
 print("        Comune {0!r} | Foglio {1!r} | Particella {2!r}".format(
     label(dock, "comune"), label(dock, "foglio"), label(dock, "particella")))
 check_true("il comune e' il nome, non il codice Belfiore",

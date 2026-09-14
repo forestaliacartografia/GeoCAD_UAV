@@ -238,6 +238,12 @@ class GeoCadUavPlugin:
             workspace.set_visible(wanted)
         dock = self._ensure_dock()
         if dock is not None:
+            # One layer set for the whole plugin. The CAD cadastral query
+            # and the reforestation one draw the same parcels layer, so a
+            # shape looked up in the CAD tab does not leave a second copy
+            # of it behind in the legend.
+            if workspace is not None:
+                dock.set_layers(workspace.state.layers)
             dock.setVisible(wanted)
             if wanted:
                 try:

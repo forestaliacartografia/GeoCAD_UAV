@@ -3988,14 +3988,26 @@ class ContextDock(QDockWidget):
         box = QGroupBox(tr("Simulazione del volo"))
         layout = QVBoxLayout(box)
         row = QHBoxLayout()
+        # Inizio, un waypoint indietro, play, pausa, un waypoint avanti,
+        # fine. A waypoint is the unit because it is where the route does
+        # something: turns, climbs, takes a photograph.
+        self.start_button = QPushButton(tr("Inizio"))
+        self.start_button.setToolTip(tr("Torna al decollo."))
+        self.back_button = QPushButton(tr("< Wp"))
+        self.back_button.setToolTip(tr("Un waypoint indietro."))
         self.play_button = QPushButton(tr("Play"))
         self.pause_button = QPushButton(tr("Pausa"))
+        self.forward_button = QPushButton(tr("Wp >"))
+        self.forward_button.setToolTip(tr("Un waypoint avanti."))
+        self.end_button = QPushButton(tr("Fine"))
+        self.end_button.setToolTip(tr("Vai all'ultimo waypoint."))
         self.stop_button = QPushButton(tr("Stop"))
         self.rate_combo = QComboBox()
         for rate in PLAYER_RATES:
             self.rate_combo.addItem("{0}x".format(rate), rate)
-        for widget in (self.play_button, self.pause_button, self.stop_button,
-                       self.rate_combo):
+        for widget in (self.start_button, self.back_button, self.play_button,
+                       self.pause_button, self.forward_button,
+                       self.end_button, self.stop_button, self.rate_combo):
             row.addWidget(widget)
         layout.addLayout(row)
 
@@ -4017,6 +4029,14 @@ class ContextDock(QDockWidget):
         self.profile_chart = charts_mod.ElevationProfile()
         layout.addWidget(self.profile_chart)
 
+        self.preview_button = QPushButton(tr("Anteprima missione"))
+        self.preview_button.setToolTip(tr(
+            "Mette la missione sulla mappa come layer veri: strisciate, "
+            "waypoint, punti di scatto e impronte. Sono le stesse feature "
+            "che finiscono nell'export, non un disegno a parte."))
+        self.preview_button.setEnabled(False)
+        layout.addWidget(self.preview_button)
+
         self.footprint_button = QPushButton(tr("Mostra le impronte a terra"))
         self.footprint_button.setToolTip(tr(
             "Disegna l'impronta di ogni scatto proiettata sul DEM. Dove le "
@@ -4030,6 +4050,11 @@ class ContextDock(QDockWidget):
                 (self.play_button.clicked, self.play_mission),
                 (self.pause_button.clicked, self.pause_mission),
                 (self.stop_button.clicked, self.stop_mission),
+                (self.start_button.clicked, self.to_start),
+                (self.end_button.clicked, self.to_end),
+                (self.back_button.clicked, self.step_back),
+                (self.forward_button.clicked, self.step_forward),
+                (self.preview_button.clicked, self.preview_mission),
                 (self.rate_combo.currentIndexChanged, self._change_rate),
                 (self.time_slider.valueChanged, self._seek),
                 (self.footprint_button.clicked, self.show_footprints),
@@ -4052,7 +4077,8 @@ class ContextDock(QDockWidget):
         mission = self.uav_panel.last_mission
         if mission is None:
             self.player_status.setText(tr(
-                "Nessuna rotta da simulare: generala nello step Simulazione."))
+                "Nessuna rotta da simulare: premi Genera rotta nello step "
+                "Waypoint."))
             return False
         if not self.player.play(mission):
             self.player_status.setText(self.player.message)
@@ -4067,6 +4093,41 @@ class ContextDock(QDockWidget):
     def stop_mission(self, *_args) -> None:
         self.player.stop()
         self.refresh_player()
+
+    def to_start(self, *_args) -> float:
+        moment = self.player.to_start()
+        self.refresh_player()
+        return moment
+
+    def to_end(self, *_args) -> float:
+        moment = self.player.to_end()
+        self._on_player_tick()
+        self.pause_button.setEnabled(self.player.is_playing)
+        return moment
+
+    def step_forward(self, *_args) -> int:
+        index = self.player.step(1)
+        self._on_player_tick()
+        self.pause_button.setEnabled(self.player.is_playing)
+        return index
+
+    def step_back(self, *_args) -> int:
+        index = self.player.step(-1)
+        self._on_player_tick()
+        self.pause_button.setEnabled(self.player.is_playing)
+        return index
+
+    def preview_mission(self, *_args):
+        """Anteprima missione: the route on the map, framed."""
+        layers = self.uav_panel.show_mission_layers()
+        if layers:
+            self.player_status.setText(tr(
+                "Missione sulla mappa: {0} layer, {1:,} waypoint, "
+                "{2:,} scatti.").format(
+                    len(layers),
+                    len(self.uav_panel.last_mission.waypoints),
+                    len(self.uav_panel.last_mission.photos)))
+        return layers
 
     def _change_rate(self, *_args) -> None:
         self.player.set_rate(self.rate_combo.currentData() or 1)
@@ -4103,7 +4164,11 @@ class ContextDock(QDockWidget):
         self.pause_button.setEnabled(self.player.is_playing)
         self.stop_button.setEnabled(self.player.mission is not None)
         self.footprint_button.setEnabled(mission is not None)
+        self.preview_button.setEnabled(mission is not None)
         self.report_button.setEnabled(mission is not None)
+        for button in (self.start_button, self.end_button, self.back_button,
+                       self.forward_button):
+            button.setEnabled(mission is not None)
         if mission is not None and mission is not self.player.mission:
             # Loaded here rather than on Play, so the cursor and the profile
             # answer about the route on screen before anyone presses
@@ -4144,11 +4209,17 @@ class ContextDock(QDockWidget):
         if mission is None:
             self.player_status.setText(tr("Genera prima la rotta."))
             return None
+        # Computed now if the route was planned without them: a command
+        # that answers "tick a box and press Genera rotta again" is a dead
+        # button with an apology on it.
         if not mission.footprints:
             self.player_status.setText(tr(
-                "Impronte non calcolate: accendi 'Verifica la copertura "
-                "sulle impronte a terra' nello step Sicurezza e rigenera la "
-                "rotta."))
+                "Calcolo delle impronte sul DEM..."))
+            self.uav_panel.ensure_footprints()
+        if not mission.footprints:
+            self.player_status.setText(tr(
+                "Impronte non calcolabili: manca il DEM su cui proiettarle, "
+                "oppure la missione supera il limite di scatti."))
             return None
 
         crs = self.uav_panel.extent.crs()

@@ -987,6 +987,80 @@ def query_area(project_geometry, project_crs, transport=None,
     return result
 
 
+#: How many entries a CAD cell carries before it says "and N more". A shape
+#: over forty parcels would otherwise make one unreadable cell; the panel
+#: and the report carry all of them either way.
+CAD_COLUMN_LIMIT = 12
+
+
+def _joined(values) -> str:
+    """``"a; b; c"``, truncated with a count when there are too many."""
+    if len(values) <= CAD_COLUMN_LIMIT:
+        return "; ".join(values)
+    kept = values[:CAD_COLUMN_LIMIT]
+    return "{0}; (+{1})".format("; ".join(kept), len(values) - len(kept))
+
+
+def cad_columns(result) -> dict:
+    """The three cadastral CAD columns for a whole intersection.
+
+    A CAD shape can sit on nine parcels across two comuni, and the table it
+    goes in has exactly three cells to say so. The rule:
+
+    * a **single** parcel writes what it has always written -- comune name,
+      foglio, particella -- so nothing that worked changes;
+    * a foglio is qualified with its Belfiore code only when the shape meets
+      **more than one comune**, because "foglio 12" then names two places;
+    * a particella is qualified with its foglio only when the shape meets
+      **more than one foglio**, for the same reason.
+
+    Ordered by the surface the shape takes, so the first entry in each cell
+    is the ground the shape is mostly on. The full reading -- surfaces,
+    percentages, geometries -- is in the result itself and in the panel;
+    this is the summary that fits a cell.
+
+    Returns an empty dict for an empty or missing result: the caller then
+    writes "N/D", which is what it already did for a lookup with no answer.
+    """
+    from .layer_factory import (CAT_COMUNE_FIELD,               # noqa: PLC0415
+                                CAT_FOGLIO_FIELD,
+                                CAT_PARTICELLA_FIELD)
+
+    if result is None or not getattr(result, "shares", None):
+        return {}
+
+    comuni = result.comuni()
+    many_comuni = len(comuni) > 1
+    many_fogli = len({(share.parcel.comune_code, share.parcel.foglio)
+                      for share in result.shares}) > 1
+
+    comune_values, foglio_values, parcel_values = [], [], []
+
+    def add(bucket, value):
+        if value and value not in bucket:
+            bucket.append(value)
+
+    for code, comune, _group in comuni:
+        add(comune_values, (comune.label() if comune is not None else "")
+            or code)
+        for foglio, shares in result.fogli(code):
+            sheet = foglio or "-"
+            add(foglio_values,
+                "{0} {1}".format(code, sheet) if many_comuni else sheet)
+            for share in sorted(shares,
+                                key=lambda s: -s.intersection_area_m2):
+                label = share.parcel.particella or "-"
+                if many_fogli:
+                    label = "{0}/{1}".format(sheet, label)
+                if many_comuni:
+                    label = "{0} {1}".format(code, label)
+                add(parcel_values, label)
+
+    return {CAT_COMUNE_FIELD: _joined(comune_values),
+            CAT_FOGLIO_FIELD: _joined(foglio_values),
+            CAT_PARTICELLA_FIELD: _joined(parcel_values)}
+
+
 def payload(result) -> dict:
     """The result as a plain dict, for a Qt signal and for a report.
 

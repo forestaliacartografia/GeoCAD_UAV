@@ -549,11 +549,19 @@ else:
                and "batteria" in context.player.summary())
 
     # -- the footprints
-    refused = context.show_footprints()
-    print("        senza impronte: {0}".format(context.player_status.text()))
-    check_true("senza impronte calcolate lo dice invece di disegnare niente",
-               refused is None
-               and "impronte" in context.player_status.text().lower())
+    # v2.1.0: a route planned without the coverage check has no footprints,
+    # and asking to see them now drapes them instead of explaining which
+    # checkbox to tick. Same ray casting, run late.
+    check("la rotta e' stata pianificata senza impronte",
+          len(mission.footprints), 0)
+    on_demand = context.show_footprints()
+    print("        a richiesta: {0}".format(context.player_status.text()))
+    check_true("chiederle le calcola e le disegna", on_demand is not None)
+    check("...una per scatto", on_demand.featureCount(),
+          len(mission.photos))
+    check("...e la missione se le tiene", len(mission.footprints),
+          len(mission.photos))
+    QgsProject.instance().removeMapLayer(on_demand.id())
 
     panel.check_coverage.setChecked(True)
     covered = panel.generate()

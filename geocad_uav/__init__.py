@@ -5,7 +5,7 @@ CAD dimensional geometry, parametric grids, forest planting design and UAV
 photogrammetric flight planning with mandatory DEM/DTM terrain following.
 """
 
-__version__ = "2.0.1"
+__version__ = "2.1.0"
 __author__ = "Niccolo Marco Mancini"
 
 

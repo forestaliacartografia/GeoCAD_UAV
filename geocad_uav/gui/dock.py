@@ -19,14 +19,16 @@ from __future__ import annotations
 from qgis.core import Qgis, QgsMapLayerProxyModel, QgsProject
 from qgis.gui import QgsMapLayerComboBox
 from qgis.PyQt.QtCore import QCoreApplication, QSize, Qt
-from qgis.PyQt.QtWidgets import (QCheckBox, QComboBox, QDockWidget,
-                                 QDoubleSpinBox, QFormLayout, QGroupBox,
-                                 QHBoxLayout, QLabel, QPushButton, QScrollArea,
-                                 QSpinBox, QTabWidget, QToolBar, QVBoxLayout,
-                                 QWidget)
+from qgis.PyQt.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox,
+                                 QDockWidget, QDoubleSpinBox, QFormLayout,
+                                 QGroupBox, QHBoxLayout, QHeaderView, QLabel,
+                                 QMessageBox, QPushButton, QScrollArea,
+                                 QSpinBox, QTableWidget, QTableWidgetItem,
+                                 QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
 from ..cad import dynamic_input as di
 from ..cad.tools.base import ToolState
+from ..io import cadastre as cadastre_mod
 from ..settings import settings as app_settings
 
 
@@ -58,6 +60,15 @@ class GeoCadDock(QDockWidget):
         self.iface = iface
         self._connections = []
         self._cad_tool = None
+        #: The last committed shape, with its geometry and whatever the
+        #: cadastre said about it. What "Interroga catasto" asks about.
+        self._last_commit = None
+        #: The running cadastral task. Kept alive here: a QgsTask the caller
+        #: drops is collected mid-flight.
+        self._cadastre_task = None
+        #: Injected by the plugin so CAD parcels and reforestation parcels
+        #: land on the same layer set instead of two of them.
+        self._layers = None
         self.setWidget(self._build())
         self._load_settings()
         self._wire()
@@ -166,6 +177,57 @@ class GeoCadDock(QDockWidget):
         self.cadastre_status = QLabel(tr("Nessuna geometria disegnata."))
         self.cadastre_status.setWordWrap(True)
         cadastre_form.addRow(self.cadastre_status)
+
+        # RIEPILOGO PER COMUNE. A CAD shape can lie across two comuni, and
+        # one of them being named in a label is how the other gets lost.
+        cadastre_form.addRow(QLabel(tr("Riepilogo per Comune")))
+        self.comune_table = QTableWidget(0, 5)
+        self.comune_table.setHorizontalHeaderLabels(
+            [tr("Comune"), tr("Particelle"), tr("Sup. catastale"),
+             tr("Sup. interessata"), tr("%")])
+        self.comune_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.comune_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.comune_table.setMaximumHeight(110)
+        self.comune_table.setToolTip(tr(
+            "Scegli un Comune per evidenziarne tutte le particelle sulla "
+            "mappa."))
+        cadastre_form.addRow(self.comune_table)
+
+        # DETTAGLIO PARTICELLA. Comune first on every row: two comuni can
+        # both hold a foglio 12 particella 45.
+        cadastre_form.addRow(QLabel(tr("Dettaglio particelle")))
+        self.parcel_table = QTableWidget(0, 6)
+        self.parcel_table.setHorizontalHeaderLabels(
+            [tr("Comune"), tr("Foglio"), tr("Particella"),
+             tr("Sup. catastale"), tr("Sup. interessata"), tr("%")])
+        self.parcel_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
+        self.parcel_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows)
+        self.parcel_table.setMaximumHeight(160)
+        cadastre_form.addRow(self.parcel_table)
+
+        cadastre_buttons = QHBoxLayout()
+        self.cadastre_button = QPushButton(tr("Interroga catasto"))
+        self.cadastre_button.setToolTip(tr(
+            "Interroga il WFS dell'Agenzia delle Entrate sulla geometria "
+            "appena disegnata e ne interseca ogni particella. Non un punto: "
+            "la forma intera, con tutti i Comuni che attraversa."))
+        self.cadastre_button.setEnabled(False)
+        self.cadastre_show_button = QPushButton(tr("Mostra sulla mappa"))
+        self.cadastre_show_button.setToolTip(tr(
+            "Disegna tutte le particelle interessate e inquadra la mappa "
+            "su di esse."))
+        self.cadastre_show_button.setEnabled(False)
+        self.cadastre_details_button = QPushButton(tr("Dettagli"))
+        self.cadastre_details_button.setEnabled(False)
+        for button in (self.cadastre_button, self.cadastre_show_button,
+                       self.cadastre_details_button):
+            cadastre_buttons.addWidget(button)
+        cadastre_form.addRow(cadastre_buttons)
+
         self.set_cadastre_enabled = QCheckBox(
             tr("Interroga il catasto a ogni geometria"))
         self.set_cadastre_enabled.setToolTip(tr(
@@ -268,6 +330,13 @@ class GeoCadDock(QDockWidget):
                 (self.set_snap_vertex, "toggled", self._save_settings),
                 (self.set_snap_segment, "toggled", self._save_settings),
                 (self.set_cadastre_enabled, "toggled", self._save_settings),
+                (self.cadastre_button, "clicked", self.query_cadastre),
+                (self.cadastre_show_button, "clicked", self.show_parcels),
+                (self.cadastre_details_button, "clicked", self.show_details),
+                (self.comune_table, "itemSelectionChanged",
+                 self.on_comune_picked),
+                (self.parcel_table, "itemSelectionChanged",
+                 self.on_parcel_picked),
                 (self.set_export_format, "currentIndexChanged", self._save_settings),
                 (self.settings_reset, "clicked", self._reset_settings),
                 (self.tabs, "currentChanged", self._save_settings)):
@@ -402,6 +471,11 @@ class GeoCadDock(QDockWidget):
         constraints (name, kind, label) and the panel renders them. A new tool
         therefore needs no changes in this file.
         """
+        # The previous tool stops publishing here first. A cadastral task
+        # it left running answers seconds later, and its announce would
+        # overwrite this panel with a shape the operator has moved on from.
+        if self._cad_tool is not None and self._cad_tool is not tool:
+            self._cad_tool.commit_observer = None
         self._cad_tool = tool
         # The one line that makes the readout live: the tool publishes each
         # commit, and this panel is what listens.
@@ -468,6 +542,10 @@ class GeoCadDock(QDockWidget):
         if report is None:
             self.clear_commit()
             return
+        self._last_commit = report
+        self.cadastre_button.setEnabled(report.geometry is not None
+                                        and not report.pending)
+        self.fill_cadastre_tables(report.result)
         self.cadastre_labels["area"].setText(
             tr("{0:,.2f} m2 ({1:,.4f} ha)").format(
                 report.area_m2, report.area_m2 / M2_PER_HA))
@@ -483,6 +561,15 @@ class GeoCadDock(QDockWidget):
             self.cadastre_status.setText(tr(
                 "Geometria scritta sul layer '{0}'. Il catasto risponde fra "
                 "qualche secondo.").format(report.layer_name))
+        elif report.n_comuni > 1:
+            self.cadastre_status.setText(tr(
+                "{0} particelle in {1} Comuni: {2}.").format(
+                    report.n_parcels, report.n_comuni,
+                    "; ".join(report.result.comune_labels())))
+        elif report.n_parcels > 1:
+            self.cadastre_status.setText(tr(
+                "{0} particelle nel comune di {1}.").format(
+                    report.n_parcels, report.comune))
         elif report.has_parcel:
             self.cadastre_status.setText(tr(
                 "{0}, comune di {1}.").format(report.parcel_label(),
@@ -500,9 +587,177 @@ class GeoCadDock(QDockWidget):
 
     def clear_commit(self) -> None:
         """Back to dashes: no shape of this tool's is on screen any more."""
+        self._last_commit = None
         for label in self.cadastre_labels.values():
             label.setText(DASH)
         self.cadastre_status.setText(tr("Nessuna geometria disegnata."))
+        self.fill_cadastre_tables(None)
+        self.cadastre_button.setEnabled(False)
+
+    # -- the cadastre, on demand -------------------------------------------
+
+    def set_layers(self, layers) -> None:
+        """Adopt the plugin's layer service, so CAD and forest share it."""
+        self._layers = layers
+
+    def layer_service(self):
+        """The layer set the parcels go on. One per host, created on use."""
+        if self._layers is None:
+            from .map_layers import ProjectLayers                # noqa: PLC0415
+
+            self._layers = ProjectLayers(self.iface)
+        return self._layers
+
+    def query_cadastre(self, transport=None):
+        """Ask the cadastre about the shape on screen. Returns the task.
+
+        The same engine the reforestation module uses -- geometry against
+        every parcel it meets, intersected in a metric CRS -- started here
+        on demand rather than only behind a commit.
+        """
+        report = self._last_commit
+        geometry = getattr(report, "geometry", None)
+        if geometry is None:
+            self.cadastre_status.setText(tr(
+                "Nessuna geometria da interrogare: disegnane una."))
+            return None
+        from qgis.core import QgsCoordinateReferenceSystem        # noqa: PLC0415
+
+        crs = QgsCoordinateReferenceSystem(report.crs_authid or "")
+        if not crs.isValid():
+            self.cadastre_status.setText(tr(
+                "Il layer non dichiara un sistema di riferimento."))
+            return None
+        self.cadastre_button.setEnabled(False)
+        self.cadastre_status.setText(tr("Interrogazione in corso..."))
+        try:
+            self._cadastre_task = cadastre_mod.area_task(
+                geometry, crs, self.on_cadastral_result,
+                transport=transport if callable(transport) else None)
+        except Exception as exc:                                  # noqa: BLE001
+            self._cadastre_task = None
+            self.cadastre_button.setEnabled(True)
+            self.cadastre_status.setText(tr(
+                "Interrogazione non riuscita: {0}").format(exc))
+        return self._cadastre_task
+
+    def on_cadastral_result(self, result) -> None:
+        """The task answered. Fill the tables and say what came back."""
+        self.cadastre_button.setEnabled(True)
+        if self._last_commit is not None:
+            self._last_commit.result = result
+        self.fill_cadastre_tables(result)
+        if result is None or not result.shares:
+            message = getattr(result, "message", "") if result else ""
+            self.cadastre_status.setText(message or tr(
+                "Nessuna particella per questa geometria: fuori copertura, "
+                "oppure servizio non raggiungibile."))
+            return
+        columns = cadastre_mod.cad_columns(result)
+        from ..io.layer_factory import (CAT_COMUNE_FIELD,         # noqa: PLC0415
+                                        CAT_FOGLIO_FIELD,
+                                        CAT_PARTICELLA_FIELD)
+        for key, field in (("comune", CAT_COMUNE_FIELD),
+                           ("foglio", CAT_FOGLIO_FIELD),
+                           ("particella", CAT_PARTICELLA_FIELD)):
+            self.cadastre_labels[key].setText(columns.get(field) or DASH)
+        self.cadastre_status.setText(tr(
+            "{0} particelle in {1} Comuni: {2}.").format(
+                result.n_parcels, len(result.comuni()),
+                "; ".join(result.comune_labels())))
+        self.show_parcels()
+
+    def fill_cadastre_tables(self, result) -> int:
+        """Both readings of one answer: per Comune, and per particella."""
+        rows = result.rows() if result is not None else []
+        summary = result.comune_rows() if result is not None else []
+        self.parcel_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = (
+                row.get("comune", ""), row.get("foglio", ""),
+                row.get("particella", ""),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_catastale_m2") or 0.0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_interessata_m2") or 0.0)),
+                "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
+            for column, value in enumerate(values):
+                self.parcel_table.setItem(index, column,
+                                          QTableWidgetItem(str(value)))
+        self.comune_table.setRowCount(len(summary))
+        for index, row in enumerate(summary):
+            values = (
+                "{0} [{1}]".format(row.get("comune", ""),
+                                   row.get("belfiore", "")),
+                "{0} su {1} fogli".format(row.get("particelle", 0),
+                                          row.get("fogli", 0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_catastale_m2") or 0.0)),
+                "{0:,.0f} m2".format(
+                    float(row.get("superficie_interessata_m2") or 0.0)),
+                "{0:.2f}".format(float(row.get("percentuale") or 0.0)))
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole,
+                                 row.get("belfiore", ""))
+                self.comune_table.setItem(index, column, item)
+        has_rows = bool(rows)
+        self.cadastre_show_button.setEnabled(has_rows)
+        self.cadastre_details_button.setEnabled(has_rows)
+        return len(rows)
+
+    def cadastral_result(self):
+        return getattr(self._last_commit, "result", None)
+
+    def show_parcels(self, *_args) -> int:
+        """Every particella of every Comune on the map, and frame them."""
+        result = self.cadastral_result()
+        if result is None:
+            return 0
+        layers = self.layer_service()
+        if result.work_crs_authid or getattr(self._last_commit, "crs_authid",
+                                             ""):
+            layers.set_crs(self._last_commit.crs_authid)
+        drawn = layers.draw_parcels(result)
+        if drawn:
+            layers.zoom_to("parcels")
+        return drawn
+
+    def on_comune_picked(self, *_args) -> int:
+        """A Comune chosen in the summary highlights all of its particelle."""
+        result = self.cadastral_result()
+        row = self.comune_table.currentRow()
+        if result is None or row < 0:
+            return 0
+        item = self.comune_table.item(row, 0)
+        code = item.data(Qt.ItemDataRole.UserRole) if item else ""
+        if not code:
+            return 0
+        rows = [index for index, share in enumerate(result.shares)
+                if share.parcel.comune_code == code]
+        return self.layer_service().select_rows("parcels", rows)
+
+    def on_parcel_picked(self, *_args) -> bool:
+        """A row chosen in the detail is that particella on the map."""
+        row = self.parcel_table.currentRow()
+        if row < 0 or self.cadastral_result() is None:
+            return False
+        return self.layer_service().select("parcels", row)
+
+    def show_details(self, *_args):
+        """The whole reading as text: Comune, foglio, particella, superfici."""
+        result = self.cadastral_result()
+        if result is None:
+            return None
+        text = "\n".join(result.describe())
+        if self.iface is None:
+            return text
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("Particelle catastali"))
+        box.setText(text)
+        box.exec()
+        return text
 
     def polyline_close_requested(self) -> bool:
         """Whether the operator asked the polyline to close its ring."""

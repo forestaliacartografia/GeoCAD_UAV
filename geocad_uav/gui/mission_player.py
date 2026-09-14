@@ -27,6 +27,8 @@ mission object is never written to.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from qgis.core import QgsPointXY, QgsWkbTypes
 from qgis.gui import QgsRubberBand
@@ -190,6 +192,38 @@ class MissionPlayer(QObject):
         self.flashed = []
         self._flash_left = 0
 
+    def to_start(self) -> float:
+        """Back to take-off, without stopping the clock if it is running."""
+        return self.seek(0.0)
+
+    def to_end(self) -> float:
+        """To the last waypoint: the state the mission finishes in."""
+        return self.seek(self.duration_s)
+
+    def step(self, delta: int = 1) -> int:
+        """Move one waypoint forward or back. Returns the waypoint index.
+
+        Not one tick: a tick is a fortieth of a second and says nothing. A
+        waypoint is where the route actually does something -- turns, climbs,
+        takes a photograph -- so that is the unit this steps in.
+        """
+        if self.mission is None or self._times is None \
+                or not self._times.size:
+            return 0
+        self.pause()
+        last = len(self._times) - 1
+        # ``index`` is the last waypoint crossed. Forward means the next one;
+        # backward from the middle of a leg means the one just crossed, which
+        # is where an operator expects a step back to land.
+        mid_leg = self.t_sim > float(self._times[self.index])
+        if int(delta) < 0 and mid_leg:
+            target = self.index + int(delta) + 1
+        else:
+            target = self.index + int(delta)
+        target = int(min(max(target, 0), last))
+        self.seek(float(self._times[target]))
+        return self.index
+
     def seek(self, t_sim: float) -> float:
         """Put the clock at a moment without playing. Returns where it landed.
 
@@ -236,7 +270,10 @@ class MissionPlayer(QObject):
         empty = {"t_s": 0.0, "duration_s": 0.0, "distance_m": 0.0,
                  "length_m": 0.0, "z_amsl": float("nan"),
                  "z_agl": float("nan"), "photos": 0, "photo_total": 0,
-                 "sub_mission": 0, "sub_total": 0, "battery_left": 1.0}
+                 "sub_mission": 0, "sub_total": 0, "battery_left": 1.0,
+                 "x": float("nan"), "y": float("nan"), "speed_ms": 0.0,
+                 "heading_deg": float("nan"), "remaining_m": 0.0,
+                 "remaining_s": 0.0, "waypoint": 0, "waypoint_total": 0}
         if self.mission is None or self._times is None \
                 or not self._times.size:
             return empty
@@ -260,11 +297,35 @@ class MissionPlayer(QObject):
             if t1 > t0:
                 battery = 1.0 - min(max((self.t_sim - t0) / (t1 - t0), 0.0),
                                     1.0)
+        point = self.position() or (float("nan"), float("nan"))
+        distance = blend(self._chainage)
+        length = float(self._chainage[-1])
+        waypoints = list(getattr(self.mission, "waypoints", []) or [])
+        speed = float(waypoints[i].speed_ms) if i < len(waypoints) else 0.0
+        # The heading of the leg being flown, from the geometry itself: the
+        # commanded heading of a waypoint is where the camera looks, and on a
+        # turn the two differ.
+        heading = float("nan")
+        if nxt != i:
+            dx = float(self._xy[nxt, 0] - self._xy[i, 0])
+            dy = float(self._xy[nxt, 1] - self._xy[i, 1])
+            if dx or dy:
+                heading = math.degrees(math.atan2(dx, dy)) % 360.0
+        elif waypoints:
+            heading = float(waypoints[min(i, len(waypoints) - 1)].heading_deg)
         return {
             "t_s": float(self.t_sim),
             "duration_s": float(self.duration_s),
-            "distance_m": blend(self._chainage),
-            "length_m": float(self._chainage[-1]),
+            "distance_m": distance,
+            "length_m": length,
+            "remaining_m": max(0.0, length - distance),
+            "remaining_s": max(0.0, float(self.duration_s) - self.t_sim),
+            "x": float(point[0]),
+            "y": float(point[1]),
+            "speed_ms": speed,
+            "heading_deg": heading,
+            "waypoint": int(i) + 1,
+            "waypoint_total": int(len(self._times)),
             "z_amsl": blend(self._z),
             "z_agl": blend(self._agl),
             "photos": int(self.flash_count),
@@ -293,8 +354,14 @@ class MissionPlayer(QObject):
     # -- the clock ---------------------------------------------------------
 
     def tick(self):
-        """One frame. The tests call this directly instead of sleeping."""
+        """One frame. The tests call this directly instead of sleeping.
+
+        A tick with the timer stopped does nothing: pause has to freeze the
+        clock whoever calls this, not only when the caller is the timer.
+        """
         if self.mission is None or self._times is None:
+            return
+        if not self._timer.isActive():
             return
         self.t_sim += (TICK_MS / 1000.0) * self.rate
         total = self.duration_s
@@ -417,13 +484,22 @@ class MissionPlayer(QObject):
             state["sub_mission"], state["sub_total"],
             100.0 * state["battery_left"]) if state["sub_total"] > 1 else \
             tr("batteria al {0:.0f} %").format(100.0 * state["battery_left"])
+        heading = ("--" if state["heading_deg"] != state["heading_deg"]
+                   else "{0:.0f} deg".format(state["heading_deg"]))
         return tr(
-            "t {0} / {1} percorso - {2} di missione con decolli, atterraggi "
-            "e virate - {3:,.0f} m - quota {4:,.0f} m s.l.m. ({5:.0f} m AGL) "
-            "- {6} - scatti {7}/{8} - {9}x").format(
+            "t {0} / {1} (restano {2}) - {3} di missione con decolli, "
+            "atterraggi e virate\n"
+            "percorso {4:,.0f} m, restano {5:,.0f} m - "
+            "velocita' {6:.1f} m/s ({7:.0f} km/h) - prua {8}\n"
+            "quota {9:,.0f} m s.l.m. ({10:.0f} m AGL) - {11}\n"
+            "waypoint {12}/{13} - fotogramma {14}/{15} - {16}x").format(
                 format_duration(self.t_sim), format_duration(self.duration_s),
+                format_duration(state["remaining_s"]),
                 format_duration(self.mission.stats.flight_time_s),
-                state["distance_m"], state["z_amsl"], state["z_agl"], battery,
+                state["distance_m"], state["remaining_m"],
+                state["speed_ms"], state["speed_ms"] * 3.6, heading,
+                state["z_amsl"], state["z_agl"], battery,
+                state["waypoint"], state["waypoint_total"],
                 self.flash_count, self.photo_count, self.rate)
 
     def teardown(self):
