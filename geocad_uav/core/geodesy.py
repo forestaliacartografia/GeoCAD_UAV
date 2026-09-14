@@ -50,7 +50,7 @@ def geodesic_length(geom, crs, ellipsoid: Optional[str] = None,
     measure = distance_area(crs, ellipsoid, project)
     raw = measure.measureLength(geom)
     return measure.convertLengthMeasurement(
-        raw, QgsUnitTypes.DistanceMeters)
+        raw, QgsUnitTypes.DistanceUnit.DistanceMeters)
 
 
 def geodesic_area(geom, crs, ellipsoid: Optional[str] = None,
@@ -60,7 +60,8 @@ def geodesic_area(geom, crs, ellipsoid: Optional[str] = None,
 
     measure = distance_area(crs, ellipsoid, project)
     raw = measure.measureArea(geom)
-    return measure.convertAreaMeasurement(raw, QgsUnitTypes.AreaSquareMeters)
+    return measure.convertAreaMeasurement(
+        raw, QgsUnitTypes.AreaUnit.AreaSquareMeters)
 
 
 def geodesic_bearing(p1, p2, crs, ellipsoid: Optional[str] = None,

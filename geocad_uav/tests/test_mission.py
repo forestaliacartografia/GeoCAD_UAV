@@ -325,7 +325,7 @@ check("photo_centers layer count", layers["photo_centers"].featureCount(),
 check("footprints layer count", layers["photo_footprints"].featureCount(),
       st.n_photos)
 check_true("waypoint layer is PointZ",
-           layers["waypoints"].wkbType() == 1001                # QgsWkbTypes.PointZ
+           layers["waypoints"].wkbType() == 1001  # QgsWkbTypes.Type.PointZ
            or "Z" in layers["waypoints"].dataProvider().description())
 sample = next(layers["waypoints"].getFeatures())
 check_true("waypoint geometry carries Z",

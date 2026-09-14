@@ -121,7 +121,7 @@ class GeoCadDock(QDockWidget):
         self.cad_box = QGroupBox(tr("Strumento attivo"))
         cad_form = QFormLayout(self.cad_box)
         self.cad_layer_combo = QgsMapLayerComboBox()
-        self.cad_layer_combo.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        self.cad_layer_combo.setFilters(QgsMapLayerProxyModel.Filter.VectorLayer)
         self.cad_layer_combo.setAllowEmptyLayer(
             True, tr("(layer di lavoro automatico)"))
         cad_form.addRow(tr("Layer destinazione"), self.cad_layer_combo)
@@ -458,9 +458,9 @@ class GeoCadDock(QDockWidget):
         project = QgsProject.instance()
         config = QgsSnappingConfig(project.snappingConfig())
         config.setEnabled(self.set_snap_enabled.isChecked())
-        config.setMode(QgsSnappingConfig.AllLayers)
+        config.setMode(QgsSnappingConfig.SnappingMode.AllLayers)
         config.setTolerance(float(self.set_snap_tolerance.value()))
-        config.setUnits(QgsTolerance.Pixels)
+        config.setUnits(QgsTolerance.UnitType.Pixels)
         flags = 0
         if self.set_snap_vertex.isChecked():
             flags |= int(Qgis.SnappingType.Vertex)
@@ -930,16 +930,16 @@ class GeoCadDock(QDockWidget):
         try:
             from qgis.core import QgsWkbTypes
 
-            wanted = (QgsWkbTypes.PolygonGeometry
+            wanted = (QgsWkbTypes.GeometryType.PolygonGeometry
                       if geometry_type == "Polygon"
-                      else QgsWkbTypes.LineGeometry)
+                      else QgsWkbTypes.GeometryType.LineGeometry)
             if layer.geometryType() != wanted:
                 self.iface.messageBar().pushMessage(
                     tr("GeoCad UAV"),
                     tr("Il layer '{0}' non accetta geometrie di tipo {1}: "
                        "viene usato un layer di lavoro.").format(
                            layer.name(), geometry_type),
-                    level=Qgis.Warning)
+                    level=Qgis.MessageLevel.Warning)
                 return None
         except Exception:                                       # noqa: BLE001
             return None
@@ -966,7 +966,7 @@ class GeoCadDock(QDockWidget):
                     "Manca ancora il punto di origine: clicca sulla mappa."))
         except Exception as exc:                                # noqa: BLE001
             self.iface.messageBar().pushMessage(
-                tr("GeoCad UAV"), str(exc), level=Qgis.Warning)
+                tr("GeoCad UAV"), str(exc), level=Qgis.MessageLevel.Warning)
 
     def closeEvent(self, event):                                # noqa: N802
         super().closeEvent(event)

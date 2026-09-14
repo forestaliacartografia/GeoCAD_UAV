@@ -54,25 +54,25 @@ class _GridBase(QgsProcessingAlgorithm):
     def _add_grid_parameters(self, dx_label, dy_label, dx=5.0, dy=5.0):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.AOI, self.tr("Area di progetto (poligono)"),
-            [QgsProcessing.TypeVectorPolygon]))
+            [QgsProcessing.SourceType.TypeVectorPolygon]))
         self.addParameter(QgsProcessingParameterNumber(
             self.SPACING_X, self.tr(dx_label),
-            QgsProcessingParameterNumber.Double, defaultValue=dx,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=dx,
             minValue=0.001))
         self.addParameter(QgsProcessingParameterNumber(
             self.SPACING_Y, self.tr(dy_label),
-            QgsProcessingParameterNumber.Double, defaultValue=dy,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=dy,
             minValue=0.001))
         self.addParameter(QgsProcessingParameterEnum(
             self.PATTERN, self.tr("Schema"), options=self._PATTERNS,
             defaultValue=0))
         self.addParameter(QgsProcessingParameterNumber(
             self.AZIMUTH, self.tr("Orientamento delle file [gradi da Nord]"),
-            QgsProcessingParameterNumber.Double, defaultValue=0.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=0.0,
             minValue=0.0, maxValue=360.0))
         self.addParameter(QgsProcessingParameterNumber(
             self.MARGIN, self.tr("Margine dal bordo [m]"),
-            QgsProcessingParameterNumber.Double, defaultValue=0.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=0.0,
             minValue=0.0))
         self.addParameter(QgsProcessingParameterBoolean(
             self.SERPENTINE,
@@ -143,10 +143,10 @@ class GridAlgorithm(_GridBase):
                                   "Distanza fra le file (dy) [m]")
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_POINTS, self.tr("Punti della griglia"),
-            QgsProcessing.TypeVectorPoint))
+            QgsProcessing.SourceType.TypeVectorPoint))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_ROWS, self.tr("Linee di file"),
-            QgsProcessing.TypeVectorLine, optional=True))
+            QgsProcessing.SourceType.TypeVectorLine, optional=True))
 
     def processAlgorithm(self, parameters, context, feedback):
         aoi, crs = self._read_aoi(parameters, context)
@@ -188,7 +188,7 @@ class GridAlgorithm(_GridBase):
                                  ("seq_in_row", "int"), ("x", "double"),
                                  ("y", "double")])
         sink, dest = self.parameterAsSink(parameters, self.OUT_POINTS, context,
-                                          fields, QgsWkbTypes.Point, crs)
+                                          fields, QgsWkbTypes.Type.Point, crs)
         results = {}
         if sink is not None:
             for i in range(len(clipped)):
@@ -199,13 +199,14 @@ class GridAlgorithm(_GridBase):
                                     int(clipped.col[i]) + 1,
                                     float(clipped.xy[i, 0]),
                                     float(clipped.xy[i, 1])])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_POINTS] = dest
 
         row_fields = lf.make_fields([("row_id", "int"), ("n_points", "int"),
                                      ("length_m", "double")])
-        sink, dest = self.parameterAsSink(parameters, self.OUT_ROWS, context,
-                                          row_fields, QgsWkbTypes.LineString, crs)
+        sink, dest = self.parameterAsSink(
+            parameters, self.OUT_ROWS, context,
+            row_fields, QgsWkbTypes.Type.LineString, crs)
         if sink is not None:
             for i, line in enumerate(clipped.row_lines()):
                 if line.shape[0] < 2:
@@ -216,7 +217,7 @@ class GridAlgorithm(_GridBase):
                 feat.setGeometry(geom)
                 feat.setAttributes([i + 1, int(line.shape[0]),
                                     float(geom.length())])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_ROWS] = dest
         return results
 
@@ -276,17 +277,18 @@ class ForestPlantingAlgorithm(_GridBase):
                 (self.ASPECT_TO, "Esposizione a [gradi]", 0.0)):
             self.addParameter(mark_advanced(QgsProcessingParameterNumber(
                 key, self.tr(label + " (0 = non applicato)"),
-                QgsProcessingParameterNumber.Double, defaultValue=default,
+                QgsProcessingParameterNumber.Type.Double, defaultValue=default,
                 optional=True)))
 
         self.addParameter(QgsProcessingParameterFeatureSink(
-            self.OUT_PLANTS, self.tr("Piante"), QgsProcessing.TypeVectorPoint))
+            self.OUT_PLANTS, self.tr("Piante"),
+            QgsProcessing.SourceType.TypeVectorPoint))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_EXCLUDED, self.tr("Posizioni scartate"),
-            QgsProcessing.TypeVectorPoint, optional=True))
+            QgsProcessing.SourceType.TypeVectorPoint, optional=True))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_ROWS, self.tr("Linee di file"),
-            QgsProcessing.TypeVectorLine, optional=True))
+            QgsProcessing.SourceType.TypeVectorLine, optional=True))
 
     def processAlgorithm(self, parameters, context, feedback):
         aoi, crs = self._read_aoi(parameters, context)
@@ -342,7 +344,7 @@ class ForestPlantingAlgorithm(_GridBase):
         results = {}
         plant_fields = lf.make_fields(lf.PLANT_FIELDS)
         sink, dest = self.parameterAsSink(parameters, self.OUT_PLANTS, context,
-                                          plant_fields, QgsWkbTypes.Point, crs)
+                                          plant_fields, QgsWkbTypes.Type.Point, crs)
         if sink is not None:
             for p in result.plants:
                 feat = QgsFeature(plant_fields)
@@ -350,13 +352,13 @@ class ForestPlantingAlgorithm(_GridBase):
                 feat.setAttributes([p.plant_id, p.row_id, p.seq_in_row, p.z,
                                     p.spacing_x, p.spacing_y, p.azimuth_deg,
                                     p.dist_to_edge, p.slope_deg, p.aspect_deg])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_PLANTS] = dest
 
         excl_fields = lf.make_fields(lf.EXCLUDED_FIELDS)
         sink, dest = self.parameterAsSink(parameters, self.OUT_EXCLUDED,
                                           context, excl_fields,
-                                          QgsWkbTypes.Point, crs)
+                                          QgsWkbTypes.Type.Point, crs)
         if sink is not None:
             for p in result.excluded:
                 feat = QgsFeature(excl_fields)
@@ -366,13 +368,13 @@ class ForestPlantingAlgorithm(_GridBase):
                                     p.dist_to_edge, p.slope_deg, p.aspect_deg,
                                     planting_mod.REASON_LABELS.get(
                                         p.excluded_reason, p.excluded_reason)])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_EXCLUDED] = dest
 
         row_fields = lf.make_fields([("row_id", "int"), ("n_plants", "int"),
                                      ("length_m", "double")])
         sink, dest = self.parameterAsSink(parameters, self.OUT_ROWS, context,
-                                          row_fields, QgsWkbTypes.LineString,
+                                          row_fields, QgsWkbTypes.Type.LineString,
                                           crs)
         if sink is not None:
             for i, line in enumerate(result.rows):
@@ -384,6 +386,6 @@ class ForestPlantingAlgorithm(_GridBase):
                 feat.setGeometry(geom)
                 feat.setAttributes([i + 1, int(line.shape[0]),
                                     float(geom.length())])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_ROWS] = dest
         return results

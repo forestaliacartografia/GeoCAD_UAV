@@ -224,7 +224,7 @@ check("...una feature per curva", contour_layer.featureCount(), count)
 check_text("...nel CRS del progetto", contour_layer.crs().authid(),
            "EPSG:32632")
 check_true("...e sono linee, non poligoni",
-           contour_layer.geometryType() == QgsWkbTypes.LineGeometry)
+           contour_layer.geometryType() == QgsWkbTypes.GeometryType.LineGeometry)
 check_true("il layer sta nel progetto QGIS",
            QgsProject.instance().mapLayer(contour_layer.id()) is not None)
 

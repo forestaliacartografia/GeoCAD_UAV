@@ -34,6 +34,11 @@ EXCLUDE_NAMES = {".DS_Store", "Thumbs.db"}
 #: Directories dropped unless --with-tests is given.
 OPTIONAL_DIRS = {"tests"}
 
+#: Where the scoped-enum table lives. Loaded from the file rather than
+#: imported as a module, so building an archive needs neither QGIS nor an
+#: importable plugin package.
+ENUM_TABLE = os.path.join(PACKAGE, "tests", "qt6_enum_table.py")
+
 #: Files that must be present, or the archive is not installable.
 #: Files without which the package is refused -- by QGIS, by the official
 #: plugin repository ("Cannot find LICENSE in the plugin package"), or by
@@ -250,6 +255,59 @@ def check_metadata() -> "list[str]":
             problems.append(
                 "LICENSE is only {0} characters: that is not the full "
                 "licence text.".format(len(licence)))
+
+    problems.extend(_unscoped_enums())
+    return problems
+
+
+def _scoped_enums() -> "tuple[list, str]":
+    """The shared table as (rows, problem). One of the two is always empty."""
+    path = os.path.join(HERE, ENUM_TABLE)
+    if not os.path.isfile(path):
+        return [], "{0} is missing: the Qt6 enum check cannot run".format(
+            ENUM_TABLE.replace(os.sep, "/"))
+    namespace = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            exec(compile(handle.read(), path, "exec"), namespace)  # noqa: S102
+        return list(namespace["SCOPED_ENUMS"]), ""
+    except Exception as exc:                                    # noqa: BLE001
+        return [], "{0} could not be read: {1}".format(
+            ENUM_TABLE.replace(os.sep, "/"), exc)
+
+
+def _unscoped_enums() -> "list[str]":
+    """Modules that write an enum member on its class instead of its enum.
+
+    The official plugin repository runs this check on the uploaded package and
+    refuses the version. PyQt5 answers to both spellings, so nothing fails
+    locally on the LTR -- which is exactly why the archive is the right place
+    to stop it.
+    """
+    rows, problem = _scoped_enums()
+    if problem:
+        return [problem]
+    rules = [(re.compile(r"\b" + cls + r"\." + member + r"\b"),
+              "{0}.{1}".format(cls, member),
+              "{0}.{1}.{2}".format(cls, enum_name, member))
+             for cls, enum_name, member, _value in rows]
+
+    problems = []
+    for base, dirs, names in os.walk(SOURCE):
+        dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+        for name in sorted(names):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(base, name)
+            relative = os.path.relpath(path, SOURCE).replace(os.sep, "/")
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            for number, line in enumerate(lines, 1):
+                for pattern, wrong, right in rules:
+                    if pattern.search(line):
+                        problems.append(
+                            "{0}:{1} writes {2}; PyQt6 needs {3}".format(
+                                relative, number, wrong, right))
     return problems
 
 

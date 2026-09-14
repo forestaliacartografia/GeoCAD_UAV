@@ -5,6 +5,41 @@ pacchetto distribuito e non compare nel Gestore dei plugin di QGIS:
 la scheda del plugin descrive che cosa il plugin fa, non che cosa ha
 fatto.
 
+## 2.2.4 -- enum con lo scope, come PyQt6 li vuole
+
+Il controllo Qt6 del repository ufficiale ha respinto la 2.2.3 con 131
+segnalazioni, tutte della stessa forma: un membro di enum scritto sulla classe
+che lo contiene invece che sul suo enum. PyQt5 accetta entrambe le grafie,
+PyQt6 tiene solo la seconda come nome vero -- la prima resta un alias che QGIS
+riaggiunge. Per questo il plugin girava senza un errore sulla LTR e veniva
+comunque rifiutato in fase di caricamento.
+
+- La tabella delle 33 grafie non e' stata dedotta a memoria: ogni nome e'
+  stato interrogato sulle due QGIS installate e accettato solo dove risolve su
+  entrambe con lo stesso valore numerico. Nessuna API inventata.
+- 141 righe riscritte in 28 file. Il conteggio per file coincide con quello
+  del repository (131 nei moduli distribuiti); le tre eccedenze erano prosa
+  nei docstring, che il controllo giustamente ignora.
+- I tre shim di compatibilita' (`rubber_band_geometry_type`, `flags()`,
+  `mark_advanced`) interrogavano un nome e ne restituivano un altro dopo la
+  riscrittura: ora la sonda e' sul nome che viene effettivamente usato, quindi
+  il ramo di riserva scatta quando serve e non per caso.
+- `qgisMinimumVersion` resta 3.34, ma per una ragione verificata e non per
+  inerzia: in QGIS 3.34 `Qgis::GeometryType` e' dichiarato con
+  `SIP_MONKEYPATCH_SCOPEENUM_UNNEST`, e il codice generato che 3.34 distribuisce
+  assegna esplicitamente su `QgsWkbTypes.GeometryType.PointGeometry`. La grafia
+  con lo scope e' quella nativa anche li'.
+- Nuova suite `test_qt6_enums.py`: verifica che ogni nome risolva sulla QGIS in
+  esecuzione col valore atteso, che coincida con l'alias che ha sostituito
+  (quindi una riscrittura di grafia, non di comportamento), che nessun modulo
+  scriva piu' la forma senza scope, e -- su build Qt6 -- interroga l'API su
+  ogni `Classe.Membro` dei sorgenti, cosi' prende anche gli enum che nessuno
+  ha messo in tabella. Su PyQt5 quella parte non puo' rispondere e lo dichiara
+  invece di fingere un pass.
+- `zip_plugin.py` rifiuta di impacchettare un sorgente che contenga ancora una
+  forma senza scope, indicando file, riga e grafia richiesta. Provato in
+  entrambe le direzioni. Tabella unica, letta dal packager e dal test.
+
 ## 2.2.3 -- LICENSE nel pacchetto
 
 L'upload veniva rifiutato con: "Cannot find LICENSE in the plugin package.

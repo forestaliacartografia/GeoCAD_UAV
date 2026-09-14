@@ -2346,7 +2346,7 @@ ar_feature = ar.commit(ar_layer, WORK_CRS, ar_layer.crs())
 ar_geom = ar_feature.geometry()
 check("one feature written", ar_layer.featureCount(), 1)
 check_true("it is a line, not a polygon",
-           ar_geom.type() == QgsWkbTypes.LineGeometry)
+           ar_geom.type() == QgsWkbTypes.GeometryType.LineGeometry)
 check_true("it is not closed",
            vertices(ar_geom)[0].tolist() != vertices(ar_geom)[-1].tolist())
 
@@ -2901,7 +2901,7 @@ check("the polygon is 40 x 30", dg1_geom.area(), 1200.0, 1e-6)
 check("...with a 140 m perimeter", dg1_geom.length(), 140.0, 1e-9)
 check("the ring is closed once, not twice", len(vertices(dg1_geom)), 5)
 check_true("it really is a polygon",
-           dg1_geom.type() == QgsWkbTypes.PolygonGeometry)
+           dg1_geom.type() == QgsWkbTypes.GeometryType.PolygonGeometry)
 check("the session is empty again", len(dg1.session.vertices), 0)
 dg1.deactivate()
 

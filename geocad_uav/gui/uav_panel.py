@@ -146,7 +146,7 @@ class UavPanel(QWidget):
         terrain_box = QGroupBox(tr("Terreno (obbligatorio)"))
         terrain_form = QFormLayout(terrain_box)
         self.dem_combo = QgsMapLayerComboBox()
-        self.dem_combo.setFilters(QgsMapLayerProxyModel.RasterLayer)
+        self.dem_combo.setFilters(QgsMapLayerProxyModel.Filter.RasterLayer)
         self.dem_combo.setAllowEmptyLayer(True, tr("(nessun DEM)"))
         terrain_form.addRow(tr("DEM / DTM del progetto"), self.dem_combo)
         self.dem_note = QLabel()
@@ -300,7 +300,7 @@ class UavPanel(QWidget):
         self.battery_note.setWordWrap(True)
         safety_form.addRow(self.battery_note)
         self.obstacle_combo = QgsMapLayerComboBox()
-        self.obstacle_combo.setFilters(QgsMapLayerProxyModel.VectorLayer)
+        self.obstacle_combo.setFilters(QgsMapLayerProxyModel.Filter.VectorLayer)
         self.obstacle_combo.setAllowEmptyLayer(True, tr("(nessun ostacolo)"))
         self.obstacle_combo.setToolTip(tr(
             "Elettrodotti, edifici, gru: qualunque layer vettoriale. "
@@ -942,7 +942,7 @@ class UavPanel(QWidget):
             self.last_aoi = None
             self.last_report = None
             self.clear_preview()
-            self._notify_user(reason, Qgis.Warning)
+            self._notify_user(reason, Qgis.MessageLevel.Warning)
             self.recompute()
             return None
 
@@ -958,7 +958,7 @@ class UavPanel(QWidget):
             self.last_aoi = None
             self.last_report = None
             self.clear_preview()
-            self._notify_user(str(exc), Qgis.Warning)
+            self._notify_user(str(exc), Qgis.MessageLevel.Warning)
             self.recompute()
             return None
         aoi = blocks[0]
@@ -991,7 +991,7 @@ class UavPanel(QWidget):
             self.last_report = None
             self.clear_preview()
             self.last_terrain_error = str(exc)
-            self._notify_user(str(exc).splitlines()[0], Qgis.Critical)
+            self._notify_user(str(exc).splitlines()[0], Qgis.MessageLevel.Critical)
             self._log(str(exc))
             self.recompute()
             # After the refresh, not before: recompute() rewrites this box
@@ -1007,7 +1007,7 @@ class UavPanel(QWidget):
             self.clear_preview()
             self.last_terrain_error = str(exc)
             self._notify_user(
-                tr("DEM non leggibile: {0}").format(exc), Qgis.Critical)
+                tr("DEM non leggibile: {0}").format(exc), Qgis.MessageLevel.Critical)
             self._log(str(exc))
             self.recompute()
             return None
@@ -1023,7 +1023,7 @@ class UavPanel(QWidget):
             self.last_report = None
             self.clear_preview()
             message = getattr(exc, "user_message", "") or str(exc)
-            self._notify_user(message, Qgis.Critical)
+            self._notify_user(message, Qgis.MessageLevel.Critical)
             self.recompute()
             return None
 
@@ -1044,7 +1044,7 @@ class UavPanel(QWidget):
         if canvas is None:
             return None
         if self._band is None:
-            self._band = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+            self._band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.LineGeometry)
             self._band.setColor(QColor(200, 60, 20, 220))
             self._band.setWidth(2)
         return self._band
@@ -1056,7 +1056,7 @@ class UavPanel(QWidget):
             return None
         band = self._point_bands.get(key)
         if band is None:
-            band = QgsRubberBand(canvas, QgsWkbTypes.PointGeometry)
+            band = QgsRubberBand(canvas, QgsWkbTypes.GeometryType.PointGeometry)
             band.setColor(colour)
             band.setIcon(icon)
             band.setIconSize(size)
@@ -1075,7 +1075,7 @@ class UavPanel(QWidget):
         band = self._ensure_band()
         if band is None:
             return 0
-        band.reset(QgsWkbTypes.LineGeometry)
+        band.reset(QgsWkbTypes.GeometryType.LineGeometry)
         drawn = 0
         for line in mission.lines:
             array = np.asarray(line, dtype=float)
@@ -1088,9 +1088,9 @@ class UavPanel(QWidget):
 
         waypoints = self._ensure_points(
             "waypoints", QColor(20, 90, 200, 200),
-            QgsRubberBand.ICON_CIRCLE, 7)
+            QgsRubberBand.IconType.ICON_CIRCLE, 7)
         if waypoints is not None:
-            waypoints.reset(QgsWkbTypes.PointGeometry)
+            waypoints.reset(QgsWkbTypes.GeometryType.PointGeometry)
             for wp in mission.waypoints:
                 waypoints.addPoint(QgsPointXY(float(wp.x), float(wp.y)),
                                    False)
@@ -1098,9 +1098,9 @@ class UavPanel(QWidget):
             waypoints.show()
 
         photos = self._ensure_points(
-            "photos", QColor(250, 170, 30, 230), QgsRubberBand.ICON_BOX, 5)
+            "photos", QColor(250, 170, 30, 230), QgsRubberBand.IconType.ICON_BOX, 5)
         if photos is not None:
-            photos.reset(QgsWkbTypes.PointGeometry)
+            photos.reset(QgsWkbTypes.GeometryType.PointGeometry)
             for photo in mission.photos:
                 photos.addPoint(QgsPointXY(float(photo.x), float(photo.y)),
                                 False)
@@ -1146,7 +1146,8 @@ class UavPanel(QWidget):
         """
         mission = self.last_mission
         if mission is None:
-            self._notify_user(tr("Genera prima la rotta."), Qgis.Warning)
+            self._notify_user(tr("Genera prima la rotta."),
+                              Qgis.MessageLevel.Warning)
             return {}
         crs = self.extent.crs()
         project = QgsProject.instance()
@@ -1179,10 +1180,10 @@ class UavPanel(QWidget):
 
     def clear_preview(self):
         if self._band is not None:
-            self._band.reset(QgsWkbTypes.LineGeometry)
+            self._band.reset(QgsWkbTypes.GeometryType.LineGeometry)
             self._band.hide()
         for band in self._point_bands.values():
-            band.reset(QgsWkbTypes.PointGeometry)
+            band.reset(QgsWkbTypes.GeometryType.PointGeometry)
             band.hide()
 
     # -- commit ------------------------------------------------------------
@@ -1191,11 +1192,12 @@ class UavPanel(QWidget):
         """Write the mission layers. ``build_mission_layers`` fills them."""
         mission = self.last_mission
         if mission is None:
-            self._notify_user(tr("Genera prima la rotta."), Qgis.Warning)
+            self._notify_user(tr("Genera prima la rotta."),
+                              Qgis.MessageLevel.Warning)
             return {}
         if not mission.waypoints:
             self._notify_user(tr("La rotta non contiene waypoint."),
-                              Qgis.Warning)
+                              Qgis.MessageLevel.Warning)
             return {}
 
         crs = self.extent.crs()
@@ -1215,7 +1217,7 @@ class UavPanel(QWidget):
             from qgis.core import QgsApplication                 # noqa: PLC0415
 
             QgsApplication.messageLog().logMessage(text, "GeoCad UAV",
-                                                   Qgis.Warning)
+                                                   Qgis.MessageLevel.Warning)
         except Exception:                                        # noqa: BLE001
             pass
 
@@ -1225,7 +1227,7 @@ class UavPanel(QWidget):
         try:
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), text,
-                level=level if level is not None else Qgis.Info)
+                level=level if level is not None else Qgis.MessageLevel.Info)
         except Exception:                                       # noqa: BLE001
             pass
 

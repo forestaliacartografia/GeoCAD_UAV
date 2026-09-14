@@ -191,7 +191,8 @@ class GeoCadUavPlugin:
                           tip=self.tr("Algoritmo griglia"))
 
         for note in self._shortcut_notes:
-            QgsApplication.messageLog().logMessage(note, MENU_TITLE, Qgis.Info)
+            QgsApplication.messageLog().logMessage(
+                note, MENU_TITLE, Qgis.MessageLevel.Info)
 
     def _ensure_dock(self):
         """Create the dock once, hidden, and keep the toggle in step with it."""

@@ -119,7 +119,7 @@ service; every other module works offline.
 "C:\Program Files\QGIS 4.0.0\bin\python-qgis.bat" run_tests.py --all
 ```
 
-44 suites. The QGIS-dependent ones need the QGIS Python; `run_tests.py`
+45 suites. The QGIS-dependent ones need the QGIS Python; `run_tests.py`
 without `--all` runs only the pure-Python ones.
 
 ## Repository layout

@@ -260,7 +260,7 @@ check("una feature per pianta", layer.featureCount(), plan.count)
 check_true("il layer e' PointZ",
            QgsWkbTypes.hasZ(layer.wkbType())
            and QgsWkbTypes.geometryType(layer.wkbType())
-           == QgsWkbTypes.PointGeometry)
+           == QgsWkbTypes.GeometryType.PointGeometry)
 for name, _kind in sp.PLANT_FIELDS:
     check_true("la colonna {0} c'e'".format(name),
                layer.fields().indexOf(name) >= 0)

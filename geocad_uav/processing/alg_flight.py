@@ -139,7 +139,7 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.AOI, self.tr("Area di progetto (poligono)"),
-            [QgsProcessing.TypeVectorPolygon]))
+            [QgsProcessing.SourceType.TypeVectorPolygon]))
         self.addParameter(QgsProcessingParameterRasterLayer(
             self.DEM, self.tr("Modello di elevazione (DTM preferito, o DSM)")))
         self.addParameter(QgsProcessingParameterBoolean(
@@ -163,16 +163,16 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
             options=self._TARGET_MODES, defaultValue=0))
         self.addParameter(QgsProcessingParameterNumber(
             self.TARGET_VALUE, self.tr("Valore (quota in m, oppure GSD in cm/px)"),
-            QgsProcessingParameterNumber.Double, defaultValue=80.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=80.0,
             minValue=0.01))
 
         self.addParameter(QgsProcessingParameterNumber(
             self.FRONTLAP, self.tr("Sovrapposizione longitudinale [%]"),
-            QgsProcessingParameterNumber.Double, defaultValue=80.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=80.0,
             minValue=1.0, maxValue=95.0))
         self.addParameter(QgsProcessingParameterNumber(
             self.SIDELAP, self.tr("Sovrapposizione laterale [%]"),
-            QgsProcessingParameterNumber.Double, defaultValue=70.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=70.0,
             minValue=1.0, maxValue=95.0))
 
         self.addParameter(QgsProcessingParameterEnum(
@@ -183,7 +183,7 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
             options=self._AZ_MODES, defaultValue=0))
         self.addParameter(QgsProcessingParameterNumber(
             self.AZIMUTH, self.tr("Azimut manuale [gradi]"),
-            QgsProcessingParameterNumber.Double, defaultValue=0.0,
+            QgsProcessingParameterNumber.Type.Double, defaultValue=0.0,
             minValue=0.0, maxValue=360.0, optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             self.PATTERN, self.tr("Schema di volo"),
@@ -194,7 +194,8 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
 
         self.addParameter(QgsProcessingParameterNumber(
             self.SPEED, self.tr("Velocita' richiesta [m/s] (0 = crociera del drone)"),
-            QgsProcessingParameterNumber.Double, defaultValue=0.0, minValue=0.0))
+            QgsProcessingParameterNumber.Type.Double,
+            defaultValue=0.0, minValue=0.0))
 
         for key, label, default in (
                 (self.SAFETY_MARGIN, "Margine di sicurezza [m]", 0.0),
@@ -203,7 +204,7 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
                 (self.EDGE_MARGIN, "Margine esterno aggiuntivo [m]", 0.0),
                 (self.GEOID_UNDULATION, "Ondulazione del geoide [m]", 0.0)):
             self.addParameter(mark_advanced(QgsProcessingParameterNumber(
-                key, self.tr(label), QgsProcessingParameterNumber.Double,
+                key, self.tr(label), QgsProcessingParameterNumber.Type.Double,
                 defaultValue=default)))
 
         self.addParameter(mark_advanced(QgsProcessingParameterEnum(
@@ -220,16 +221,16 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
 
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_LINES, self.tr("Rotta di volo"),
-            QgsProcessing.TypeVectorLine))
+            QgsProcessing.SourceType.TypeVectorLine))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_WAYPOINTS, self.tr("Waypoint"),
-            QgsProcessing.TypeVectorPoint))
+            QgsProcessing.SourceType.TypeVectorPoint))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_PHOTOS, self.tr("Centri di presa"),
-            QgsProcessing.TypeVectorPoint))
+            QgsProcessing.SourceType.TypeVectorPoint))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT_FOOTPRINTS, self.tr("Impronte a terra"),
-            QgsProcessing.TypeVectorPolygon, optional=True))
+            QgsProcessing.SourceType.TypeVectorPolygon, optional=True))
         self.addParameter(QgsProcessingParameterFileDestination(
             self.OUT_REPORT, self.tr("Report di missione (HTML)"),
             fileFilter="HTML (*.html)", optional=True))
@@ -384,7 +385,7 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
         lines_fields = lf.make_fields(lf.LINE_FIELDS)
         sink, dest = self.parameterAsSink(
             parameters, self.OUT_LINES, context, lines_fields,
-            QgsWkbTypes.LineStringZ, work_crs)
+            QgsWkbTypes.Type.LineStringZ, work_crs)
         if sink is not None:
             for i, line in enumerate(mission.lines):
                 arr = np.asarray(line, dtype=float)
@@ -396,13 +397,13 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
                 feat = QgsFeature(lines_fields)
                 feat.setGeometry(geom)
                 feat.setAttributes([i, "strip", float(geom.length())])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_LINES] = dest
 
         wp_fields = lf.make_fields(lf.WAYPOINT_FIELDS)
         sink, dest = self.parameterAsSink(
             parameters, self.OUT_WAYPOINTS, context, wp_fields,
-            QgsWkbTypes.PointZ, work_crs)
+            QgsWkbTypes.Type.PointZ, work_crs)
         if sink is not None:
             for wp in mission.waypoints:
                 feat = QgsFeature(wp_fields)
@@ -412,13 +413,13 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
                     wp.z_agl, wp.heading_deg, wp.gimbal_pitch_deg, wp.speed_ms,
                     wp.kind, ";".join(wp.actions), int(wp.dem_gap),
                     int(wp.climb_limited)])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_WAYPOINTS] = dest
 
         ph_fields = lf.make_fields(lf.PHOTO_FIELDS)
         sink, dest = self.parameterAsSink(
             parameters, self.OUT_PHOTOS, context, ph_fields,
-            QgsWkbTypes.PointZ, work_crs)
+            QgsWkbTypes.Type.PointZ, work_crs)
         if sink is not None:
             for ph in mission.photos:
                 feat = QgsFeature(ph_fields)
@@ -427,14 +428,14 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
                     ph.photo_id, ph.sub_mission, ph.strip_index, ph.z_amsl,
                     ph.z_agl, ph.omega_deg, ph.phi_deg, ph.kappa_deg,
                     ph.heading_deg, ph.gimbal_pitch_deg, ph.gsd_cm])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             results[self.OUT_PHOTOS] = dest
 
         if mission.footprints:
             fp_fields = lf.make_fields(lf.FOOTPRINT_FIELDS)
             sink, dest = self.parameterAsSink(
                 parameters, self.OUT_FOOTPRINTS, context, fp_fields,
-                QgsWkbTypes.PolygonZ, work_crs)
+                QgsWkbTypes.Type.PolygonZ, work_crs)
             if sink is not None:
                 for ring, photo in zip(mission.footprints, mission.photos):
                     arr = np.asarray(ring, dtype=float)
@@ -452,6 +453,6 @@ class PlanFlightAlgorithm(QgsProcessingAlgorithm):
                     feat.setAttributes([photo.photo_id, photo.strip_index,
                                         photo.z_amsl, photo.gsd_cm,
                                         float(geom.area())])
-                    sink.addFeature(feat, QgsFeatureSink.FastInsert)
+                    sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
                 results[self.OUT_FOOTPRINTS] = dest
         return results

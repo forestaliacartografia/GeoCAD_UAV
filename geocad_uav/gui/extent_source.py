@@ -76,7 +76,7 @@ class ExtentSource(QGroupBox):
     def _build(self):
         form = QFormLayout(self)
         self.layer_combo = QgsMapLayerComboBox()
-        self.layer_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.layer_combo.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
         self.layer_combo.setAllowEmptyLayer(True, tr("(nessun layer)"))
         form.addRow(tr("Layer poligonale"), self.layer_combo)
 
@@ -153,7 +153,7 @@ class ExtentSource(QGroupBox):
         """
         authid = crs.authid() if crs else "?"
         if QgsWkbTypes.geometryType(geometry.wkbType()) == \
-                QgsWkbTypes.LineGeometry:
+                QgsWkbTypes.GeometryType.LineGeometry:
             return tr("Asse: {0:,.0f} m di sviluppo, CRS {1}").format(
                 geometry.length(), authid)
         return tr("Estensione: {0:,.0f} m2 ({1:.3f} ha), CRS {2}").format(
@@ -164,7 +164,7 @@ class ExtentSource(QGroupBox):
         if self._geometry is None:
             return False
         return QgsWkbTypes.geometryType(self._geometry.wkbType()) == \
-            QgsWkbTypes.LineGeometry
+            QgsWkbTypes.GeometryType.LineGeometry
 
     def _from_layer(self, *_args):
         layer = self.layer_combo.currentLayer()
@@ -256,7 +256,7 @@ class ExtentSource(QGroupBox):
         if geometry is None or geometry.isEmpty():
             return None
         if QgsWkbTypes.geometryType(geometry.wkbType()) == \
-                QgsWkbTypes.PolygonGeometry:
+                QgsWkbTypes.GeometryType.PolygonGeometry:
             return geometry
         line = geometry.asPolyline()
         if line and len(line) >= 4:

@@ -288,7 +288,7 @@ class SpeciesCatalog:
         options.layerName = LAYER_NAME
         result = QgsVectorFileWriter.writeAsVectorFormatV3(
             staging, path, QgsCoordinateTransformContext(), options)
-        if result[0] != QgsVectorFileWriter.NoError:
+        if result[0] != QgsVectorFileWriter.WriterError.NoError:
             raise GeoCadError(
                 "writing {0} failed: {1}".format(path, result),
                 user_message="Salvataggio del catalogo delle specie non "

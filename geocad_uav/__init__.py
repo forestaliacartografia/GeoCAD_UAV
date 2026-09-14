@@ -21,7 +21,7 @@ this program; if not, see <https://www.gnu.org/licenses/>. The full text is
 in the LICENSE file shipped beside this one.
 """
 
-__version__ = "2.2.3"
+__version__ = "2.2.4"
 __author__ = "Niccolo Marco Mancini"
 __license__ = "GPL-2.0-or-later"
 __copyright__ = "Copyright (C) 2026 Cap. Niccolo Marco Mancini -- RGPBIO"

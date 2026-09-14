@@ -402,15 +402,17 @@ def _qt():
 def rubber_band_geometry_type(is_polygon: bool):
     """Geometry-type enum accepted by ``QgsRubberBand``.
 
-    ``QgsWkbTypes.PolygonGeometry`` is present on 3.34, 3.40 and 4.0 (verified);
-    ``Qgis.GeometryType`` only arrived in 3.30, so the old name is tried first
-    and is the one that actually gets used on every supported release.
+    ``QgsWkbTypes.GeometryType`` is the scoped spelling PyQt6 requires; it
+    resolves on 3.40.15 and on 4.0.0 with the same values (measured). The
+    probe is on the nested enum actually returned, not on a neighbouring
+    name, so the fallback fires exactly when the scoped form is missing.
     """
     from qgis.core import QgsWkbTypes
 
-    if hasattr(QgsWkbTypes, "PolygonGeometry"):
-        return (QgsWkbTypes.PolygonGeometry if is_polygon
-                else QgsWkbTypes.LineGeometry)
+    geometry_type = getattr(QgsWkbTypes, "GeometryType", None)
+    if geometry_type is not None:
+        return (geometry_type.PolygonGeometry if is_polygon
+                else geometry_type.LineGeometry)
     from qgis.core import Qgis                                  # noqa: PLC0415
     return Qgis.GeometryType.Polygon if is_polygon else Qgis.GeometryType.Line
 
@@ -800,11 +802,12 @@ class BaseCadTool:
         self._band.setWidth(2)
         self._band.setLineStyle(Qt.PenStyle.DashLine)
         self._marker = QgsVertexMarker(canvas)
-        self._marker.setIconType(QgsVertexMarker.ICON_CROSS)
+        self._marker.setIconType(QgsVertexMarker.IconType.ICON_CROSS)
         self._marker.setColor(QColor(255, 140, 0))
         self._marker.setPenWidth(2)
         self._marker.hide()
-        self._guide_band = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+        self._guide_band = QgsRubberBand(
+            canvas, QgsWkbTypes.GeometryType.LineGeometry)
         self._guide_band.setColor(QColor(255, 140, 0, 140))
         self._guide_band.setWidth(1)
         self._guide_band.setLineStyle(Qt.PenStyle.DotLine)
@@ -848,7 +851,7 @@ class BaseCadTool:
         band = self._guide_band
         if band is None:
             return 0
-        band.reset(QgsWkbTypes.LineGeometry)
+        band.reset(QgsWkbTypes.GeometryType.LineGeometry)
         publisher = getattr(self.session, "axes_points", None)
         parts = [p for p in (publisher() if publisher else ()) if p is not None]
         for index, part in enumerate(parts):
@@ -868,7 +871,7 @@ class BaseCadTool:
             self._band.hide()
         if self._guide_band is not None:
             from qgis.core import QgsWkbTypes                     # noqa: PLC0415
-            self._guide_band.reset(QgsWkbTypes.LineGeometry)
+            self._guide_band.reset(QgsWkbTypes.GeometryType.LineGeometry)
             self._guide_band.hide()
         if self._marker is not None:
             self._marker.hide()
@@ -945,11 +948,14 @@ class CadMapTool(QgsMapTool, BaseCadTool):
     def flags(self):
         """Mark this as an edit tool where the enum exists.
 
-        ``QgsMapTool.EditTool`` is present on 3.34, 3.40 and 4.0 (verified);
-        ``Qgis.MapToolFlag`` is *not* present on 3.40, so it is not used.
+        ``QgsMapTool.Flag.EditTool`` is the scoped spelling PyQt6 requires; it
+        resolves on 3.40.15 and on 4.0.0, value 4 on both (measured).
+        ``Qgis.MapToolFlag`` exists on neither, so it is not used.
         """
-        if hasattr(QgsMapTool, "EditTool"):
-            return QgsMapTool.Flags(QgsMapTool.EditTool)
+        edit_tool = getattr(getattr(QgsMapTool, "Flag", None),
+                            "EditTool", None)
+        if edit_tool is not None:
+            return QgsMapTool.Flags(edit_tool)
         return QgsMapTool.flags(self)
 
     # -- coordinate frames -------------------------------------------------
@@ -993,7 +999,7 @@ class CadMapTool(QgsMapTool, BaseCadTool):
             try:
                 from qgis.core import Qgis                      # noqa: PLC0415
                 self.iface.messageBar().pushMessage(
-                    "GeoCad UAV", text, level=Qgis.Warning, duration=6)
+                    "GeoCad UAV", text, level=Qgis.MessageLevel.Warning, duration=6)
             except Exception:                                   # noqa: BLE001
                 pass
 

@@ -161,7 +161,7 @@ check_true("...so there is no ring left to close by hand",
            not hasattr(drawn_poly.session, "close"))
 check_true("its scratch layer is polygonal too",
            panel._draw_layer.geometryType()
-           == QgsWkbTypes.PolygonGeometry)
+           == QgsWkbTypes.GeometryType.PolygonGeometry)
 panel._stop_drawing()
 
 closed_ring = QgsGeometry.fromWkt(

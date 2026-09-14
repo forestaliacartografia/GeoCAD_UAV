@@ -27,7 +27,7 @@ def ensure_editable(layer, start: bool = True) -> bool:
             user_message="Il layer '{0}' non e' valido.".format(layer.name()))
     caps = layer.dataProvider().capabilities()
     from qgis.core import QgsVectorDataProvider                  # noqa: PLC0415
-    if not caps & QgsVectorDataProvider.AddFeatures:
+    if not caps & QgsVectorDataProvider.Capability.AddFeatures:
         raise LayerError(
             "provider cannot add features to {0}".format(layer.name()),
             user_message="Il layer '{0}' non accetta nuove geometrie.".format(

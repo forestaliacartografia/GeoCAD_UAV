@@ -284,7 +284,7 @@ check_true("il sesto ha prodotto qualcosa sull'area irregolare", s2.count > 50)
 features = sp.point_features(s2)
 check("una feature per pianta", len(features), s2.count)
 non_pointz = [f for f in features
-              if f.geometry().wkbType() != QgsWkbTypes.PointZ]
+              if f.geometry().wkbType() != QgsWkbTypes.Type.PointZ]
 check("ogni feature e' un PointZ", len(non_pointz), 0)
 missing_z = [p for p in s2.plants if p.z is None]
 check("ogni pianta ha la sua quota dal DEM", len(missing_z), 0)

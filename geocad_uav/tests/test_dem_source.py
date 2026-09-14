@@ -434,7 +434,7 @@ check_true("uav_panel imports nothing from the download side",
 # layer, so counting combos no longer answers "is there one DEM combo".
 # Counting the raster filter does.
 check_true("there is still one DEM combo",
-           panel_source.count("QgsMapLayerProxyModel.RasterLayer") == 1)
+           panel_source.count("QgsMapLayerProxyModel.Filter.RasterLayer") == 1)
 panel.teardown()
 
 print("\n" + "=" * 78)

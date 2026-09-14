@@ -165,7 +165,8 @@ def prepare_aoi(geometries, split_multipart: bool = False):
     for geom in geometries:
         if geom is None or geom.isEmpty():
             continue
-        if QgsWkbTypes.geometryType(geom.wkbType()) != QgsWkbTypes.PolygonGeometry:
+        if (QgsWkbTypes.geometryType(geom.wkbType())
+                != QgsWkbTypes.GeometryType.PolygonGeometry):
             warnings.append(
                 "Skipped a non-polygon AOI feature ({0}).".format(
                     QgsWkbTypes.displayString(geom.wkbType())))
@@ -224,7 +225,7 @@ def prepare_axis(geometries):
         if geom is None or geom.isEmpty():
             continue
         if QgsWkbTypes.geometryType(geom.wkbType()) != \
-                QgsWkbTypes.LineGeometry:
+                QgsWkbTypes.GeometryType.LineGeometry:
             warnings.append(
                 "Skipped a non-line feature ({0}) on a corridor mission."
                 .format(QgsWkbTypes.displayString(geom.wkbType())))
@@ -558,11 +559,11 @@ def _line_parts(geom):
                 parts.extend(_line_parts(sub))
     else:
         gtype = QgsWkbTypes.geometryType(geom.wkbType())
-        if gtype == QgsWkbTypes.LineGeometry:
+        if gtype == QgsWkbTypes.GeometryType.LineGeometry:
             line = geom.asPolyline()
             if line:
                 parts.append(np.array([[p.x(), p.y()] for p in line], dtype=float))
-        elif gtype == QgsWkbTypes.PointGeometry:
+        elif gtype == QgsWkbTypes.GeometryType.PointGeometry:
             pass          # a line grazing a vertex; contributes no strip
         else:
             for sub in geom.asGeometryCollection():

@@ -664,13 +664,13 @@ def write_layers_gpkg(layers: dict, path: str, overwrite: bool = True) -> str:
         options.layerName = name
         options.fileEncoding = "UTF-8"
         options.actionOnExistingFile = (
-            QgsVectorFileWriter.CreateOrOverwriteFile if first
-            else QgsVectorFileWriter.CreateOrOverwriteLayer)
+            QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile if first
+            else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer)
         result = QgsVectorFileWriter.writeAsVectorFormatV3(
             layer, path, context, options)
         # writeAsVectorFormatV3 returns (error, message, newFile, newLayer)
         error = result[0]
-        if error != QgsVectorFileWriter.NoError:
+        if error != QgsVectorFileWriter.WriterError.NoError:
             raise ExportError(
                 "GPKG write failed for layer {0}: {1}".format(name, result[1]),
                 user_message="Scrittura del GeoPackage non riuscita per il "

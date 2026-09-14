@@ -92,7 +92,7 @@ class ReforestationArea:
                 "no layer given",
                 user_message="Nessun layer poligonale selezionato.")
         if QgsWkbTypes.geometryType(layer.wkbType()) != \
-                QgsWkbTypes.PolygonGeometry:
+                QgsWkbTypes.GeometryType.PolygonGeometry:
             raise GeometryError(
                 "layer {0!r} is not polygonal".format(layer.name()),
                 user_message="Il layer '{0}' non contiene poligoni.".format(

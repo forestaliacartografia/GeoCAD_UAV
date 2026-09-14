@@ -395,7 +395,7 @@ class ExportPanel(QWidget):
         self.last_written = []
         ready, reason = self.readiness()
         if not ready:
-            self._notify(reason, Qgis.Warning)
+            self._notify(reason, Qgis.MessageLevel.Warning)
             self.refresh()
             return []
 
@@ -422,10 +422,10 @@ class ExportPanel(QWidget):
         self.last_written = written
         if failures:
             self._notify(tr("Export incompleto: {0}").format(
-                " | ".join(failures)), Qgis.Critical)
+                " | ".join(failures)), Qgis.MessageLevel.Critical)
         elif written:
             self._notify(tr("Scritti {0} file in {1}.").format(
-                len(written), self.target_folder()), Qgis.Success)
+                len(written), self.target_folder()), Qgis.MessageLevel.Success)
         self.refresh()
         return written
 
@@ -435,7 +435,7 @@ class ExportPanel(QWidget):
         try:
             self.iface.messageBar().pushMessage(
                 tr("GeoCad UAV"), text,
-                level=level if level is not None else Qgis.Info)
+                level=level if level is not None else Qgis.MessageLevel.Info)
         except Exception:                                       # noqa: BLE001
             pass
 

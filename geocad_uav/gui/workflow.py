@@ -1122,13 +1122,14 @@ class WorkflowDock(QDockWidget):
         iface = self.state.iface
         if iface is not None:
             try:
-                iface.messageBar().pushMessage("GeoCad UAV", message,
-                                               level=Qgis.Warning, duration=6)
+                iface.messageBar().pushMessage(
+                    "GeoCad UAV", message,
+                    level=Qgis.MessageLevel.Warning, duration=6)
                 return
             except Exception:                                   # noqa: BLE001
                 pass
         QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
-                                               Qgis.Warning)
+                                               Qgis.MessageLevel.Warning)
 
     def confirm_discard(self) -> bool:
         """Ask before throwing away unsaved work. True means go ahead."""
@@ -1282,7 +1283,7 @@ class Panel(QWidget):
             return
         try:
             iface.messageBar().pushMessage("GeoCad UAV", message,
-                                           level=Qgis.Info, duration=5)
+                                           level=Qgis.MessageLevel.Info, duration=5)
         except Exception:                                       # noqa: BLE001
             pass
 
@@ -1292,8 +1293,9 @@ class Panel(QWidget):
         iface = self.state.iface
         if iface is not None:
             try:
-                iface.messageBar().pushMessage("GeoCad UAV", message,
-                                               level=Qgis.Warning, duration=6)
+                iface.messageBar().pushMessage(
+                    "GeoCad UAV", message,
+                    level=Qgis.MessageLevel.Warning, duration=6)
                 return
             except Exception:                                   # noqa: BLE001
                 pass
@@ -3632,7 +3634,7 @@ class OutputsPanel(Panel):
             options.skipAttributeCreation = True
         result = QgsVectorFileWriter.writeAsVectorFormatV3(
             layer, path, QgsCoordinateTransformContext(), options)
-        if result[0] != QgsVectorFileWriter.NoError:
+        if result[0] != QgsVectorFileWriter.WriterError.NoError:
             self.warn(GeoCadError(
                 "export failed: {0}".format(result),
                 user_message=tr("Esportazione non riuscita."),
@@ -4338,13 +4340,14 @@ class ContextDock(QDockWidget):
         iface = self.state.iface
         if iface is not None:
             try:
-                iface.messageBar().pushMessage("GeoCad UAV", message,
-                                               level=Qgis.Warning, duration=6)
+                iface.messageBar().pushMessage(
+                    "GeoCad UAV", message,
+                    level=Qgis.MessageLevel.Warning, duration=6)
                 return
             except Exception:                                   # noqa: BLE001
                 pass
         QgsApplication.messageLog().logMessage(message, "GeoCad UAV",
-                                               Qgis.Warning)
+                                               Qgis.MessageLevel.Warning)
 
     def teardown(self) -> None:
         """Called from the workspace when the plugin is unloaded."""

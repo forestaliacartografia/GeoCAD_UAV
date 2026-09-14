@@ -539,7 +539,8 @@ def _log_dem(info: dict) -> None:
 
         QgsApplication.messageLog().logMessage(
             describe_dem_diagnostics(info), "GeoCad UAV",
-            Qgis.Warning if info.get("overlaps") is False else Qgis.Info)
+            Qgis.MessageLevel.Warning if info.get("overlaps") is False
+            else Qgis.MessageLevel.Info)
     except Exception:                                           # noqa: BLE001
         pass
 

@@ -105,9 +105,9 @@ def scoped_snapping(project, enabled: bool = True,
     try:
         config = QgsSnappingConfig(original)
         config.setEnabled(enabled)
-        config.setMode(QgsSnappingConfig.AllLayers)
+        config.setMode(QgsSnappingConfig.SnappingMode.AllLayers)
         config.setTolerance(tolerance_px)
-        config.setUnits(QgsTolerance.Pixels)
+        config.setUnits(QgsTolerance.UnitType.Pixels)
         if types is not None:
             try:
                 config.setTypeFlag(types)

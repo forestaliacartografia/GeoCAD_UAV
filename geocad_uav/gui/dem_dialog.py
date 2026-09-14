@@ -37,7 +37,7 @@ def tr(text):
     return QCoreApplication.translate("GeoCadUav", text)
 
 
-def log(message, level=Qgis.Info):
+def log(message, level=Qgis.MessageLevel.Info):
     """Log a line that has already been through the maskers."""
     QgsMessageLog.logMessage(ds.mask_text(str(message)), LOG_TAG, level)
 
@@ -244,11 +244,12 @@ class DemDownloadDialog(QDialog):
         spec = self.current_adapter()
         if not spec.usable:
             self._notify(tr("{0}: download disattivato. {1}").format(
-                spec.label, spec.note), Qgis.Warning)
+                spec.label, spec.note), Qgis.MessageLevel.Warning)
             return
         box = self.bbox()
         if box is None:
-            self._notify(tr("Nessuna estensione da scaricare."), Qgis.Warning)
+            self._notify(tr("Nessuna estensione da scaricare."),
+                         Qgis.MessageLevel.Warning)
             return
 
         self._save_key()
@@ -257,7 +258,7 @@ class DemDownloadDialog(QDialog):
             self._notify(tr(
                 "{0} richiede una chiave API. Inseriscila qui sopra: viene "
                 "salvata nelle Impostazioni e mai nei log.").format(
-                    spec.label), Qgis.Warning)
+                    spec.label), Qgis.MessageLevel.Warning)
             return
 
         task = DemDownloadTask(spec.id, box, key,
@@ -282,20 +283,20 @@ class DemDownloadDialog(QDialog):
         self._task = None
         if not ok or not task.path:
             self._notify(task.error or tr("Download annullato."),
-                         Qgis.Warning)
+                         Qgis.MessageLevel.Warning)
             return
         try:
             layer = ds.raster_layer(task.path, self.current_adapter().label)
         except Exception as exc:                                # noqa: BLE001
             self._notify(ds.mask_text(getattr(exc, "user_message", "")
-                                      or str(exc)), Qgis.Critical)
+                                      or str(exc)), Qgis.MessageLevel.Critical)
             return
         QgsProject.instance().addMapLayer(layer)
         self.last_layer = layer
         self._notify(tr("DEM aggiunto al progetto: selezionalo nella scheda "
-                        "UAV."), Qgis.Success)
+                        "UAV."), Qgis.MessageLevel.Success)
 
-    def _notify(self, text, level=Qgis.Info):
+    def _notify(self, text, level=Qgis.MessageLevel.Info):
         log(text, level)
         if self.iface is None:
             return

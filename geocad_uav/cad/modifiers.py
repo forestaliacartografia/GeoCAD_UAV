@@ -61,9 +61,9 @@ def offset_geometry(geom, distance_m: float, mode: str = OFFSET_CURVE,
         join_style = Qgis.JoinStyle.Round
 
     gtype = QgsWkbTypes.geometryType(geom.wkbType())
-    if gtype == QgsWkbTypes.PolygonGeometry and mode == OFFSET_BUFFER:
+    if gtype == QgsWkbTypes.GeometryType.PolygonGeometry and mode == OFFSET_BUFFER:
         result = geom.buffer(distance_m, segments)
-    elif gtype == QgsWkbTypes.LineGeometry:
+    elif gtype == QgsWkbTypes.GeometryType.LineGeometry:
         result = geom.offsetCurve(distance_m, segments, join_style, 2.0)
     else:
         boundary = geom.constGet().boundary()

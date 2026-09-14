@@ -247,7 +247,7 @@ class MissionPlayer(QObject):
         if self.coverage is not None:
             self.coverage.reset()
         if self._track is not None:
-            self._track.reset(QgsWkbTypes.LineGeometry)
+            self._track.reset(QgsWkbTypes.GeometryType.LineGeometry)
 
     def to_start(self) -> float:
         """Back to take-off, without stopping the clock if it is running."""
@@ -307,7 +307,7 @@ class MissionPlayer(QObject):
                                     for i in self.flashed)
         self._draw_track()
         if self._flash is not None:
-            self._flash.reset(QgsWkbTypes.PointGeometry)
+            self._flash.reset(QgsWkbTypes.GeometryType.PointGeometry)
         self._move_marker()
         self.ticked.emit(self.t_sim, self.index, self.flash_count)
         return self.t_sim
@@ -458,7 +458,7 @@ class MissionPlayer(QObject):
         if self._flash_left > 0:
             self._flash_left -= 1
             if self._flash_left == 0 and self._flash is not None:
-                self._flash.reset(QgsWkbTypes.PointGeometry)
+                self._flash.reset(QgsWkbTypes.GeometryType.PointGeometry)
 
         self.ticked.emit(self.t_sim, self.index, self.flash_count)
         if at_end:
@@ -473,7 +473,7 @@ class MissionPlayer(QObject):
         self._flash_left = FLASH_TICKS
         band = self._ensure_flash()
         if band is not None:
-            band.reset(QgsWkbTypes.PointGeometry)
+            band.reset(QgsWkbTypes.GeometryType.PointGeometry)
             band.addPoint(QgsPointXY(float(self._xy[index, 0]),
                                      float(self._xy[index, 1])), False)
             band.updatePosition()
@@ -508,9 +508,10 @@ class MissionPlayer(QObject):
         if canvas is None:
             return None
         if self._marker is None:
-            self._marker = QgsRubberBand(canvas, QgsWkbTypes.PointGeometry)
+            self._marker = QgsRubberBand(
+                canvas, QgsWkbTypes.GeometryType.PointGeometry)
             self._marker.setColor(QColor(20, 90, 200, 235))
-            self._marker.setIcon(QgsRubberBand.ICON_CIRCLE)
+            self._marker.setIcon(QgsRubberBand.IconType.ICON_CIRCLE)
             self._marker.setIconSize(11)
             self._marker.setWidth(2)
         return self._marker
@@ -520,9 +521,10 @@ class MissionPlayer(QObject):
         if canvas is None:
             return None
         if self._flash is None:
-            self._flash = QgsRubberBand(canvas, QgsWkbTypes.PointGeometry)
+            self._flash = QgsRubberBand(
+                canvas, QgsWkbTypes.GeometryType.PointGeometry)
             self._flash.setColor(QColor(250, 200, 40, 245))
-            self._flash.setIcon(QgsRubberBand.ICON_BOX)
+            self._flash.setIcon(QgsRubberBand.IconType.ICON_BOX)
             self._flash.setIconSize(17)
             self._flash.setWidth(3)
         return self._flash
@@ -536,7 +538,8 @@ class MissionPlayer(QObject):
         if canvas is None:
             return None
         if self._track is None:
-            self._track = QgsRubberBand(canvas, QgsWkbTypes.LineGeometry)
+            self._track = QgsRubberBand(
+                canvas, QgsWkbTypes.GeometryType.LineGeometry)
             self._track.setColor(QColor(20, 90, 200, 170))
             self._track.setWidth(3)
         return self._track
@@ -563,7 +566,7 @@ class MissionPlayer(QObject):
         band = self._ensure_track()
         if band is None or len(points) < 2:
             return len(points)
-        band.reset(QgsWkbTypes.LineGeometry)
+        band.reset(QgsWkbTypes.GeometryType.LineGeometry)
         band.addGeometry(QgsGeometry.fromPolylineXY(
             [QgsPointXY(x, y) for x, y in points]), None)
         band.show()
@@ -580,7 +583,7 @@ class MissionPlayer(QObject):
         point = self.position()
         if band is None or point is None:
             return
-        band.reset(QgsWkbTypes.PointGeometry)
+        band.reset(QgsWkbTypes.GeometryType.PointGeometry)
         band.addPoint(QgsPointXY(point[0], point[1]), False)
         band.updatePosition()
         band.show()
@@ -588,10 +591,10 @@ class MissionPlayer(QObject):
     def _clear_bands(self):
         for band in (self._marker, self._flash):
             if band is not None:
-                band.reset(QgsWkbTypes.PointGeometry)
+                band.reset(QgsWkbTypes.GeometryType.PointGeometry)
                 band.hide()
         if self._track is not None:
-            self._track.reset(QgsWkbTypes.LineGeometry)
+            self._track.reset(QgsWkbTypes.GeometryType.LineGeometry)
             self._track.hide()
 
     def band_vertices(self) -> int:
