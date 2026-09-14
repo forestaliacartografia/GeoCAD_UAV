@@ -171,6 +171,10 @@ class DroneProfile:
     battery_wh: Optional[float] = None
     turn_radius_m: float = 0.0          # 0 for a multirotor: it can pivot
     export_formats: tuple = ()
+    #: DJI's own enumeration values for this aircraft and its payload, when
+    #: the profile declares them. Empty means this plugin will not write a
+    #: WPML mission for it -- see profiles/drones.json.
+    wpml: tuple = ()
     source: str = ""
     notes: str = ""
 

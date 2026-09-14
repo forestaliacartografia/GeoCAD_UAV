@@ -55,6 +55,7 @@ def drone_from_dict(entry: dict) -> DroneProfile:
                         if entry.get("battery_wh") is not None else None),
             turn_radius_m=float(entry.get("turn_radius_m", 0.0)),
             export_formats=tuple(entry.get("export_formats", ())),
+            wpml=tuple(sorted((entry.get("wpml") or {}).items())),
             source=str(entry.get("source", "")),
             notes=str(entry.get("notes", "")),
         )

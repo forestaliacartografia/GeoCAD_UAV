@@ -271,7 +271,10 @@ check_true("la superficie e' rimasta quella della forma",
            "m2" in label(dock, "area") and label(dock, "area") != "--")
 check_true("il servizio e' stato interrogato davvero", len(CALLS) >= 1)
 
-stored = list(geo.getFeatures())[0]
+# Read by the id the commit resolved, not by position: "the first feature
+# the iterator happens to hand back" is an assumption, and this check is
+# about the panel agreeing with the table, not about ordering.
+stored = geo.getFeature(tool.last_feature_id)
 check_text("e il pannello dice quello che dice la tabella",
            str(stored[lf.CAT_PARTICELLA_FIELD]), label(dock, "particella"))
 

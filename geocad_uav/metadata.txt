@@ -16,7 +16,7 @@ about=GeoCad UAV Toolkit è un plugin QGIS per lavoro tecnico in ambito
     sono rifiutati, non simulati.
     Ideato e realizzato dal Cap. Niccolò Marco Mancini del Gruppo di
     Cartografia Numerica del RGPBIO.
-version=1.38.0
+version=1.39.0
 author=Cap. Niccolò Marco Mancini
 email=niccolomarco.mancini@gmail.com
 
@@ -31,6 +31,23 @@ icon=icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
+
+changelog=1.39.0
+    - Export DJI WPML: un .kmz con wpmz/template.kml e wpmz/waylines.wpml,
+      nel namespace ufficiale http://www.dji.com/wpmz/1.0.2. Rifiutato
+      dalla prima versione perche' lo schema non era stato letto; ora lo
+      e' stato, dalla documentazione DJI Cloud API (Template.kml,
+      Waylines.wpml, Common Elements, Product Supported), e ogni elemento
+      che quelle tabelle danno per obbligatorio viene scritto. Le quote
+      sono quelle del terrain following, e ogni punto di scatto porta il
+      gruppo di azioni gimbalRotate + takePhoto.
+    - Restano due rifiuti, ed entrambi vengono dalla documentazione: un
+      velivolo il cui profilo non dichiara gli enumerativi DJI (le serie
+      Mini, Air e Phantom non volano WPML, DJI non le elenca), e la quota
+      ortometrica, che wpml:executeHeightMode non sa esprimere.
+    - Il riferimento delle quote in export e' finalmente un comando del
+      pannello e non piu' solo un'impostazione salvata: serviva sceglierlo
+      perche' WPML ne accetta due su tre.
 
 changelog=1.38.0
     - La tabella attributi delle geometrie CAD ha cinque colonne, in

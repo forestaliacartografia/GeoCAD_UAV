@@ -261,39 +261,70 @@ check_true("litchi coordinates are WGS84 degrees",
            40.0 < float(first[0]) < 50.0 and 5.0 < float(first[1]) < 15.0)
 
 # --------------------------------------------------------------------------
-# E2 - WPML is refused
+# E2 - WPML is offered, and refuses on the aircraft rather than the format
 # --------------------------------------------------------------------------
 print("\n== E2: DJI WPML ==")
 before = sorted(os.listdir(OUT))
-check_true("WPML is listed as not implemented", "dji_wpml" in ex.NOT_IMPLEMENTED)
+check_true("nothing is listed as not implemented any more",
+           not ex.NOT_IMPLEMENTED)
+check_true("...so the panel has no refusals to print",
+           not ex.describe_unimplemented())
 
 wpml_item = None
 for row in range(panel.format_list.count()):
     entry = panel.format_list.item(row)
     if entry.data(Qt.ItemDataRole.UserRole) == "dji_wpml":
         wpml_item = entry
-check_true("WPML appears in the list with its reason", wpml_item is not None)
-check_true("WPML is badged UNSUPPORTED", "UNSUPPORTED" in wpml_item.text())
-check_true("WPML cannot be checked",
-           not (wpml_item.flags() & Qt.ItemFlag.ItemIsUserCheckable))
-check_true("...so it can never be selected for export",
-           "dji_wpml" not in panel.selected_keys())
+check_true("WPML appears in the list", wpml_item is not None)
+check_true("...not badged UNSUPPORTED any more",
+           "UNSUPPORTED" not in wpml_item.text())
+check_true("...and it can be checked like any other format",
+           bool(wpml_item.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+print("        {0}".format(wpml_item.text()))
 
+# This fixture flies a Mavic 3 Enterprise, which DJI lists and whose
+# profile declares the enumeration values: the file is written.
+wpml_path = os.path.join(OUT, "missione_wpml.kmz")
+written_wpml = ex.write(MISSION, "dji_wpml", wpml_path,
+                        transform=panel._transform(MISSION),
+                        altitude_mode=ex.ALT_RELATIVE_HOME, home_z=300.0,
+                        overwrite=True)
+check_true("a supported aircraft writes a WPML",
+           os.path.exists(written_wpml)
+           and zipfile.is_zipfile(written_wpml))
+with zipfile.ZipFile(written_wpml) as _archive:
+    _names = _archive.namelist()
+check_true("...with the two files DJI names",
+           sorted(_names) == ["wpmz/template.kml", "wpmz/waylines.wpml"])
+
+# What refuses is the aircraft, not the format: a profile that declares no
+# DJI enumeration values cannot be named in the file.
+mini_mission = mi.build_mission(
+    sv.prepare_aoi([AOI])[0][0], TERRAIN,
+    mi.MissionParams(camera=_camera,
+                     drone=drone_lib.load_library()["dji_mini2"],
+                     overlap=pg.Overlap(0.80, 0.70), h_agl_m=80.0,
+                     altitude_mode=AltitudeMode.TERRAIN,
+                     azimuth_strategy=sv.AZIMUTH_MANUAL,
+                     manual_azimuth_deg=0.0, v_mission_ms=8.0,
+                     compute_footprints=False),
+    crs_authid=CRS.authid())
 raised = None
 try:
-    ex.write(MISSION, "dji_wpml", os.path.join(OUT, "nope.kmz"),
+    ex.write(mini_mission, "dji_wpml", os.path.join(OUT, "nope.kmz"),
+             transform=panel._transform(mini_mission),
+             altitude_mode=ex.ALT_RELATIVE_HOME, home_z=300.0,
              overwrite=True)
 except Exception as exc:                                        # noqa: BLE001
     raised = exc
-check_true("the writer raises UnsupportedFormatError",
+check_true("an aircraft without DJI identifiers is refused",
            type(raised).__name__ == "UnsupportedFormatError")
 check_true("the message is Italian",
-           "non e' disponibile" in getattr(raised, "user_message", "").lower())
-check_true("the reason names the unverified schema",
-           "WPML" in getattr(raised, "hint", ""))
-check_true("no file was written", sorted(os.listdir(OUT)) == before)
-check_true("the panel prints the refusal to the operator",
-           any("WPML" in line for line in ex.describe_unimplemented()))
+           "identificativi dji" in getattr(raised, "user_message", "").lower())
+check_true("the reason says where to put them",
+           "drones.json" in getattr(raised, "hint", ""))
+check_true("no file was written for it",
+           not os.path.exists(os.path.join(OUT, "nope.kmz")))
 print("        {0}".format(getattr(raised, "user_message", "")))
 
 # --------------------------------------------------------------------------
@@ -344,6 +375,15 @@ check_true("nothing exists before the export",
 check_true("the preview is shown to the operator, path by path",
            all(os.path.basename(path) in panel.report.toPlainText()
                for path in planned_paths))
+
+# v1.39.0: WPML has no orthometric executeHeightMode, so writing every
+# offered format at once needs a reference every one of them accepts. This
+# is the operator's own choice now -- the combo added with the format.
+panel.altitude_combo.setCurrentIndex(
+    panel.altitude_combo.findData(ex.ALT_RELATIVE_HOME))
+check_true("the chosen reference reaches the writers",
+           panel.altitude_mode() == ex.ALT_RELATIVE_HOME)
+planned_paths = [path for _key, path in panel.planned_files()]
 
 written = panel.export()
 check("every previewed file was written", len(written), len(planned_paths))
@@ -468,10 +508,10 @@ import re                                                       # noqa: E402
 
 code_only = re.sub(r"#.*", "", source)
 code_only = re.sub(r'"""(?:.|\n)*?"""', "", code_only)
-check_true("the panel never names a WPML key in code",
-           "dji_wpml" not in code_only and "wpml" not in code_only.lower())
-check_true("the refusal comes from the frozen table, not from here",
-           "ex.NOT_IMPLEMENTED" in code_only)
+check_true("the panel never names a format key in code",
+           "dji_wpml" not in code_only)
+check_true("the format table is still the one source of formats",
+           "ex.FORMATS" in code_only)
 
 for key in ex.FORMATS:
     check_true("{0} is offered by the panel".format(key),

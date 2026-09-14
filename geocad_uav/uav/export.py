@@ -97,19 +97,276 @@ FORMATS = {
         True, "MAVLink waypoint file, intestazione QGC WPL 110",
         "Frame 0 = MAV_FRAME_GLOBAL (AMSL), frame 3 = quota relativa al decollo.",
         needs_wgs84=True),
+    "dji_wpml": ExportFormat(
+        "dji_wpml", "DJI WPML (.kmz nativo)", ".kmz", True,
+        "DJI Cloud API > DJI WPML: Template.kml, Waylines.wpml, Common "
+        "Elements (namespace http://www.dji.com/wpmz/1.0.2)",
+        "Solo per i velivoli enterprise che DJI elenca e il cui profilo "
+        "dichiara gli enumerativi. Quota relativa al decollo o "
+        "ellissoidica: WPML non ha un riferimento ortometrico.",
+        needs_wgs84=True),
 }
 
 #: Formats that were considered and deliberately not implemented, with why.
-NOT_IMPLEMENTED = {
-    "dji_wpml": (
-        "DJI WPML / KMZ nativo",
-        "Lo schema WPML (wpmz/template.kml + wpmz/waylines.wpml) non e' stato "
-        "verificato contro la documentazione ufficiale DJI in questa build. "
-        "Scrivere un file che sembra una missione DJI senza averne validato lo "
-        "schema significherebbe dichiarare una compatibilita' non verificata. "
-        "Usa l'export KMZ generico per lo scambio, oppure Litchi CSV se voli "
-        "con Litchi."),
+#: Empty since 1.39.0, when WPML was read from DJI's own documentation and
+#: written. What remains refused is not a format but a *case*: see
+#: :func:`_wpml_identity` and :func:`_wpml_height_mode`.
+NOT_IMPLEMENTED = {}
+
+# --------------------------------------------------------------------------
+# DJI WPML
+# --------------------------------------------------------------------------
+
+#: The namespaces of the two files, verbatim from the published samples.
+WPML_KML_NS = "http://www.opengis.net/kml/2.2"
+WPML_NS = "http://www.dji.com/wpmz/1.0.2"
+
+#: Where the two files sit inside the archive. DJI: "A KMZ file contains a
+#: wpmz folder with res, template.kml and waylines.wpml".
+WPML_TEMPLATE_PATH = "wpmz/template.kml"
+WPML_WAYLINES_PATH = "wpmz/waylines.wpml"
+
+#: executeHeightMode values, and which of this plugin's altitude modes each
+#: one expresses. There is no orthometric option in the enum.
+WPML_HEIGHT_MODES = {
+    ALT_RELATIVE_HOME: "relativeToStartPoint",
+    ALT_ELLIPSOIDAL: "WGS84",
 }
+
+#: Safe take-off height, metres. DJI: remote controller range [1.2, 1500].
+WPML_TAKEOFF_SECURITY_M = 20.0
+
+
+def _wpml_identity(mission: Mission):
+    """The aircraft and payload enumeration values, or a refusal.
+
+    Read from the drone profile, which is where DJI data belongs. A profile
+    without them is an aircraft this plugin will not write a WPML for.
+    """
+    from . import drones as drone_lib                           # noqa: PLC0415
+
+    key = mission.drone_key or ""
+    try:
+        profile = drone_lib.load_library().get(key)
+    except Exception:                                           # noqa: BLE001
+        profile = None
+    block = dict(getattr(profile, "wpml", ()) or ())
+    required = ("drone_enum", "drone_sub_enum", "payload_enum",
+                "payload_position")
+    if not all(name in block for name in required):
+        raise UnsupportedFormatError(
+            "drone {0!r} declares no WPML enumeration".format(key),
+            user_message="Il profilo drone '{0}' non dichiara gli "
+                         "identificativi DJI richiesti da WPML.".format(
+                             profile.name if profile is not None else key),
+            hint="WPML e' riservato ai velivoli enterprise che DJI elenca "
+                 "(M300/M350 RTK, M30/M30T, Mavic 3 Enterprise, M3D/M3TD, "
+                 "M4D/M4TD, M4E/M4T, Matrice 400). Le serie Mini, Air e "
+                 "Phantom non volano WPML. Per un velivolo supportato, "
+                 "aggiungi il blocco 'wpml' al suo profilo in "
+                 "profiles/drones.json.")
+    return block
+
+
+def _wpml_height_mode(alt_mode: str) -> str:
+    mode = WPML_HEIGHT_MODES.get(alt_mode)
+    if mode is None:
+        raise ExportError(
+            "WPML has no orthometric executeHeightMode",
+            user_message="WPML non ha un riferimento di quota ortometrico.",
+            hint="Esporta con quota relativa al punto di decollo oppure "
+                 "ellissoidica: wpml:executeHeightMode ammette solo "
+                 "relativeToStartPoint, WGS84 e realTimeFollowSurface.")
+    return mode
+
+
+def _wpml(tag: str, value=None, indent: int = 0) -> str:
+    pad = "  " * indent
+    if value is None:
+        return "{0}<wpml:{1}>".format(pad, tag)
+    return "{0}<wpml:{1}>{2}</wpml:{1}>".format(pad, tag, value)
+
+
+def _wpml_mission_config(mission: Mission, identity, speed: float) -> str:
+    """<wpml:missionConfig>, with every element DJI marks required."""
+    out = ["  <wpml:missionConfig>"]
+    for tag, value in (("flyToWaylineMode", "safely"),
+                       ("finishAction", "goHome"),
+                       ("exitOnRCLost", "executeLostAction"),
+                       ("executeRCLostAction", "goBack"),
+                       ("takeOffSecurityHeight",
+                        "{0:g}".format(WPML_TAKEOFF_SECURITY_M)),
+                       ("globalTransitionalSpeed", "{0:.2f}".format(speed)),
+                       ("globalRTHHeight",
+                        "{0:.0f}".format(max(mission.h_agl_m, 30.0)))):
+        out.append(_wpml(tag, value, 2))
+    out.append("    <wpml:droneInfo>")
+    out.append(_wpml("droneEnumValue", identity["drone_enum"], 3))
+    out.append(_wpml("droneSubEnumValue", identity["drone_sub_enum"], 3))
+    out.append("    </wpml:droneInfo>")
+    out.append("    <wpml:payloadInfo>")
+    out.append(_wpml("payloadEnumValue", identity["payload_enum"], 3))
+    out.append(_wpml("payloadPositionIndex", identity["payload_position"], 3))
+    out.append("    </wpml:payloadInfo>")
+    out.append("  </wpml:missionConfig>")
+    return "\n".join(out)
+
+
+def _wpml_points(mission, transform, alt_mode, home_z):
+    """``[(index, lon, lat, height, speed, is_photo)]`` for every waypoint."""
+    rows = []
+    for index, wp in enumerate(mission.waypoints):
+        lon, lat = _to_wgs84(transform, wp.x, wp.y)
+        height = _altitude(mission, wp.z_amsl, alt_mode, home_z)
+        speed = wp.speed_ms if wp.speed_ms > 0 else mission.speed_ms
+        rows.append((index, lon, lat, height, speed, wp.is_photo))
+    return rows
+
+
+def _wpml_action_group(index: int, payload_position: int,
+                       gimbal_pitch: float) -> "list[str]":
+    """One action group on a waypoint: aim the gimbal, then take the photo."""
+    return [
+        "      <wpml:actionGroup>",
+        _wpml("actionGroupId", index, 4),
+        _wpml("actionGroupStartIndex", index, 4),
+        _wpml("actionGroupEndIndex", index, 4),
+        _wpml("actionGroupMode", "sequence", 4),
+        "        <wpml:actionTrigger>",
+        _wpml("actionTriggerType", "reachPoint", 5),
+        "        </wpml:actionTrigger>",
+        "        <wpml:action>",
+        _wpml("actionId", 0, 5),
+        _wpml("actionActuatorFunc", "gimbalRotate", 5),
+        "          <wpml:actionActuatorFuncParam>",
+        _wpml("gimbalRotateMode", "absoluteAngle", 6),
+        _wpml("gimbalPitchRotateEnable", 1, 6),
+        _wpml("gimbalPitchRotateAngle", "{0:.1f}".format(gimbal_pitch), 6),
+        _wpml("gimbalRollRotateEnable", 0, 6),
+        _wpml("gimbalRollRotateAngle", 0, 6),
+        _wpml("gimbalYawRotateEnable", 0, 6),
+        _wpml("gimbalYawRotateAngle", 0, 6),
+        _wpml("gimbalRotateTimeEnable", 0, 6),
+        _wpml("gimbalRotateTime", 0, 6),
+        _wpml("payloadPositionIndex", payload_position, 6),
+        "          </wpml:actionActuatorFuncParam>",
+        "        </wpml:action>",
+        "        <wpml:action>",
+        _wpml("actionId", 1, 5),
+        _wpml("actionActuatorFunc", "takePhoto", 5),
+        "          <wpml:actionActuatorFuncParam>",
+        _wpml("fileSuffix", "wp{0}".format(index), 6),
+        _wpml("payloadPositionIndex", payload_position, 6),
+        _wpml("useGlobalPayloadLensIndex", 1, 6),
+        "          </wpml:actionActuatorFuncParam>",
+        "        </wpml:action>",
+        "      </wpml:actionGroup>",
+    ]
+
+
+def _wpml_waylines(mission, rows, identity, speed, height_mode,
+                   gimbal_pitch) -> str:
+    """waylines.wpml: the file the aircraft executes."""
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<kml xmlns="{0}" xmlns:wpml="{1}">'.format(WPML_KML_NS, WPML_NS),
+           "<Document>",
+           _wpml_mission_config(mission, identity, speed),
+           "  <Folder>",
+           _wpml("templateId", 0, 2),
+           _wpml("executeHeightMode", height_mode, 2),
+           _wpml("waylineId", 0, 2),
+           _wpml("autoFlightSpeed", "{0:.2f}".format(speed), 2)]
+    for index, lon, lat, height, wp_speed, is_photo in rows:
+        out.append("    <Placemark>")
+        out.append("      <Point>")
+        out.append("        <coordinates>{0:.8f},{1:.8f}</coordinates>".format(
+            lon, lat))
+        out.append("      </Point>")
+        out.append(_wpml("index", index, 3))
+        out.append(_wpml("executeHeight", "{0:.2f}".format(height), 3))
+        out.append(_wpml("waypointSpeed", "{0:.2f}".format(wp_speed), 3))
+        out.append("      <wpml:waypointHeadingParam>")
+        out.append(_wpml("waypointHeadingMode", "followWayline", 4))
+        out.append(_wpml("waypointHeadingPathMode", "followBadArc", 4))
+        out.append("      </wpml:waypointHeadingParam>")
+        out.append("      <wpml:waypointTurnParam>")
+        out.append(_wpml("waypointTurnMode",
+                         "toPointAndStopWithDiscontinuityCurvature", 4))
+        out.append(_wpml("waypointTurnDampingDist", 0, 4))
+        out.append("      </wpml:waypointTurnParam>")
+        if is_photo:
+            out.extend(_wpml_action_group(
+                index, identity["payload_position"], gimbal_pitch))
+        out.append("    </Placemark>")
+    out.extend(["  </Folder>", "</Document>", "</kml>", ""])
+    return "\n".join(out)
+
+
+def _wpml_template(mission, rows, identity, speed, height_mode,
+                   gimbal_pitch) -> str:
+    """template.kml: the same mission as an editable waypoint template."""
+    stamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<kml xmlns="{0}" xmlns:wpml="{1}">'.format(WPML_KML_NS, WPML_NS),
+           "<Document>",
+           _wpml("author", "GeoCad UAV Toolkit", 1),
+           _wpml("createTime", stamp, 1),
+           _wpml("updateTime", stamp, 1),
+           _wpml_mission_config(mission, identity, speed),
+           "  <Folder>",
+           _wpml("templateType", "waypoint", 2),
+           _wpml("templateId", 0, 2),
+           "    <wpml:waylineCoordinateSysParam>",
+           _wpml("coordinateMode", "WGS84", 3),
+           _wpml("heightMode", height_mode, 3),
+           _wpml("positioningType", "GPS", 3),
+           "    </wpml:waylineCoordinateSysParam>",
+           _wpml("autoFlightSpeed", "{0:.2f}".format(speed), 2),
+           _wpml("gimbalPitchMode", "usePointSetting", 2),
+           _wpml("globalHeight", "{0:.2f}".format(
+               rows[0][3] if rows else mission.h_agl_m), 2),
+           "    <wpml:globalWaypointHeadingParam>",
+           _wpml("waypointHeadingMode", "followWayline", 3),
+           _wpml("waypointHeadingPathMode", "followBadArc", 3),
+           "    </wpml:globalWaypointHeadingParam>",
+           _wpml("globalWaypointTurnMode",
+                 "toPointAndStopWithDiscontinuityCurvature", 2),
+           _wpml("globalUseStraightLine", 0, 2)]
+    for index, lon, lat, height, _speed, _is_photo in rows:
+        out.append("    <Placemark>")
+        out.append("      <Point>")
+        out.append("        <coordinates>{0:.8f},{1:.8f}</coordinates>".format(
+            lon, lat))
+        out.append("      </Point>")
+        out.append(_wpml("index", index, 3))
+        out.append(_wpml("ellipsoidHeight", "{0:.2f}".format(
+            height + mission.geoid_undulation_m), 3))
+        out.append(_wpml("height", "{0:.2f}".format(height), 3))
+        out.append(_wpml("useGlobalHeight", 0, 3))
+        out.append(_wpml("useGlobalSpeed", 1, 3))
+        out.append(_wpml("useGlobalHeadingParam", 1, 3))
+        out.append(_wpml("useGlobalTurnParam", 1, 3))
+        out.append(_wpml("gimbalPitchAngle", "{0:.1f}".format(gimbal_pitch), 3))
+        out.append("    </Placemark>")
+    out.extend(["  </Folder>", "</Document>", "</kml>", ""])
+    return "\n".join(out)
+
+
+def _write_wpml(mission, path, transform, alt_mode, home_z, fmt, opts):
+    """The KMZ DJI Pilot and FlightHub read: wpmz/template.kml + waylines."""
+    identity = _wpml_identity(mission)
+    height_mode = _wpml_height_mode(alt_mode)
+    rows = _wpml_points(mission, transform, alt_mode, home_z)
+    speed = mission.speed_ms if mission.speed_ms > 0 else 5.0
+    gimbal = float(opts.get("gimbal_pitch_deg", -90.0))
+    template = _wpml_template(mission, rows, identity, speed, height_mode,
+                              gimbal)
+    waylines = _wpml_waylines(mission, rows, identity, speed, height_mode,
+                              gimbal)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(WPML_TEMPLATE_PATH, template)
+        archive.writestr(WPML_WAYLINES_PATH, waylines)
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -550,6 +807,7 @@ _WRITERS = {
     "csv_photos": _write_csv_photos,
     "litchi": _write_litchi,
     "mavlink": _write_mavlink,
+    "dji_wpml": _write_wpml,
     "gpx": _write_gpx,
     "kml": _write_kml,
     "kmz": _write_kmz,

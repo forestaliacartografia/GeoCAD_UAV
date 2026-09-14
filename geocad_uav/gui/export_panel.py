@@ -26,7 +26,8 @@ import os
 from qgis.core import (Qgis, QgsCoordinateReferenceSystem,
                        QgsCoordinateTransform, QgsProject)
 from qgis.PyQt.QtCore import QCoreApplication, Qt
-from qgis.PyQt.QtWidgets import (QFileDialog, QFormLayout, QGroupBox,
+from qgis.PyQt.QtWidgets import (QComboBox, QFileDialog, QFormLayout,
+                                 QGroupBox,
                                  QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                  QListWidgetItem, QPushButton, QTextBrowser,
                                  QVBoxLayout, QWidget)
@@ -105,6 +106,21 @@ class ExportPanel(QWidget):
         dest_form.addRow(tr("Cartella"), folder_row)
         self.basename_edit = QLineEdit("missione")
         dest_form.addRow(tr("Nome base"), self.basename_edit)
+
+        # The altitude reference. Read from the store as before, but
+        # settable here: WPML accepts only two of the three, so the choice
+        # has to be reachable.
+        self.altitude_combo = QComboBox()
+        for key in (ex.ALT_AMSL, ex.ALT_RELATIVE_HOME, ex.ALT_ELLIPSOIDAL):
+            self.altitude_combo.addItem(tr(ALT_LABELS[key]), key)
+        index = self.altitude_combo.findData(
+            app_settings.get("export/altitude_mode"))
+        if index >= 0:
+            self.altitude_combo.setCurrentIndex(index)
+        self.altitude_combo.setToolTip(tr(
+            "Riferimento delle quote nei file esportati. DJI WPML non ha un "
+            "riferimento ortometrico: con 'quota assoluta' lo rifiuta."))
+        dest_form.addRow(tr("Riferimento quote"), self.altitude_combo)
         layout.addWidget(dest_box)
 
         formats_box = QGroupBox(tr("Formati"))
@@ -134,6 +150,8 @@ class ExportPanel(QWidget):
                 (self.folder_edit, "textChanged", self.refresh),
                 (self.basename_edit, "textChanged", self.refresh),
                 (self.format_list, "itemChanged", self.refresh),
+                (self.altitude_combo, "currentIndexChanged",
+                 self._on_altitude_changed),
                 (self.format_list, "currentRowChanged", self._show_note),
                 (self.browse_button, "clicked", self._pick_folder),
                 (self.preview_button, "clicked", self.refresh),
@@ -191,9 +209,19 @@ class ExportPanel(QWidget):
         return keys
 
     def altitude_mode(self) -> str:
-        """From the settings store; the panel never invents one."""
+        """What the operator chose, falling back to the stored default."""
+        chosen = self.altitude_combo.currentData()
+        if chosen in ALT_LABELS:
+            return chosen
         mode = app_settings.get("export/altitude_mode")
         return mode if mode in ALT_LABELS else ex.ALT_AMSL
+
+    def _on_altitude_changed(self, *_args) -> None:
+        """Remember the choice, and re-read what it changes."""
+        chosen = self.altitude_combo.currentData()
+        if chosen in ALT_LABELS:
+            app_settings.set("export/altitude_mode", chosen)
+        self.refresh()
 
     def home_z(self):
         """Take-off elevation for a relative-altitude export, or None.

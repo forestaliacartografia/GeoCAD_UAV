@@ -260,15 +260,22 @@ except Exception as exc:                                        # noqa: BLE001
     check_true("refuses silent overwrite", "esiste" in str(
         getattr(exc, "user_message", "")).lower())
 
-# DJI WPML must be refused, not faked
-try:
-    ex.write(mission, "dji_wpml", os.path.join(TMP, "x.kmz"),
-             transform=to_wgs84, overwrite=True)
-    check_true("DJI WPML is refused rather than faked", False)
-except Exception as exc:                                        # noqa: BLE001
-    check_true("DJI WPML is refused rather than faked",
-               "WPML" in str(getattr(exc, "hint", "")))
-check_true("KMZ states it is not a native DJI mission",
+# v1.39.0: WPML is written, from DJI's published schema. This fixture
+# flies a Mavic 3 Enterprise, which DJI lists, so the file is produced --
+# and it is a real wpmz archive, not a renamed KMZ.
+import zipfile as _zipfile                                       # noqa: E402
+
+wpml_path = os.path.join(TMP, "missione_wpml.kmz")
+ex.write(mission, "dji_wpml", wpml_path, transform=to_wgs84,
+         altitude_mode=ex.ALT_RELATIVE_HOME, home_z=300.0, overwrite=True)
+with _zipfile.ZipFile(wpml_path) as _archive:
+    _wpml_names = sorted(_archive.namelist())
+    _waylines = _archive.read("wpmz/waylines.wpml").decode("utf-8")
+check_true("WPML writes the two files DJI names",
+           _wpml_names == ["wpmz/template.kml", "wpmz/waylines.wpml"])
+check_true("...with DJI's own namespace",
+           'xmlns:wpml="http://www.dji.com/wpmz/1.0.2"' in _waylines)
+check_true("KMZ still states it is not a native DJI mission",
            "NON e' un file di missione DJI nativa" in ex.FORMATS["kmz"].notes
            or "NON e'" in ex.FORMATS["kmz"].notes)
 

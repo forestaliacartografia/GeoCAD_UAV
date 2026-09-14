@@ -25,7 +25,9 @@
     "  wing it must be set from your own bank angle and cruise speed:",
     "      R = v^2 / (g * tan(bank))",
     "",
-    "Clone any entry and edit it; a user file merges on top of this one."
+    "Clone any entry and edit it; a user file merges on top of this one.",
+    "",
+    "wpml (optional) declares the aircraft to DJI's own waypoint format. Without it this plugin refuses to write a WPML mission for the profile, because the file has to name the aircraft and the payload by DJI enumeration value and inventing one would produce a mission the aircraft may reject or, worse, fly wrongly. The values are in DJI's Cloud API documentation under 'Product Supported': 'Enumeration Values of Aircraft, RC and Dock' gives type/sub_type, 'Enumeration Values of Camera' gives type-subtype-gimbalindex. Only the enterprise aircraft DJI lists there can fly WPML at all -- the Mini, Air and Phantom consumer series cannot, whatever values are put here."
   ],
   "drones": [
     {
@@ -98,7 +100,14 @@
         "kmz"
       ],
       "source": "DJI Mavic 3 Enterprise specification (45 min max flight time, 21 m/s S-mode)",
-      "notes": "Endurance is the manufacturer hover/ideal figure; survey endurance is lower."
+      "notes": "Endurance is the manufacturer hover/ideal figure; survey endurance is lower.",
+      "wpml": {
+        "drone_enum": 77,
+        "drone_sub_enum": 0,
+        "payload_enum": 66,
+        "payload_position": 0,
+        "source": "DJI Cloud API, Product Supported: Mavic 3 Enterprise Series (M3E Camera) 0-77-0, Mavic 3E Camera 66-0-0"
+      }
     },
     {
       "key": "dji_mini1",
